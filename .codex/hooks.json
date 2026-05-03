@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -lc 'root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); while [ ! -f \"$root/.codex/hooks/session-start.mjs\" ] && [ \"$root\" != \"/\" ]; do root=$(dirname \"$root\"); done; node \"$root/.codex/hooks/session-start.mjs\"'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -lc 'root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); while [ ! -f \"$root/.codex/hooks/stop.mjs\" ] && [ \"$root\" != \"/\" ]; do root=$(dirname \"$root\"); done; node \"$root/.codex/hooks/stop.mjs\"'"
+          }
+        ]
+      }
+    ]
+  }
+}
