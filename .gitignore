@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.claude/settings.local.json
+
+weights/
+inputs/
+outputs/
+vendors/
+
+.opencode/node_modules/
