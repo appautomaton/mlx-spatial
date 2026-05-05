@@ -6,6 +6,7 @@ fastest, matching NumPy/PyTorch-style flattening for C-contiguous arrays.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -19,6 +20,17 @@ import numpy as np
 class FlexibleDualGridMesh:
     vertices: np.ndarray
     faces: np.ndarray
+
+
+@dataclass(frozen=True)
+class MeshHoleFillStats:
+    boundary_edges_before: int
+    clean_boundary_loops: int
+    filled_loops: int
+    skipped_large_loops: int
+    skipped_complex_components: int
+    vertices_added: int
+    faces_added: int
 
 
 def _shape_tuple(shape: Sequence[int]) -> tuple[int, ...]:
@@ -221,6 +233,83 @@ def flexible_dual_grid_to_mesh_np(
     return FlexibleDualGridMesh(vertices=vertices.astype(np.float32, copy=False), faces=faces.astype(np.int64, copy=False))
 
 
+def fill_flexible_dual_grid_mesh_holes(
+    mesh: FlexibleDualGridMesh,
+    *,
+    max_hole_perimeter: float = 3e-2,
+    max_hole_edges: int = 64,
+) -> tuple[FlexibleDualGridMesh, MeshHoleFillStats]:
+    """Fill clean small boundary loops in a FlexiDualGrid mesh.
+
+    Upstream TRELLIS.2 calls `Mesh.fill_holes(max_hole_perimeter=3e-2)` after
+    latent decode. This CPU path intentionally handles only simple manifold
+    boundary loops; complex or large boundaries are left untouched.
+    """
+
+    if max_hole_perimeter <= 0:
+        raise ValueError(f"max_hole_perimeter must be positive, got {max_hole_perimeter}")
+    if max_hole_edges < 3:
+        raise ValueError(f"max_hole_edges must be at least 3, got {max_hole_edges}")
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(f"mesh vertices must have shape (num_vertices, 3), got {vertices.shape}")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError(f"mesh faces must have shape (num_faces, 3), got {faces.shape}")
+    if vertices.shape[0] == 0 or faces.shape[0] == 0:
+        raise ValueError("mesh must contain vertices and faces")
+    if np.any(faces < 0) or np.any(faces >= vertices.shape[0]):
+        raise ValueError("mesh faces contain vertex indices outside the vertex array")
+
+    boundary_edges, skipped_complex_components = _find_boundary_edges_and_complex_components(faces)
+    loops = _order_clean_boundary_loops(boundary_edges)
+    directed_boundary = {(int(start), int(end)) for start, end in boundary_edges}
+    new_vertices: list[np.ndarray] = []
+    new_faces: list[tuple[int, int, int]] = []
+    skipped_large = 0
+
+    for loop in loops:
+        if len(loop) > max_hole_edges:
+            skipped_large += 1
+            continue
+        loop_vertices = vertices[np.asarray(loop, dtype=np.int64)]
+        perimeter = float(np.linalg.norm(np.roll(loop_vertices, -1, axis=0) - loop_vertices, axis=1).sum())
+        if perimeter > max_hole_perimeter:
+            skipped_large += 1
+            continue
+
+        center_index = vertices.shape[0] + len(new_vertices)
+        new_vertices.append(loop_vertices.mean(axis=0).astype(np.float32, copy=False))
+        forward_votes = sum((loop[i], loop[(i + 1) % len(loop)]) in directed_boundary for i in range(len(loop)))
+        reverse_boundary = forward_votes >= len(loop) - forward_votes
+        for i, start in enumerate(loop):
+            end = loop[(i + 1) % len(loop)]
+            if reverse_boundary:
+                new_faces.append((center_index, int(end), int(start)))
+            else:
+                new_faces.append((center_index, int(start), int(end)))
+
+    if new_vertices:
+        filled_mesh = FlexibleDualGridMesh(
+            vertices=np.concatenate([vertices, np.asarray(new_vertices, dtype=np.float32)], axis=0),
+            faces=np.concatenate([faces, np.asarray(new_faces, dtype=np.int64)], axis=0),
+        )
+    else:
+        filled_mesh = FlexibleDualGridMesh(vertices=vertices, faces=faces)
+
+    stats = MeshHoleFillStats(
+        boundary_edges_before=int(boundary_edges.shape[0]),
+        clean_boundary_loops=len(loops),
+        filled_loops=len(new_vertices),
+        skipped_large_loops=skipped_large,
+        skipped_complex_components=skipped_complex_components,
+        vertices_added=len(new_vertices),
+        faces_added=len(new_faces),
+    )
+    return filled_mesh, stats
+
+
 def mesh_to_obj_payload(mesh: FlexibleDualGridMesh) -> bytes:
     if mesh.vertices.size == 0 or mesh.faces.size == 0:
         raise ValueError("FlexiDualGrid mesh must contain vertices and faces")
@@ -257,6 +346,94 @@ def _split_alignment(vertices: np.ndarray, triangles: np.ndarray) -> np.ndarray:
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-values))
+
+
+def _find_boundary_edges_and_complex_components(faces: np.ndarray) -> tuple[np.ndarray, int]:
+    directed = np.empty((faces.shape[0] * 3, 2), dtype=np.int64)
+    directed[0::3] = faces[:, [0, 1]]
+    directed[1::3] = faces[:, [1, 2]]
+    directed[2::3] = faces[:, [2, 0]]
+    keys = np.sort(directed, axis=1)
+    key_view = np.ascontiguousarray(keys).view([("a", keys.dtype), ("b", keys.dtype)]).reshape(-1)
+    _, first_indices, counts = np.unique(key_view, return_index=True, return_counts=True)
+    boundary_edges = directed[first_indices[counts == 1]]
+    if boundary_edges.shape[0] == 0:
+        return boundary_edges, 0
+
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for start, end in boundary_edges:
+        adjacency[int(start)].append(int(end))
+        adjacency[int(end)].append(int(start))
+
+    visited_edges: set[tuple[int, int]] = set()
+    complex_components = 0
+    for start, end in boundary_edges:
+        edge = (int(min(start, end)), int(max(start, end)))
+        if edge in visited_edges:
+            continue
+        stack = [int(start)]
+        component_vertices: set[int] = set()
+        component_edges: set[tuple[int, int]] = set()
+        while stack:
+            vertex = stack.pop()
+            if vertex in component_vertices:
+                continue
+            component_vertices.add(vertex)
+            for neighbor in adjacency[vertex]:
+                component_edge = (min(vertex, neighbor), max(vertex, neighbor))
+                component_edges.add(component_edge)
+                if component_edge not in visited_edges:
+                    visited_edges.add(component_edge)
+                    stack.append(neighbor)
+        if (
+            any(len(adjacency[vertex]) != 2 for vertex in component_vertices)
+            or len(component_edges) != len(component_vertices)
+        ):
+            complex_components += 1
+    return boundary_edges, complex_components
+
+
+def _order_clean_boundary_loops(boundary_edges: np.ndarray) -> list[list[int]]:
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for start, end in boundary_edges:
+        adjacency[int(start)].append(int(end))
+        adjacency[int(end)].append(int(start))
+
+    loops: list[list[int]] = []
+    visited_edges: set[tuple[int, int]] = set()
+    for raw_start, raw_end in boundary_edges:
+        first_edge = (int(min(raw_start, raw_end)), int(max(raw_start, raw_end)))
+        if first_edge in visited_edges:
+            continue
+
+        start = int(raw_start)
+        previous = -1
+        current = start
+        loop: list[int] = []
+        component_edges: set[tuple[int, int]] = set()
+        clean = True
+        while True:
+            if len(adjacency[current]) != 2 or current in loop:
+                clean = current == start and len(loop) >= 3
+                break
+            loop.append(current)
+            candidates = [neighbor for neighbor in adjacency[current] if neighbor != previous]
+            if not candidates:
+                clean = False
+                break
+            nxt = candidates[0]
+            edge = (min(current, nxt), max(current, nxt))
+            component_edges.add(edge)
+            previous, current = current, nxt
+            if current == start:
+                clean = len(loop) >= 3
+                break
+
+        for edge in component_edges:
+            visited_edges.add(edge)
+        if clean and all(len(adjacency[vertex]) == 2 for vertex in loop):
+            loops.append(loop)
+    return loops
 
 
 def _softplus(values: np.ndarray) -> np.ndarray:

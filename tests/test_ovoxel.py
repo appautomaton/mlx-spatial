@@ -1,7 +1,10 @@
 import mlx.core as mx
+import numpy as np
 
 from mlx_spatial.ovoxel import (
+    FlexibleDualGridMesh,
     dense_coordinates,
+    fill_flexible_dual_grid_mesh_holes,
     flexi_dual_grid_fields_to_mesh,
     flatten_coordinates,
     in_bounds_mask,
@@ -92,3 +95,59 @@ def test_flexi_dual_grid_mesh_extracts_nonempty_tiny_fixture():
     assert mesh.faces.shape[0] > 0
     assert b"\nv " in payload
     assert b"\nf " in payload
+
+
+def test_fill_flexible_dual_grid_mesh_holes_fills_small_clean_loop():
+    mesh = FlexibleDualGridMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.005, 0.0, 0.0],
+                [0.0, 0.005, 0.0],
+                [0.0, 0.0, 0.005],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64),
+    )
+
+    filled, stats = fill_flexible_dual_grid_mesh_holes(mesh)
+
+    assert _boundary_edge_count(mesh.faces) == 3
+    assert _boundary_edge_count(filled.faces) == 0
+    assert stats.boundary_edges_before == 3
+    assert stats.clean_boundary_loops == 1
+    assert stats.filled_loops == 1
+    assert stats.vertices_added == 1
+    assert stats.faces_added == 3
+
+
+def test_fill_flexible_dual_grid_mesh_holes_leaves_large_loop_open():
+    mesh = FlexibleDualGridMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+                [0.0, 0.1, 0.0],
+                [0.0, 0.0, 0.1],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64),
+    )
+
+    filled, stats = fill_flexible_dual_grid_mesh_holes(mesh)
+
+    np.testing.assert_array_equal(filled.faces, mesh.faces)
+    assert stats.clean_boundary_loops == 1
+    assert stats.filled_loops == 0
+    assert stats.skipped_large_loops == 1
+
+
+def _boundary_edge_count(faces: np.ndarray) -> int:
+    counts: dict[tuple[int, int], int] = {}
+    for a, b, c in faces:
+        for start, end in ((a, b), (b, c), (c, a)):
+            edge = (int(min(start, end)), int(max(start, end)))
+            counts[edge] = counts.get(edge, 0) + 1
+    return sum(count == 1 for count in counts.values())

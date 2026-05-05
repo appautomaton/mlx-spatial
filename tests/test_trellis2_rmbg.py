@@ -12,6 +12,14 @@ from mlx_spatial.trellis2_rmbg import (
     inspect_rmbg2_key_inventory,
     load_rmbg2_tensors,
 )
+from mlx_spatial.trellis2_rmbg_forward import (
+    Rmbg2MlxForwardResult,
+    Rmbg2MlxRuntimeError,
+    _conv2d_nchw,
+    _deform_conv2d_nchw,
+    remove_background_rmbg2_mlx,
+    run_rmbg2_mlx,
+)
 
 
 def _write_rmbg_root(root):
@@ -89,7 +97,7 @@ def test_rmbg2_helpers_reject_invalid_inputs(tmp_path):
             raise AssertionError("missing RMBG checkpoint should be rejected")
 
 
-def test_assess_rmbg2_mlx_port_reports_deform_conv_blocker(tmp_path):
+def test_assess_rmbg2_mlx_port_requires_real_forward_keys_not_deform_conv_support(tmp_path):
     _write_rmbg_root_with_deform_conv(tmp_path)
 
     assessment = assess_rmbg2_mlx_port(tmp_path)
@@ -99,8 +107,8 @@ def test_assess_rmbg2_mlx_port_reports_deform_conv_blocker(tmp_path):
     assert assessment.top_level_prefixes == ("backbone", "decoder")
     assert assessment.blocker is not None
     assert assessment.blocker.stage == "image-preprocessing-background"
-    assert assessment.blocker.operation == "MLX BiRefNet deformable convolution"
-    assert "DeformConv2d" in assessment.blocker.reason
+    assert assessment.blocker.operation == "MLX BiRefNet checkpoint key mapping"
+    assert "deform" not in assessment.blocker.operation.lower()
 
 
 def test_assess_rmbg2_mlx_port_reports_missing_key_prefixes(tmp_path):
@@ -114,8 +122,22 @@ def test_assess_rmbg2_mlx_port_reports_missing_key_prefixes(tmp_path):
     assert "squeeze_module" in assessment.blocker.reason
 
 
+def test_deform_conv_matches_regular_conv_for_zero_offsets_and_unit_masks():
+    values = mx.arange(1 * 2 * 4 * 4, dtype=mx.float32).reshape(1, 2, 4, 4)
+    weight = mx.arange(3 * 2 * 3 * 3, dtype=mx.float32).reshape(3, 2, 3, 3) / 10
+    offset = mx.zeros((1, 18, 4, 4), dtype=mx.float32)
+    mask = mx.ones((1, 9, 4, 4), dtype=mx.float32)
+
+    regular = _conv2d_nchw(values, weight, None, padding=1)
+    deform = _deform_conv2d_nchw(values, weight, None, offset, mask, padding=1)
+
+    assert mx.allclose(regular, deform, rtol=1e-3, atol=1e-3).item()
+
+
 def test_rmbg2_helpers_are_public_exports():
     assert mlx_spatial.Rmbg2KeyInventory is Rmbg2KeyInventory
+    assert mlx_spatial.Rmbg2MlxForwardResult is Rmbg2MlxForwardResult
+    assert mlx_spatial.Rmbg2MlxRuntimeError is Rmbg2MlxRuntimeError
     assert mlx_spatial.Rmbg2PortAssessment is Rmbg2PortAssessment
     assert mlx_spatial.Rmbg2PortBlocker is Rmbg2PortBlocker
     assert mlx_spatial.Rmbg2TensorProbe is Rmbg2TensorProbe
@@ -123,3 +145,5 @@ def test_rmbg2_helpers_are_public_exports():
     assert mlx_spatial.inspect_rmbg2_checkpoint is inspect_rmbg2_checkpoint
     assert mlx_spatial.inspect_rmbg2_key_inventory is inspect_rmbg2_key_inventory
     assert mlx_spatial.load_rmbg2_tensors is load_rmbg2_tensors
+    assert mlx_spatial.remove_background_rmbg2_mlx is remove_background_rmbg2_mlx
+    assert mlx_spatial.run_rmbg2_mlx is run_rmbg2_mlx

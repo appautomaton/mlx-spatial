@@ -1,10 +1,12 @@
 import json
 import tomllib
+from types import SimpleNamespace
 
 import mlx.core as mx
 from safetensors.mlx import save_file
 
 import mlx_spatial
+import mlx_spatial.trellis2_inference as trellis2_inference
 from mlx_spatial.model_assets import DINOv3_VITL16_ASSETS, TRELLIS2_ASSETS
 from mlx_spatial.trellis2 import (
     DINOv3_ACCESS_NOTE,
@@ -254,6 +256,108 @@ def test_cli_runs_against_fake_fixtures(tmp_path, capsys):
     shape_help = capsys.readouterr().out
     assert "blocker_stage=mesh-export" in shape_help
     assert "must stay under outputs" in shape_help
+
+    assert main(["generate-textured", str(tmp_path), str(tmp_path / "missing.png"), "--output", str(tmp_path / "bad.obj")]) == 2
+    textured_help = capsys.readouterr().out
+    assert "blocker_stage=mesh-export" in textured_help
+    assert "operation=textured GLB output format validation" in textured_help
+    assert "reason=generate-textured only writes .glb outputs" in textured_help
+
+
+def test_generate_textured_cli_accepts_shared_generation_flags(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _write_trellis2_root(tmp_path / "trellis")
+
+    status = main(
+        [
+            "generate-textured",
+            str(tmp_path / "trellis"),
+            str(tmp_path / "missing.png"),
+            "--output",
+            "outputs/trellis2/demo.glb",
+            "--pipeline-type",
+            "512",
+            "--seed",
+            "7",
+            "--dino-root",
+            str(tmp_path / "dino"),
+            "--slat-steps",
+            "2",
+            "--max-num-tokens",
+            "32",
+            "--decoder-token-limit",
+            "64",
+            "--texture-size",
+            "128",
+            "--glb-target-faces",
+            "100000",
+            "--xatlas-face-guard",
+            "auto",
+            "--xatlas-parallel-chunks",
+            "4",
+            "--texture-bake-backend",
+            "trilinear",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert status == 2
+    assert "blocker_stage=" in output
+    assert "operation=" in output
+
+
+def test_generate_shape_cli_forwards_generation_flags(tmp_path, monkeypatch, capsys):
+    calls = {}
+
+    class FakePipeline:
+        def __init__(self, root, *, rmbg_root=None):
+            calls["root"] = root
+            calls["rmbg_root"] = rmbg_root
+
+        def generate_shape_obj(self, image, **kwargs):
+            calls["image"] = image
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(
+                trace=SimpleNamespace(completed_stages=("mesh-export",), outputs=(), blocker=None),
+                artifact=SimpleNamespace(path=tmp_path / "outputs/trellis2/demo.obj", bytes_written=10),
+            )
+
+    monkeypatch.setattr(trellis2_inference, "Trellis2InferencePipeline", FakePipeline)
+
+    status = main(
+        [
+            "generate-shape",
+            str(tmp_path / "trellis"),
+            str(tmp_path / "image.png"),
+            "--output",
+            "outputs/trellis2/demo.obj",
+            "--pipeline-type",
+            "512",
+            "--seed",
+            "7",
+            "--dino-root",
+            str(tmp_path / "dino"),
+            "--rmbg-root",
+            str(tmp_path / "rmbg"),
+            "--slat-steps",
+            "2",
+            "--max-num-tokens",
+            "32",
+            "--decoder-token-limit",
+            "64",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert status == 0
+    assert "artifact=" in output
+    assert calls["kwargs"]["pipeline_type"] == "512"
+    assert calls["kwargs"]["seed"] == 7
+    assert calls["kwargs"]["max_num_tokens"] == 32
+    assert calls["kwargs"]["slat_steps"] == 2
+    assert calls["kwargs"]["decoder_token_limit"] == 64
+    assert calls["kwargs"]["dino_root"] == str(tmp_path / "dino")
+    assert calls["rmbg_root"] == str(tmp_path / "rmbg")
 
 
 def test_trellis2_helpers_are_public_exports():

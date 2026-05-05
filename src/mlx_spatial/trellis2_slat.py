@@ -50,9 +50,9 @@ SLAT_BLOCK0_INSPECTION_NAMES = (
 )
 
 SLAT_WINDOWED_SELF_ATTN_THRESHOLD = 4096
-SLAT_WINDOW_SIZE = 8
+SLAT_FULL_SELF_ATTN_TOKEN_LIMIT = 49152
 SLAT_FULL_SELF_ATTN_QUERY_CHUNK_SIZE = 512
-SLAT_FULL_SELF_ATTN_TOKEN_LIMIT = 16_384
+SLAT_WINDOW_SIZE = 8
 
 
 @dataclass(frozen=True)
@@ -695,13 +695,13 @@ def _slat_self_attention_kernel(
     head_dim: int,
 ) -> mx.array:
     token_count = int(query.shape[1])
-    if token_count <= SLAT_WINDOWED_SELF_ATTN_THRESHOLD:
-        return _attention(query, key, value, head_dim=head_dim)
     if token_count > SLAT_FULL_SELF_ATTN_TOKEN_LIMIT:
         raise ValueError(
-            f"exact full SLat self-attention token_count={token_count} exceeds "
-            f"SLAT_FULL_SELF_ATTN_TOKEN_LIMIT={SLAT_FULL_SELF_ATTN_TOKEN_LIMIT}"
+            "exact full SLat self-attention would exceed the configured token guard: "
+            f"{token_count} > {SLAT_FULL_SELF_ATTN_TOKEN_LIMIT}"
         )
+    if token_count <= SLAT_WINDOWED_SELF_ATTN_THRESHOLD:
+        return _attention(query, key, value, head_dim=head_dim)
     return _slat_full_self_attention_chunked(query, key, value, head_dim=head_dim)
 
 
@@ -713,15 +713,15 @@ def _slat_full_self_attention_chunked(
     head_dim: int,
     query_chunk_size: int = SLAT_FULL_SELF_ATTN_QUERY_CHUNK_SIZE,
 ) -> mx.array:
-    chunk_size = int(query_chunk_size)
-    if chunk_size <= 0:
-        raise ValueError("query_chunk_size must be positive")
+    """Run exact full self-attention by query blocks without allocating all query rows at once."""
+
+    if query_chunk_size <= 0:
+        raise ValueError(f"query_chunk_size must be positive, got {query_chunk_size}")
     token_count = int(query.shape[1])
-    if token_count <= chunk_size:
-        return _attention(query, key, value, head_dim=head_dim)
-    chunks = []
-    for start in range(0, token_count, chunk_size):
-        attended = _attention(query[:, start : start + chunk_size, :, :], key, value, head_dim=head_dim)
+    chunks: list[mx.array] = []
+    for start in range(0, token_count, query_chunk_size):
+        end = min(start + query_chunk_size, token_count)
+        attended = _attention(query[:, start:end, :, :], key, value, head_dim=head_dim)
         mx.eval(attended)
         chunks.append(attended)
     return mx.concatenate(chunks, axis=1)

@@ -9,6 +9,7 @@ from typing import Callable
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from .trellis2_rmbg_forward import Rmbg2MlxRuntimeError, remove_background_rmbg2_mlx
 from .trellis2_rmbg import Rmbg2PortBlocker, assess_rmbg2_mlx_port
 
 
@@ -85,12 +86,16 @@ def preprocess_trellis2_image(
         assessment = _assess_rmbg(path, rmbg_root)
         if assessment is not None:
             return assessment
-        return _blocked(
-            path,
-            "MLX BiRefNet forward pass",
-            "RMBG assets passed static port assessment, but the MLX BiRefNet forward path is not implemented",
-            next_slice="implement the MLX BiRefNet forward pass and return an RGBA alpha matte",
-        )
+        try:
+            output = remove_background_rmbg2_mlx(image.convert("RGB"), root=rmbg_root)
+        except Rmbg2MlxRuntimeError as error:
+            return _blocked(
+                path,
+                "MLX BiRefNet forward pass",
+                str(error),
+                next_slice="fix the local MLX BiRefNet forward path for RMBG RGB preprocessing",
+            )
+        generated_alpha = True
     else:
         return _blocked(
             path,

@@ -176,14 +176,12 @@ uv run mlx-spatial-trellis2 rmbg-download-command --root weights/rmbg2
 
 Review and accept the model terms before downloading. The package does not download gated RMBG assets during import, tests, validation, or inference attempts.
 
-When `weights/rmbg2` is present, RGB and fully opaque TRELLIS.2 image attempts route through a local MLX RMBG port assessment. The current downloaded `briaai/RMBG-2.0` architecture validates and exposes 754 checkpoint tensors with top-level prefixes `bb`, `decoder`, and `squeeze_module`, but it cannot run yet because `weights/rmbg2/birefnet.py` imports `torchvision.ops.deform_conv2d` for the `ASPPDeformable` decoder path and this MLX runtime has no `mlx.nn.DeformConv2d`.
+When `weights/rmbg2` is present, RGB and fully opaque TRELLIS.2 image attempts route through the local MLX RMBG port. The downloaded `briaai/RMBG-2.0` checkpoint validates with 754 tensors under the expected top-level prefixes `bb`, `decoder`, and `squeeze_module`. The local runtime in `mlx_spatial.trellis2_rmbg_forward` runs the Swin-L BiRefNet encoder/decoder, including the ASPPDeformable decoder blocks, directly in MLX and returns the RGBA alpha matte expected by upstream TRELLIS preprocessing.
 
-That is the current RGB-background-removal blocker:
+The RGB preprocessing path can be checked independently:
 
-```text
-stage: image-preprocessing-background
-operation: MLX BiRefNet deformable convolution
-next_slice: implement or replace deformable convolution for the RMBG-2.0 ASPPDeformable decoder path
+```bash
+uv run python -c "from mlx_spatial import preprocess_trellis2_image; r = preprocess_trellis2_image('inputs/trellis2/image.png', rmbg_root='weights/rmbg2'); print(r.ready, r.blocker, r.image.generated_alpha if r.image else None)"
 ```
 
 ## TRELLIS.2 Inference Attempt
@@ -202,7 +200,7 @@ Example:
 uv run python -c "from mlx_spatial import Trellis2InferencePipeline; r = Trellis2InferencePipeline('weights/trellis2').dry_run(load_probes=True); print(r.ready); print(r.blocker)"
 ```
 
-Image attempts now decode real image files. RGBA inputs with useful alpha are resized, foreground-cropped by alpha, and composited to RGB before the pipeline advances. RGB or fully opaque inputs require local RMBG assets and currently stop at the BiRefNet deformable-convolution blocker described above.
+Image attempts now decode real image files. RGBA inputs with useful alpha are resized, foreground-cropped by alpha, and composited to RGB before the pipeline advances. RGB or fully opaque inputs require local RMBG assets; with `--rmbg-root weights/rmbg2`, the MLX BiRefNet port generates the alpha matte before DINO conditioning.
 
 Local sample attempts use ignored paths:
 
@@ -215,7 +213,7 @@ outputs/trellis2/attempts/demo-rgb-background-attempt.json
 outputs/trellis2/demo-alpha-sparse-preview.obj
 ```
 
-The current alpha local attempt validates `weights/trellis2/`, inspects configured probes, completes `image-preprocessing-background`, completes MLX DINOv3 `image-conditioning`, completes sparse-structure FlowEuler sampling, runs sparse-structure decoder coordinate extraction, runs shape-SLat and texture-SLat sampling, and reaches latent decoding. Shape-SLat self-attention now uses a batched sparse-window fallback for large real-image token counts. Final mesh extraction, GLB export, and training are not implemented yet.
+The current shape local attempt validates `weights/trellis2/`, completes `image-preprocessing-background`, completes MLX DINOv3 `image-conditioning`, completes sparse-structure FlowEuler sampling, runs sparse-structure decoder coordinate extraction, runs shape-SLat sampling, runs the shape decoder to 7-channel FlexiDualGrid fields, and writes a shape OBJ. Texture decoding, UV baking, and GLB export are not implemented yet.
 
 The forward-trace path resolves `weights/trellis2/pipeline.json` to:
 
@@ -299,7 +297,7 @@ The texture-SLat path now uses the same MLX sampler pattern. For `1024_cascade`,
 
 The combined latent decode boundary is mapped after texture SLat. Without latents, it blocks on missing `shape_slat` or `texture_slat`. With fake SLat coordinates/features, the local shape and texture decoder checkpoints load, both `from_latent` projections run, decoder levels run through sparse convolution, layer norm, SiLU MLP, C2S up-blocks, and output-layer projection, and the texture decoder consumes shape-predicted subdivision guides. Weighted sparse convolution now performs per-kernel matmul and indexed accumulation in MLX. `attempt-forward-trace` accepts `--decoder-token-limit` for aggressive local traces; `--decoder-token-limit 9000` advanced a real downloaded-weight run through decoder level-0 and the first shape/texture C2S up-block, then stopped before level 1 after C2S expanded to tens of thousands of tokens.
 
-Export handling is intentionally gated behind decoded mesh/texture availability. Export targets must use `.glb` or `.obj` and stay under ignored `outputs/`; the current real alpha trace therefore reports export as blocked by the upstream latent-decoding blocker, not by a format writer.
+Export handling is intentionally gated behind decoded mesh/texture availability. `generate-shape` currently accepts `.obj` targets under ignored `outputs/`; `.glb` returns a structured texture/GLB blocker until the texture pipeline is implemented.
 
 A coarse debug preview can be generated today from the real sparse-structure coordinates:
 
@@ -311,10 +309,9 @@ That file is an occupancy OBJ preview from the sparse-structure decoder coordina
 
 Next TRELLIS slices should be concrete and separately verified:
 
-- MLX-compatible deformable convolution or a replacement path for RMBG-2.0 `ASPPDeformable`;
 - cascade shape-SLat upsample/refinement routing for `1024_cascade` and `1536_cascade`;
 - optimized sparse ConvNeXt/up-block decoder kernels beyond the level-1 expanded-token boundary;
-- FlexiDualGrid mesh extraction and mesh/GLB output path.
+- texture SLat, texture decoder, UV baking, and textured GLB output.
 
 ## Optional Local Resources
 

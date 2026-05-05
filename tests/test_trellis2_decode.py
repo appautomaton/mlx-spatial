@@ -11,6 +11,7 @@ from mlx_spatial.trellis2_decode import (
     probe_structured_latent_decoder_boundary,
     read_structured_latent_decoder_config,
     run_shape_decoder_to_fields,
+    run_texture_decoder_to_representation,
     run_shape_decoder_upsample_coordinates,
 )
 
@@ -173,6 +174,78 @@ def test_run_shape_decoder_to_fields_returns_full_7_channel_output(tmp_path):
     assert result.fields.shape == (16, 7)
     assert result.probe.completed_levels == 2
     assert result.probe.subdivision_shapes == ((2, 8),)
+
+
+def test_run_texture_decoder_to_representation_requires_shape_guides(tmp_path):
+    config = _small_decoder_config(name="SparseUnetVaeDecoder", out_channels=6, pred_subdiv=False)
+    checkpoint = tmp_path / "tex.safetensors"
+    _write_decoder_checkpoint(checkpoint, config)
+    coords = mx.array([[0, 0, 0, 0], [0, 1, 2, 3]], dtype=mx.int32)
+    feats = mx.zeros((2, 32), dtype=mx.float32)
+
+    with pytest.raises(ValueError, match="guide_subdivisions"):
+        run_texture_decoder_to_representation(checkpoint, config, coords, feats, guide_subdivisions=())
+
+
+def test_run_texture_decoder_to_representation_reports_mismatched_shape_guides(tmp_path):
+    config = _small_decoder_config(name="SparseUnetVaeDecoder", out_channels=6, pred_subdiv=False)
+    checkpoint = tmp_path / "tex.safetensors"
+    _write_decoder_checkpoint(checkpoint, config)
+    coords = mx.array([[0, 0, 0, 0], [0, 1, 2, 3], [0, 2, 3, 4]], dtype=mx.int32)
+    feats = mx.zeros((3, 32), dtype=mx.float32)
+    guides = (mx.ones((2, 8), dtype=mx.bool_),)
+
+    with pytest.raises(ValueError, match=r"guide_subdivisions\[0\] must have shape \(3, 8\).*got \(2, 8\)"):
+        run_texture_decoder_to_representation(checkpoint, config, coords, feats, guide_subdivisions=guides)
+
+
+def test_run_texture_decoder_to_representation_uses_shape_guides(tmp_path):
+    config = _small_decoder_config(name="SparseUnetVaeDecoder", out_channels=6, pred_subdiv=False)
+    checkpoint = tmp_path / "tex.safetensors"
+    _write_decoder_checkpoint(checkpoint, config)
+    coords = mx.array([[0, 0, 0, 0], [0, 1, 2, 3]], dtype=mx.int32)
+    feats = mx.zeros((2, 32), dtype=mx.float32)
+    guides = (mx.ones((2, 8), dtype=mx.bool_),)
+    shape_decoder_coordinates = mx.array([[0, 0, 0, 0], [0, 1, 1, 1], [0, 2, 2, 2]], dtype=mx.int32)
+
+    result = run_texture_decoder_to_representation(
+        checkpoint,
+        config,
+        coords,
+        feats,
+        guide_subdivisions=guides,
+        decode_resolution=512,
+        shape_decoder_coordinates=shape_decoder_coordinates,
+    )
+
+    assert result.coordinates.shape == (16, 4)
+    assert result.attributes.shape == (16, 6)
+    assert mx.allclose(result.attributes, mx.full((16, 6), 0.5, dtype=mx.float32))
+    assert result.probe.completed_levels == 2
+    assert result.probe.decoder_output_coordinate_shape == (16, 4)
+    assert result.probe.decoder_output_shape == (16, 6)
+    assert result.probe.subdivision_shapes == ()
+    assert result.guide_subdivision_shapes == ((2, 8),)
+    assert result.spatial_shape == (4, 6, 8)
+    assert result.batch_size == 1
+    assert result.decode_resolution == 512
+    assert result.voxel_size == 1 / 512
+    assert result.shape_decoder_coordinate_shape == (3, 4)
+
+
+def test_run_texture_decoder_to_representation_thresholds_shape_guide_logits(tmp_path):
+    config = _small_decoder_config(name="SparseUnetVaeDecoder", out_channels=6, pred_subdiv=False)
+    checkpoint = tmp_path / "tex.safetensors"
+    _write_decoder_checkpoint(checkpoint, config)
+    coords = mx.array([[0, 0, 0, 0]], dtype=mx.int32)
+    feats = mx.zeros((1, 32), dtype=mx.float32)
+    guides = (mx.array([[1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=mx.float32),)
+
+    result = run_texture_decoder_to_representation(checkpoint, config, coords, feats, guide_subdivisions=guides)
+
+    assert result.coordinates.tolist() == [[0, 0, 0, 0]]
+    assert result.attributes.shape == (1, 6)
+    assert result.guide_subdivision_shapes == ((1, 8),)
 
 
 def test_run_shape_decoder_to_fields_allows_final_zero_block_above_conv_limit(tmp_path):

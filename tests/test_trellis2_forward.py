@@ -24,6 +24,7 @@ from mlx_spatial.trellis2_forward import (
     dispatch_texture_slat_boundary,
     prepare_dinov3_image_tensor,
 )
+from mlx_spatial.trellis2_slat import select_texture_slat_route
 
 
 def _write_trellis2_root(root: Path, *, conditioning_resolution: int | None = None):
@@ -569,6 +570,71 @@ def test_discover_conditioning_config_from_fake_trellis2_root(tmp_path):
     assert result.config.texture_slat_sampler.guidance_interval == (0.6, 0.9)
     assert len(result.config.shape_slat_normalization.mean) == 32
     assert len(result.config.texture_slat_normalization.std) == 32
+
+
+def test_discover_conditioning_config_maps_texture_routes_for_all_pipeline_types(tmp_path):
+    _write_trellis2_root(tmp_path)
+
+    result = discover_trellis2_conditioning_config(tmp_path)
+
+    assert result.ready
+    assert result.config is not None
+    expected = {
+        "512": (
+            "tex_slat_flow_model_512",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.json",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.safetensors",
+            512,
+        ),
+        "1024": (
+            "tex_slat_flow_model_1024",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors",
+            1024,
+        ),
+        "1024_cascade": (
+            "tex_slat_flow_model_1024",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors",
+            1024,
+        ),
+        "1536_cascade": (
+            "tex_slat_flow_model_1024",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json",
+            "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors",
+            1024,
+        ),
+    }
+
+    for pipeline_type, (model_key, config_path, checkpoint_path, resolution) in expected.items():
+        route = select_texture_slat_route(pipeline_type)
+
+        assert route.model_key == model_key
+        assert route.output_resolution == resolution
+        if route.model_key == "tex_slat_flow_model_512":
+            assert result.config.texture_slat_512_config_path == config_path
+            assert result.config.texture_slat_512_checkpoint_path == checkpoint_path
+        else:
+            assert result.config.texture_slat_1024_config_path == config_path
+            assert result.config.texture_slat_1024_checkpoint_path == checkpoint_path
+        assert result.config.texture_decoder_config_path == "ckpts/tex_dec_next_dc_f16c32_fp16.json"
+        assert result.config.texture_decoder_checkpoint_path == "ckpts/tex_dec_next_dc_f16c32_fp16.safetensors"
+
+
+def test_discover_conditioning_config_reports_missing_texture_1024_model_key(tmp_path):
+    _write_trellis2_root(tmp_path)
+    pipeline_path = tmp_path / "pipeline.json"
+    pipeline = json.loads(pipeline_path.read_text())
+    del pipeline["args"]["models"]["tex_slat_flow_model_1024"]
+    pipeline_path.write_text(json.dumps(pipeline))
+
+    result = discover_trellis2_conditioning_config(tmp_path)
+
+    assert not result.ready
+    assert result.blocker is not None
+    assert result.blocker.stage == "texture-slat-sampling"
+    assert result.blocker.operation == "TRELLIS.2 model contract discovery"
+    assert "tex_slat_flow_model_1024" in result.blocker.reason
 
 
 def test_discover_conditioning_config_reports_malformed_config(tmp_path):

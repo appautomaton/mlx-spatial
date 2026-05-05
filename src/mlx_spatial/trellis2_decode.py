@@ -90,6 +90,19 @@ class ShapeDecoderResult:
 
 
 @dataclass(frozen=True)
+class TextureDecoderResult:
+    coordinates: mx.array
+    attributes: mx.array
+    probe: StructuredLatentDecoderProbe
+    guide_subdivision_shapes: tuple[tuple[int, int], ...]
+    spatial_shape: tuple[int, int, int]
+    batch_size: int
+    decode_resolution: int | None
+    voxel_size: float | None
+    shape_decoder_coordinate_shape: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
 class ShapeDecoderUpsampleResult:
     coordinates: mx.array
     subdivisions: tuple[mx.array, ...]
@@ -416,6 +429,102 @@ def run_shape_decoder_to_fields(
     )
 
 
+def run_texture_decoder_to_representation(
+    checkpoint_path: str | Path,
+    config: StructuredLatentDecoderConfig,
+    coordinates: mx.array,
+    features: mx.array,
+    *,
+    guide_subdivisions: tuple[mx.array, ...],
+    decoder_token_limit: int = 12_000_000,
+    decode_resolution: int | None = None,
+    shape_decoder_coordinates: mx.array | None = None,
+) -> TextureDecoderResult:
+    if config.name != "SparseUnetVaeDecoder":
+        raise ValueError(f"texture decoder must be SparseUnetVaeDecoder, got {config.name}")
+    if config.out_channels != 6:
+        raise ValueError(f"texture decoder must produce 6 output channels, got {config.out_channels}")
+    if config.pred_subdiv is not False:
+        raise ValueError(f"texture decoder requires pred_subdiv=False, got {config.pred_subdiv}")
+    if not guide_subdivisions:
+        raise ValueError("texture decoder requires shape decoder guide_subdivisions")
+
+    decoder_token_limit = _reference_token_limit(decoder_token_limit)
+    coordinate_shape = tuple(int(dim) for dim in coordinates.shape)
+    feature_shape = tuple(int(dim) for dim in features.shape)
+    _validate_latent_layout(coordinate_shape, feature_shape, config, "texture_slat")
+    tensor_names = _structured_latent_decoder_tensor_names(config, max_level_count=len(config.num_blocks))
+    tensors = load_checkpoint_tensors(checkpoint_path, names=tensor_names)
+    infos = inspect_checkpoint(checkpoint_path, names=tensor_names)
+    _require_checkpoint_infos(infos, tensor_names)
+    _validate_tensor_shape("from_latent.weight", tensors["from_latent.weight"].shape, (config.model_channels[0], config.latent_channels))
+    _validate_tensor_shape("from_latent.bias", tensors["from_latent.bias"].shape, (config.model_channels[0],))
+    _validate_checkpoint_info_shape(infos, "output_layer.weight", (config.out_channels, config.model_channels[-1]))
+    _validate_checkpoint_info_shape(infos, "output_layer.bias", (config.out_channels,))
+    _validate_checkpoint_infos(infos, config, max_level_count=len(config.num_blocks))
+    projected = _linear_chunked(
+        features.astype(tensors["from_latent.weight"].dtype),
+        tensors["from_latent.weight"],
+        tensors["from_latent.bias"],
+    )
+    mx.eval(projected)
+    execution = _run_sparse_unet_decoder_reference(
+        config,
+        coordinates,
+        projected,
+        tensors,
+        guide_subdivisions=guide_subdivisions,
+        reference_token_limit=decoder_token_limit,
+    )
+    if execution.decoder_output_coordinates is None or execution.decoder_output_features is None:
+        raise ValueError(
+            f"texture decoder stopped before 6-channel output: completed_levels={execution.completed_levels}, "
+            f"input_tokens={feature_shape[0]}, output_coordinates={execution.decoder_output_coordinate_shape}, "
+            f"output_features={execution.decoder_output_shape}, reason={execution.reference_stop}"
+        )
+
+    attributes = execution.decoder_output_features * 0.5 + 0.5
+    mx.eval(attributes)
+    output_coordinates = execution.decoder_output_coordinates
+    spatial_shape = _spatial_shape_from_coordinates(output_coordinates[:, 1:])
+    batch_size = int(mx.max(output_coordinates[:, 0].astype(mx.int32)).item()) + 1
+    probe = StructuredLatentDecoderProbe(
+        checkpoint_path=str(checkpoint_path),
+        latent_name="texture_slat",
+        coordinate_shape=coordinate_shape,
+        feature_shape=feature_shape,
+        input_projection_shape=tuple(int(dim) for dim in projected.shape),
+        convnext0_output_shape=execution.convnext0_output_shape,
+        level0_completed_blocks=execution.level0_completed_blocks,
+        level0_output_shape=execution.level0_output_shape,
+        first_upblock_coordinate_shape=execution.first_upblock_coordinate_shape,
+        first_upblock_output_shape=execution.first_upblock_output_shape,
+        first_upblock_subdivision_shape=execution.first_upblock_subdivision_shape,
+        completed_levels=execution.completed_levels,
+        subdivision_shapes=tuple(tuple(int(dim) for dim in subdivision.shape) for subdivision in execution.subdivisions),
+        decoder_output_coordinate_shape=execution.decoder_output_coordinate_shape,
+        decoder_output_shape=execution.decoder_output_shape,
+        reference_stop=execution.reference_stop,
+        reference_token_limit=decoder_token_limit,
+        loaded_tensor_names=tuple(name for name in tensor_names if name in tensors),
+        inspected_tensor_names=tuple(info.name for info in infos),
+    )
+    shape_coordinate_shape = None
+    if shape_decoder_coordinates is not None:
+        shape_coordinate_shape = tuple(int(dim) for dim in shape_decoder_coordinates.shape)
+    return TextureDecoderResult(
+        coordinates=output_coordinates,
+        attributes=attributes,
+        probe=probe,
+        guide_subdivision_shapes=tuple(tuple(int(dim) for dim in guide.shape) for guide in guide_subdivisions),
+        spatial_shape=spatial_shape,
+        batch_size=batch_size,
+        decode_resolution=decode_resolution,
+        voxel_size=(1.0 / float(decode_resolution)) if decode_resolution is not None else None,
+        shape_decoder_coordinate_shape=shape_coordinate_shape,
+    )
+
+
 def run_shape_decoder_upsample_coordinates(
     checkpoint_path: str | Path,
     config: StructuredLatentDecoderConfig,
@@ -681,6 +790,13 @@ def _run_sparse_unet_decoder_reference(
                 reference_stop = f"decoder reference stopped before level {level_index} C2S because guide subdivision is unavailable"
                 break
             guide_subdivision = guide_subdivisions[level_index]
+            guide_shape = tuple(int(dim) for dim in guide_subdivision.shape)
+            expected_guide_shape = (token_count, 8)
+            if guide_shape != expected_guide_shape:
+                raise ValueError(
+                    f"guide_subdivisions[{level_index}] must have shape {expected_guide_shape} for current decoder tokens, "
+                    f"got {guide_shape}"
+                )
 
         next_coordinates, next_features, subdiv_logits = _sparse_c2s_upblock_forward(
             current_coordinates,
@@ -797,7 +913,7 @@ def _sparse_c2s_upblock_forward(
         subdivision = subdiv_logits > 0
     else:
         subdiv_logits = guide_subdivision.astype(mx.float32)
-        subdivision = guide_subdivision
+        subdivision = guide_subdivision > 0
 
     normalized = _layer_norm(
         features.astype(mx.float32),

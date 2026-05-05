@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Iterable
 
 import mlx.core as mx
-import mlx.nn as nn
 
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
 from .model_assets import RMBG2_ASSETS
@@ -62,6 +61,27 @@ class Rmbg2PortAssessment:
         return self.blocker is None
 
 
+RMBG2_REQUIRED_FORWARD_KEYS = (
+    "bb.patch_embed.proj.weight",
+    "bb.patch_embed.proj.bias",
+    "bb.patch_embed.norm.weight",
+    "bb.patch_embed.norm.bias",
+    "bb.layers.0.blocks.0.attn.qkv.weight",
+    "bb.layers.3.blocks.1.mlp.fc2.bias",
+    "bb.norm0.weight",
+    "bb.norm3.bias",
+    "squeeze_module.0.conv_in.weight",
+    "squeeze_module.0.dec_att.aspp_deforms.2.atrous_conv.offset_conv.weight",
+    "decoder.decoder_block4.conv_in.weight",
+    "decoder.decoder_block1.dec_att.aspp_deforms.2.atrous_conv.regular_conv.weight",
+    "decoder.ipt_blk5.conv1.weight",
+    "decoder.ipt_blk1.conv_out.bias",
+    "decoder.gdt_convs_attn_2.0.weight",
+    "decoder.conv_out1.0.weight",
+    "decoder.conv_out1.0.bias",
+)
+
+
 def inspect_rmbg2_checkpoint(
     root: str | Path = RMBG2_ASSETS.root_hint,
     *,
@@ -111,22 +131,6 @@ def assess_rmbg2_mlx_port(root: str | Path = RMBG2_ASSETS.root_hint) -> Rmbg2Por
 
     root_path = Path(root)
     inventory = inspect_rmbg2_key_inventory(root_path)
-    architecture_path = root_path / "birefnet.py"
-    architecture = architecture_path.read_text(encoding="utf-8")
-
-    if "deform_conv2d" in architecture and not hasattr(nn, "DeformConv2d"):
-        return Rmbg2PortAssessment(
-            root=root_path,
-            tensor_count=inventory.tensor_count,
-            top_level_prefixes=inventory.top_level_prefixes,
-            blocker=Rmbg2PortBlocker(
-                stage="image-preprocessing-background",
-                operation="MLX BiRefNet deformable convolution",
-                reference="weights/rmbg2/birefnet.py:1230-1295",
-                reason="RMBG-2.0 BiRefNet imports torchvision.ops.deform_conv2d, but mlx.nn has no DeformConv2d implementation",
-                next_slice="implement or replace deformable convolution for the RMBG-2.0 ASPPDeformable decoder path",
-            ),
-        )
 
     required_prefixes = {"bb", "decoder", "squeeze_module"}
     missing_prefixes = sorted(required_prefixes.difference(inventory.top_level_prefixes))
@@ -141,6 +145,22 @@ def assess_rmbg2_mlx_port(root: str | Path = RMBG2_ASSETS.root_hint) -> Rmbg2Por
                 reference=str(inventory.checkpoint_path),
                 reason=f"RMBG-2.0 checkpoint is missing expected key prefixes: {missing_prefixes}",
                 next_slice="map the actual RMBG checkpoint key structure before implementing model construction",
+            ),
+        )
+    infos = inspect_rmbg2_checkpoint(root_path)
+    present_keys = {info.name for info in infos}
+    missing_keys = sorted(set(RMBG2_REQUIRED_FORWARD_KEYS).difference(present_keys))
+    if missing_keys:
+        return Rmbg2PortAssessment(
+            root=root_path,
+            tensor_count=inventory.tensor_count,
+            top_level_prefixes=inventory.top_level_prefixes,
+            blocker=Rmbg2PortBlocker(
+                stage="image-preprocessing-background",
+                operation="MLX BiRefNet checkpoint key mapping",
+                reference=str(inventory.checkpoint_path),
+                reason=f"RMBG-2.0 checkpoint is missing required forward keys: {missing_keys}",
+                next_slice="map the actual RMBG checkpoint key structure before running MLX BiRefNet",
             ),
         )
 
