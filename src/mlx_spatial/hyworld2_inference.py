@@ -29,6 +29,7 @@ from .hyworld2_heads import (
 )
 from .hyworld2_preprocess import memory_profile_config, preprocess_hyworld2_images
 from .hyworld2_worldmirror import VisualGeometryTransformerConfig, run_visual_geometry_transformer
+from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot, reset_mlx_peak_memory
 
 
 HYWORLD2_SUPPORTED_HEADS = ("camera", "depth", "normal", "points", "gs")
@@ -108,6 +109,8 @@ class HyWorld2InferencePipeline:
     ) -> HyWorld2ReconstructionResult:
         requested_heads = normalize_hyworld2_heads(heads)
         profile = memory_profile_config(memory_profile)
+        reset_mlx_peak_memory()
+        memory_snapshots: dict[str, dict[str, int | None]] = {"start": mlx_memory_snapshot().as_dict()}
         head_status = _initial_head_status(requested_heads)
 
         input_root = Path(input_path)
@@ -194,6 +197,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("image-preprocessing")
+        _release_hyworld_mlx_stage(memory_snapshots, "after-image-preprocessing")
 
         inspection = inspect_hyworld2_model_assets(self.root, requested_heads=requested_heads)
         inspection_metadata = _inspection_metadata(inspection)
@@ -261,6 +265,7 @@ class HyWorld2InferencePipeline:
         if not fixture_tensors:
             try:
                 real_tensors = _load_real_hyworld2_tensors(validation.checkpoint_path, requested_heads)
+                _release_hyworld_mlx_stage(memory_snapshots, "after-checkpoint-load")
             except (OSError, ValueError) as error:
                 return HyWorld2ReconstructionResult(
                     trace=self._trace(
@@ -323,6 +328,10 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("visual-transformer")
+        if not fixture_tensors and real_tensors is not None:
+            real_tensors["visual_transformer"] = {}
+        del transformer_tensors
+        _release_hyworld_mlx_stage(memory_snapshots, "after-visual-transformer")
 
         head_outputs: dict[str, object] = {}
         enabled_heads: list[str] = []
@@ -330,12 +339,14 @@ class HyWorld2InferencePipeline:
         for head in requested_heads:
             head_status[head]["enabled"] = True
             if head == "camera":
+                head_tensors = real_head_tensors.get("camera") if not fixture_tensors else None
                 output = run_camera_head(
                     backbone,
                     CameraHeadConfig(),
-                    tensors=real_head_tensors.get("camera") if not fixture_tensors else None,
+                    tensors=head_tensors,
                 )
             elif head == "depth":
+                head_tensors = real_head_tensors.get("depth") if not fixture_tensors else None
                 output = run_dpt_head(
                     backbone,
                     preprocessed.tensor,
@@ -345,32 +356,36 @@ class HyWorld2InferencePipeline:
                         activation="exp+expp1+linear",
                         enable_depth_mask=bool(model_config.enable_depth_mask),
                     ),
-                    tensors=real_head_tensors.get("depth") if not fixture_tensors else None,
+                    tensors=head_tensors,
                     frames_chunk_size=1,
                 )
             elif head == "normal":
+                head_tensors = real_head_tensors.get("normal") if not fixture_tensors else None
                 output = run_dpt_head(
                     backbone,
                     preprocessed.tensor,
                     DPTHeadConfig(head_type="normal", attr_channels=3, activation="norm+expp1"),
-                    tensors=real_head_tensors.get("normal") if not fixture_tensors else None,
+                    tensors=head_tensors,
                     frames_chunk_size=1,
                 )
             elif head == "points":
+                head_tensors = real_head_tensors.get("points") if not fixture_tensors else None
                 output = run_dpt_head(
                     backbone,
                     preprocessed.tensor,
                     DPTHeadConfig(head_type="points", attr_channels=3, activation="inv_log+expp1"),
-                    tensors=real_head_tensors.get("points") if not fixture_tensors else None,
+                    tensors=head_tensors,
                     frames_chunk_size=1,
                 )
             elif head == "gs":
+                head_tensors = real_head_tensors.get("gs") if not fixture_tensors else None
+                renderer_tensors = real_head_tensors.get("gs_renderer") if not fixture_tensors else None
                 output = run_gaussian_attribute_head(
                     backbone,
                     preprocessed.tensor,
                     GaussianAttributeConfig(enable_depth_mask=bool(model_config.enable_depth_mask)),
-                    tensors=real_head_tensors.get("gs") if not fixture_tensors else None,
-                    renderer_tensors=real_head_tensors.get("gs_renderer") if not fixture_tensors else None,
+                    tensors=head_tensors,
+                    renderer_tensors=renderer_tensors,
                     frames_chunk_size=1,
                 )
             else:
@@ -400,7 +415,18 @@ class HyWorld2InferencePipeline:
                 )
             head_outputs[head] = output
             enabled_heads.append(head)
+            if not fixture_tensors:
+                real_head_tensors.pop(head, None)
+                if head == "gs":
+                    real_head_tensors.pop("gs_renderer", None)
+                del head_tensors
+                if head == "gs":
+                    del renderer_tensors
+            _release_hyworld_mlx_stage(memory_snapshots, f"after-head-{head}")
         completed.append("head-execution")
+        if not fixture_tensors:
+            del real_head_tensors, real_tensors
+        _release_hyworld_mlx_stage(memory_snapshots, "after-head-execution")
 
         _clean_fixture_export_outputs(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -483,6 +509,7 @@ class HyWorld2InferencePipeline:
                     "real_tensors": not fixture_tensors,
                 },
                 "gaussian": _gaussian_metadata(requested_heads, head_outputs),
+                "mlx_memory": memory_snapshots,
             },
         )
         trace_record = write_hyworld2_trace(output_dir, _trace_payload(trace))
@@ -579,6 +606,11 @@ def _profile_metadata(profile) -> dict[str, int | str]:
         "max_frames": profile.max_frames,
         "activation_guard_bytes": profile.activation_guard_bytes,
     }
+
+
+def _release_hyworld_mlx_stage(memory_snapshots: dict[str, dict[str, int | None]], label: str) -> None:
+    clear_mlx_cache()
+    memory_snapshots[label] = mlx_memory_snapshot().as_dict()
 
 
 def _preprocess_metadata(preprocessed) -> dict[str, object]:

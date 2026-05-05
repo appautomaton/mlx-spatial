@@ -391,6 +391,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=args.seed,
             max_num_tokens=args.max_num_tokens,
             decoder_token_limit=args.decoder_token_limit,
+            retain_trace_payloads=False,
         )
         report = result.trace
         print(f"completed={report.completed_stages}")
@@ -423,6 +424,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             xatlas_face_guard=args.xatlas_face_guard,
             xatlas_parallel_chunks=args.xatlas_parallel_chunks,
             texture_bake_backend=args.texture_bake_backend,
+            retain_trace_payloads=False,
         )
         report = result.trace
         print(f"completed={report.completed_stages}")

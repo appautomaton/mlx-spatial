@@ -9,6 +9,7 @@ from typing import Literal
 import mlx.core as mx
 import numpy as np
 
+from .mlx_memory import clear_mlx_cache
 from .ovoxel import fill_flexible_dual_grid_mesh_holes, flexi_dual_grid_fields_to_mesh
 from .trellis2 import (
     TRELLIS2_PROBE_GROUPS,
@@ -366,6 +367,7 @@ class Trellis2InferencePipeline:
         seed: int = TRELLIS2_SHAPE_SEED,
         max_num_tokens: int = TRELLIS2_SHAPE_MAX_NUM_TOKENS,
         decoder_token_limit: int = TRELLIS2_SHAPE_DECODER_TOKEN_LIMIT,
+        retain_trace_payloads: bool = True,
     ) -> Trellis2ShapeGenerationResult:
         image = Path(image_path)
         output = Path(output_path)
@@ -576,7 +578,7 @@ class Trellis2InferencePipeline:
                 payload=cond_output.payload,
             )
             cond_outputs[resolution] = cond_output
-            outputs.append(cond_output)
+            outputs.append(cond_output if retain_trace_payloads else _without_stage_payload(cond_output))
         cond_512 = cond_outputs[512]
         cond_1024 = cond_outputs.get(1024)
         completed.append("image-conditioning")
@@ -659,6 +661,7 @@ class Trellis2InferencePipeline:
                 "sparse_latent",
                 sparse_probe.sampled_latent,
                 f"MLX sparse structure FlowEuler sampler output after {metadata.steps} steps",
+                retain_payload=retain_trace_payloads,
             )
         )
         completed.append("sparse-structure-sampling")
@@ -719,6 +722,7 @@ class Trellis2InferencePipeline:
                 "shape_slat",
                 shape_features,
                 shape_detail,
+                retain_payload=retain_trace_payloads,
             )
         except (FileNotFoundError, ValueError) as error:
             return Trellis2ShapeGenerationResult(
@@ -758,6 +762,7 @@ class Trellis2InferencePipeline:
                         f"coordinates {shape_result.probe.decoder_output_coordinate_shape}; "
                         f"subdivisions {shape_result.probe.subdivision_shapes}"
                     ),
+                    retain_payload=retain_trace_payloads,
                 )
             )
             completed.append("shape-decoder")
@@ -784,9 +789,13 @@ class Trellis2InferencePipeline:
                         f"filled_loops={hole_stats.filled_loops}; faces_added={hole_stats.faces_added}; "
                         f"skipped_complex_components={hole_stats.skipped_complex_components}"
                     ),
+                    retain_payload=retain_trace_payloads,
                 )
             )
             artifact = write_flexible_dual_grid_obj(mesh, output_path)
+            if not retain_trace_payloads:
+                del mesh, shape_result
+            clear_mlx_cache()
         except (FileNotFoundError, ValueError) as error:
             return Trellis2ShapeGenerationResult(
                 trace=Trellis2ForwardTraceResult(
@@ -831,6 +840,7 @@ class Trellis2InferencePipeline:
         xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
         xatlas_parallel_chunks: int = 0,
         texture_bake_backend: str = "trilinear",
+        retain_trace_payloads: bool = True,
     ) -> Trellis2TexturedGenerationResult:
         image = Path(image_path)
         output = Path(output_path)
@@ -1170,7 +1180,7 @@ class Trellis2InferencePipeline:
                 payload=cond_output.payload,
             )
             cond_outputs[resolution] = cond_output
-            outputs.append(cond_output)
+            outputs.append(cond_output if retain_trace_payloads else _without_stage_payload(cond_output))
         cond_512 = cond_outputs[512]
         cond_1024 = cond_outputs.get(1024)
         completed.append("image-conditioning")
@@ -1253,6 +1263,7 @@ class Trellis2InferencePipeline:
                 "sparse_latent",
                 sparse_probe.sampled_latent,
                 f"MLX sparse structure FlowEuler sampler output after {metadata.steps} steps",
+                retain_payload=retain_trace_payloads,
             )
         )
         completed.append("sparse-structure-sampling")
@@ -1308,7 +1319,15 @@ class Trellis2InferencePipeline:
                 max_num_tokens=max_num_tokens or TRELLIS2_SHAPE_MAX_NUM_TOKENS,
                 decoder_token_limit=decoder_token_limit or TRELLIS2_SHAPE_DECODER_TOKEN_LIMIT,
             )
-            outputs.append(_stage_output("shape-slat-sampling", "shape_slat", shape_features, shape_detail))
+            outputs.append(
+                _stage_output(
+                    "shape-slat-sampling",
+                    "shape_slat",
+                    shape_features,
+                    shape_detail,
+                    retain_payload=retain_trace_payloads,
+                )
+            )
         except (FileNotFoundError, ValueError) as error:
             return Trellis2TexturedGenerationResult(
                 trace=Trellis2ForwardTraceResult(
@@ -1380,6 +1399,7 @@ class Trellis2InferencePipeline:
                     f"shape_tokens={int(shape_coordinates.shape[0])}; shape_feature_width={int(shape_features.shape[1])}; "
                     f"final_decode_resolution={final_resolution}; {texture_detail}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         completed.append("texture-slat-sampling")
@@ -1420,6 +1440,7 @@ class Trellis2InferencePipeline:
                     f"subdivisions {shape_result.probe.subdivision_shapes}; "
                     f"final_decode_resolution={final_resolution}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         completed.append("shape-decoder")
@@ -1468,6 +1489,7 @@ class Trellis2InferencePipeline:
                     f"spatial_shape={texture_result.spatial_shape}; batch_size={texture_result.batch_size}; "
                     f"voxel_size={texture_result.voxel_size}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         outputs.append(
@@ -1480,9 +1502,12 @@ class Trellis2InferencePipeline:
                     f"shape_decoder_coordinates={texture_result.shape_decoder_coordinate_shape}; "
                     f"owned_subdivisions={texture_result.probe.subdivision_shapes}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         completed.append("texture-decoder")
+        if not retain_trace_payloads:
+            clear_mlx_cache()
 
         try:
             mesh = flexi_dual_grid_fields_to_mesh(shape_result.coordinates, shape_result.fields, grid_size=final_resolution)
@@ -1553,6 +1578,7 @@ class Trellis2InferencePipeline:
                     f"boundary_edges={postprocess_result.stats.boundary_edges}; "
                     f"nonmanifold_edges={postprocess_result.stats.nonmanifold_edges}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         outputs.append(
@@ -1578,6 +1604,7 @@ class Trellis2InferencePipeline:
                     f"source_projection_used={getattr(baked_texture, 'source_projection_used', False)}; "
                     f"source_projection_detail={getattr(baked_texture, 'source_projection_detail', 'unknown')}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         outputs.append(
@@ -1589,6 +1616,7 @@ class Trellis2InferencePipeline:
                     "baked baseColorTexture payload from 6-channel texture voxels; "
                     f"shape={baked_texture.base_color_rgba.shape}; coverage={baked_texture.coverage_ratio:.4f}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
         outputs.append(
@@ -1600,11 +1628,15 @@ class Trellis2InferencePipeline:
                     "baked metallicRoughnessTexture payload with G=roughness and B=metallic; "
                     f"shape={baked_texture.metallic_roughness.shape}"
                 ),
+                retain_payload=retain_trace_payloads,
             )
         )
 
         try:
             artifact = write_trellis2_textured_glb(baked_texture, output_path)
+            if not retain_trace_payloads:
+                del baked_texture, postprocess_result, mesh, shape_result, texture_result
+                clear_mlx_cache()
         except (OSError, ValueError) as error:
             return Trellis2TexturedGenerationResult(
                 trace=Trellis2ForwardTraceResult(
@@ -1939,7 +1971,14 @@ def _forward_blocker(blocker: Trellis2InferenceBlocker | None) -> Trellis2Forwar
     )
 
 
-def _stage_output(stage: str, name: str, payload: mx.array, detail: str) -> "Trellis2StageOutput":
+def _stage_output(
+    stage: str,
+    name: str,
+    payload: mx.array,
+    detail: str,
+    *,
+    retain_payload: bool = True,
+) -> "Trellis2StageOutput":
     from .trellis2_forward import Trellis2StageOutput
 
     return Trellis2StageOutput(
@@ -1948,7 +1987,20 @@ def _stage_output(stage: str, name: str, payload: mx.array, detail: str) -> "Tre
         shape=tuple(int(dim) for dim in payload.shape),
         dtype=str(payload.dtype).removeprefix("mlx.core."),
         detail=detail,
-        payload=payload,
+        payload=payload if retain_payload else None,
+    )
+
+
+def _without_stage_payload(output: "Trellis2StageOutput") -> "Trellis2StageOutput":
+    from .trellis2_forward import Trellis2StageOutput
+
+    return Trellis2StageOutput(
+        stage=output.stage,
+        name=output.name,
+        shape=output.shape,
+        dtype=output.dtype,
+        detail=output.detail,
+        payload=None,
     )
 
 

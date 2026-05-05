@@ -357,6 +357,7 @@ def test_generate_shape_cli_forwards_generation_flags(tmp_path, monkeypatch, cap
     assert calls["kwargs"]["slat_steps"] == 2
     assert calls["kwargs"]["decoder_token_limit"] == 64
     assert calls["kwargs"]["dino_root"] == str(tmp_path / "dino")
+    assert calls["kwargs"]["retain_trace_payloads"] is False
     assert calls["rmbg_root"] == str(tmp_path / "rmbg")
 
 

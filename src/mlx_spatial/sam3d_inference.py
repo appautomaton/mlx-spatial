@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot, reset_mlx_peak_memory
 from .sam3d_assets import Sam3dAssetBlocker, inspect_sam3d_model_assets
 from .sam3d_condition import (
     Sam3dDinoConfig,
@@ -129,6 +130,7 @@ class Sam3dInferencePipeline:
             raise ValueError("stage1_steps and stage2_steps must be positive")
         if memory_profile not in {"safe", "balanced", "large"}:
             raise ValueError(f"unsupported SAM3D memory profile: {memory_profile}")
+        reset_mlx_peak_memory()
         metadata: dict[str, object] = {
             "seed": int(seed),
             "exact_mode": True,
@@ -141,6 +143,7 @@ class Sam3dInferencePipeline:
                 "mesh_glb": str(glb_output) if glb_output is not None else None,
             },
         }
+        _record_mlx_memory(metadata, "start")
 
         inspection = inspect_sam3d_model_assets(self.root, required_roles=_required_reconstruct_roles(glb_output is not None))
         metadata["asset_validation"] = {
@@ -242,6 +245,8 @@ class Sam3dInferencePipeline:
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
         completed.append("official-preprocessing")
         metadata["official_preprocessing"] = _official_preprocess_metadata(official)
+        del moge_result, preprocessed
+        _release_mlx_stage_memory(metadata, "after-official-preprocessing")
 
         try:
             ss_generator_path = _checkpoint_path_for_role(inspection, "ss_generator")
@@ -286,8 +291,6 @@ class Sam3dInferencePipeline:
                 steps=stage1_steps,
                 config=ss_flow_config,
             )
-            del ss_condition
-
             ss_decoder_config = read_sam3d_ss_decoder_config(_config_path_for_role(inspection, "ss_decoder"))
             ss_decoder_tensors = load_sam3d_ss_decoder_tensors(_checkpoint_path_for_role(inspection, "ss_decoder"))
             downsample_dist = int(inspection.config.raw.get("downsample_ss_dist", 1)) if inspection.config else 1
@@ -316,6 +319,8 @@ class Sam3dInferencePipeline:
                 "coords_original_shape": tuple(int(value) for value in ss_decoded.coords_original.shape),
                 "pose": pose.metadata,
             }
+            del ss_condition, ss_condition_tensors, ss_generator_tensors, ss_decoder_tensors, ss_flow
+            _release_mlx_stage_memory(metadata, "after-sparse-structure")
         except (KeyError, ValueError, OSError, TypeError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="sparse-structure",
@@ -365,7 +370,6 @@ class Sam3dInferencePipeline:
                 slat_mean=slat_mean,
                 slat_std=slat_std,
             )
-            del slat_condition
             completed.append("structured-latent")
             metadata["structured_latent"] = {
                 **slat.metadata,
@@ -373,6 +377,8 @@ class Sam3dInferencePipeline:
                 "feature_shape": tuple(int(value) for value in slat.feats.shape),
                 "token_count": int(slat.coords.shape[0]),
             }
+            del slat_condition, slat_condition_tensors, slat_generator_tensors, ss_decoded, official
+            _release_mlx_stage_memory(metadata, "after-structured-latent")
         except (KeyError, ValueError, OSError, TypeError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="structured-latent",
@@ -423,6 +429,8 @@ class Sam3dInferencePipeline:
                 "format": ply_stats.format,
                 "fields": ply_stats.fields,
             }
+            del gs_decoder_tensors, raw_gaussian, gaussian_fields
+            _release_mlx_stage_memory(metadata, "after-ply-export")
         except (KeyError, ValueError, OSError, TypeError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="gaussian-decoder",
@@ -436,6 +444,8 @@ class Sam3dInferencePipeline:
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         if glb_output is None:
+            del slat
+            _release_mlx_stage_memory(metadata, "final")
             trace = Sam3dInferenceTrace(
                 root=self.root,
                 image_path=Path(image_path),
@@ -494,6 +504,8 @@ class Sam3dInferencePipeline:
                 )
                 return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
             completed.append("mesh-decoder")
+            del mesh_decoder_tensors, mesh_features, slat
+            _release_mlx_stage_memory(metadata, "after-mesh-decoder")
         except (KeyError, ValueError, OSError, TypeError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="mesh-decoder",
@@ -520,6 +532,8 @@ class Sam3dInferencePipeline:
                 "has_vertex_color": bool(glb_stats.has_vertex_color),
                 "format": glb_stats.format,
             }
+            del mesh
+            _release_mlx_stage_memory(metadata, "final")
         except (ValueError, OSError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="glb-export",
@@ -675,6 +689,17 @@ def _mesh_memory_config(memory_profile: str) -> dict[str, int]:
 
 def _mesh_extraction_resolution(mesh_decoder_resolution: int) -> int:
     return int(mesh_decoder_resolution) * 4
+
+
+def _record_mlx_memory(metadata: dict[str, object], label: str) -> None:
+    memory = metadata.setdefault("mlx_memory", {})
+    if isinstance(memory, dict):
+        memory[label] = mlx_memory_snapshot().as_dict()
+
+
+def _release_mlx_stage_memory(metadata: dict[str, object], label: str) -> None:
+    clear_mlx_cache()
+    _record_mlx_memory(metadata, label)
 
 
 def _pipeline_float_tuple(value) -> tuple[float, ...] | None:
