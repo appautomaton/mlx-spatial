@@ -1,47 +1,22 @@
 {
-  "active_change": "hyworld2-worldmirror-mlx-inference",
+  "active_change": "sam3d-mlx-mesh-decoder-algorithm-parity",
   "stage": "complete",
-  "canonical_spec": ".agent/work/hyworld2-worldmirror-mlx-inference/SPEC.md",
-  "canonical_design": ".agent/work/hyworld2-worldmirror-mlx-inference/DESIGN.md",
-  "canonical_plan": ".agent/work/hyworld2-worldmirror-mlx-inference/PLAN.md",
-  "product_review": null,
+  "canonical_spec": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/SPEC.md",
+  "canonical_design": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/DESIGN.md",
+  "canonical_plan": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/PLAN.md",
   "engineering_review": "approved_with_risks",
-  "completed_slices": [
-    "slice-1-hyworld-asset-and-cli-contract",
-    "slice-2-reconstruction-trace-blockers-path-policy",
-    "slice-3-official-input-preprocessing-contract",
-    "slice-4-checkpoint-and-config-routing",
-    "slice-5-mlx-visualgeometrytransformer-core",
-    "slice-6-mlx-camera-and-dense-heads",
-    "slice-7-staged-reconstruction-orchestration-and-exports",
-    "slice-8-gaussian-attribute-stage-contract",
-    "slice-9-live-518-reconstruction-verification"
+  "what_is_true_now": [
+    "Slices 1-7 are complete.",
+    "Live SAM3D human-object reconstruction wrote `outputs/sam3d/human-object/gaussians.ply` and `outputs/sam3d/human-object/mesh.glb` with trace reaching `glb-export` and no blocker.",
+    "Blender headless import, focused SAM3D tests, full pytest, and diff check passed."
   ],
-  "current_slice": null,
-  "last_verification": {
-    "slice_1": "uv run pytest -q tests/test_hyworld2_tools.py tests/test_model_assets.py -> 15 passed",
-    "slice_2": "uv run pytest -q tests/test_hyworld2_tools.py tests/test_hyworld2_inference.py -> 16 passed",
-    "slice_3": "uv run pytest -q tests/test_hyworld2_preprocess.py tests/test_hyworld2_inference.py -> 15 passed",
-    "slice_4": "uv run pytest -q tests/test_hyworld2_assets.py tests/test_hyworld2_inference.py -> 17 passed",
-    "slice_5": "uv run pytest -q tests/test_hyworld2_worldmirror.py tests/test_hyworld2_inference.py -> 25 passed",
-    "slice_6": "uv run pytest -q tests/test_hyworld2_heads.py tests/test_hyworld2_worldmirror.py -> 30 passed",
-    "slice_7": "uv run pytest -q tests/test_hyworld2_export.py tests/test_hyworld2_inference.py tests/test_hyworld2_tools.py -> 27 passed",
-    "slice_8": "uv run pytest -q tests/test_hyworld2_inference.py tests/test_hyworld2_heads.py -> 29 passed",
-    "slice_9": "uv run pytest -q tests/test_hyworld2_tools.py tests/test_hyworld2_inference.py tests/test_hyworld2_export.py -> 27 passed; live validate/reconstruct cleanly block on missing HY-WorldMirror assets",
-    "window_bundle": "uv run pytest -q tests/test_hyworld2_tools.py tests/test_hyworld2_preprocess.py tests/test_hyworld2_assets.py tests/test_hyworld2_inference.py tests/test_hyworld2_worldmirror.py tests/test_hyworld2_heads.py tests/test_hyworld2_export.py tests/test_model_assets.py -> 78 passed",
-    "hyworld2_validate": "uv run mlx-spatial-hyworld2 validate weights/hy-world-2 -> ready=True after downloading HY-WorldMirror-2.0/model.safetensors and config.json",
-    "hyworld2_reconstruct": "uv run mlx-spatial-hyworld2 reconstruct weights/hy-world-2 inputs/trellis2/demo-rgb-background.png --output outputs/hyworld2/real-balanced-dnp --heads depth,normal,points --memory-profile balanced --trace-output outputs/hyworld2/real-balanced-dnp/trace.json -> completed through export with real tensors",
-    "trellis_slat": "uv run pytest -q tests/test_trellis2_slat.py -> 22 passed after restoring exact chunked self-attention exports",
-    "hyworld2_real_tensors": "uv run pytest -q tests/test_hyworld2_inference.py tests/test_hyworld2_worldmirror.py tests/test_hyworld2_heads.py tests/test_hyworld2_export.py -> 51 passed; safe profile blocks on exact DINO positional interpolation",
-    "full_suite": "uv run pytest -q -> 323 passed, 5 skipped",
-    "hyworld2_official_cat_girl": "uv run mlx-spatial-hyworld2 reconstruct weights/hy-world-2 vendors/HY-World-2.0/examples/worldrecon/stylistic/Cat_Girl --output outputs/hyworld2/cat-girl-518-official --heads camera,depth,normal,points,gs --memory-profile balanced --trace-output outputs/hyworld2/cat-girl-518-official/trace.json -> completed with camera_params.json, points.ply, and binary_little_endian gaussians.ply",
-    "diff_check": "git diff --check -> passed",
-    "subagents": "official-source explorer completed; repo-pattern explorer completed; Slice 4 implementer DONE; Slice 4 reviews approved after fixes; Slice 5 implementers DONE; Slice 5 reviews approved after fixes; Slice 6 implementers DONE; Slice 6 reviews approved after fixes; Slice 7 implementer DONE; Slice 7 spec review APPROVED; Slice 7 quality review CHANGES_REQUESTED then APPROVED after stale-output cleanup; Slice 8 and Slice 9 completed directly"
-  },
-  "previous_change": "trellis2-mlx-textured-glb",
-  "previous_spec": ".agent/work/trellis2-mlx-textured-glb/SPEC.md",
-  "previous_plan": ".agent/work/trellis2-mlx-textured-glb/PLAN.md",
-  "previous_stage": "verify",
-  "starting_blocker": null,
-  "ready_for": "commit-cleanup"
+  "next_step": "Prepare commit cleanup/review for the completed SAM3D mesh decoder algorithm parity change.",
+  "open_risks": [
+    "The basic GLB is geometry plus vertex color only; official-quality layout optimization and textured/material postprocess remain future work.",
+    "Large mesh extraction requires the `large` memory profile on this 128 GB machine."
+  ],
+  "previous_change": "hyworld2-worldmirror-mlx-inference",
+  "previous_spec": ".agent/work/hyworld2-worldmirror-mlx-inference/SPEC.md",
+  "previous_plan": ".agent/work/hyworld2-worldmirror-mlx-inference/PLAN.md",
+  "previous_stage": "complete"
 }
