@@ -265,6 +265,7 @@ dependencies = [
     { name = "mlx" },
     { name = "numpy" },
     { name = "pillow" },
+    { name = "pyyaml" },
     { name = "safetensors" },
     { name = "scipy" },
     { name = "xatlas" },
@@ -273,6 +274,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "huggingface-hub" },
+    { name = "pt-safe-loader" },
     { name = "pytest" },
 ]
 
@@ -282,6 +284,7 @@ requires-dist = [
     { name = "mlx" },
     { name = "numpy" },
     { name = "pillow", specifier = ">=12.2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "safetensors" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "xatlas", specifier = ">=0.0.11" },
@@ -290,6 +293,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "huggingface-hub", specifier = ">=0.36" },
+    { name = "pt-safe-loader", specifier = ">=0.1.4" },
     { name = "pytest", specifier = ">=8" },
 ]
 
@@ -475,6 +479,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "pt-safe-loader"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/89/6d22d7036ce04e2d8a30ae45e6638d4d90041b39aac619ca920855cacec6/pt_safe_loader-0.1.4.tar.gz", hash = "sha256:f0e252d6d5606122b66d4764232b5898818a4c5d9f3bc5987d1bc14cc8d85eee", size = 39436, upload-time = "2026-04-23T15:17:43.928Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/f8/979020e15b0b7a0a11ed95d790b70733a2bfee46761dd35e916dc26389b2/pt_safe_loader-0.1.4-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:58004dbf27f349e064ae726ea8587ab34722721a0bf17311382cbd97a303bd72", size = 530124, upload-time = "2026-04-23T15:17:38.779Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/3f/19bb3a14bfc31f84eb7c7e85c43eaf2b1cf9336bc438b4e41bc5024e8a07/pt_safe_loader-0.1.4-cp38-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:36147db57bb2cd7bbdf84db46e23a4d823f201d5fa5fd6964c6f0e6f5fa40e45", size = 599927, upload-time = "2026-04-23T15:17:40.71Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/b2/1687291bb341fc4590dfd9e2be271bc04760dfd89680ef07fbc675c33f89/pt_safe_loader-0.1.4-cp38-abi3-win_amd64.whl", hash = "sha256:69370080c617ea0d381dd42732d577c8856c87c222245634b55156493440326a", size = 506858, upload-time = "2026-04-23T15:17:42.636Z" },
 ]
 
 [[package]]

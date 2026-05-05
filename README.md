@@ -313,6 +313,66 @@ Next TRELLIS slices should be concrete and separately verified:
 - optimized sparse ConvNeXt/up-block decoder kernels beyond the level-1 expanded-token boundary;
 - texture SLat, texture decoder, UV baking, and textured GLB output.
 
+## SAM 3D Objects Runtime Readiness
+
+`mlx_spatial.sam3d` adds the first SAM 3D Objects surface for native object-centric reconstruction. The official source of truth is the vendored `vendors/sam-3d-objects` quickstart: `image + mask -> output["gs"].save_ply(...)`.
+
+The local SAM3D convention is:
+
+```text
+weights/sam-3d-objects/
+weights/sam-3d-objects-mlx/
+weights/moge-vitl/
+weights/moge-vitl-mlx/
+```
+
+The checkpoint bundle is gated on Hugging Face. Print the explicit download command with:
+
+```bash
+uv run mlx-spatial-sam3d download-command weights/sam-3d-objects
+```
+
+Validate and inspect the local bundle without importing PyTorch/CUDA:
+
+```bash
+uv run mlx-spatial-sam3d validate weights/sam-3d-objects
+uv run mlx-spatial-sam3d inspect weights/sam-3d-objects
+```
+
+The inspector supports direct `pipeline.yaml`, `checkpoints/pipeline.yaml`, and `checkpoints/hf/pipeline.yaml` layouts. It parses the official pipeline YAML, resolves referenced config/checkpoint files, and inventories `.safetensors` metadata for the sparse-structure, SLat, and decoder checkpoints.
+
+The official SAM3D release currently ships most model weights as PyTorch zip `.ckpt`/`.pt` files. Keep those out of the inference path by creating a local safetensors mirror:
+
+```bash
+uv run mlx-spatial-sam3d convert weights/sam-3d-objects \
+  --output-root weights/sam-3d-objects-mlx \
+  --moge-root weights/moge-vitl \
+  --moge-output-root weights/moge-vitl-mlx \
+  --max-archive-gb 16
+```
+
+The converter uses `pt-safe-loader` from the dev environment when possible, falls back to a restricted torch-zip state-dict extractor for the official SAM3D/MoGe checkpoint shapes, does not import PyTorch, rewrites the mirrored `pipeline.yaml` to reference `.safetensors`, and writes a `conversion_manifest.json` under the converted root.
+
+The native output target for this milestone is an official-field Gaussian PLY:
+
+```text
+x y z nx ny nz f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3
+```
+
+The current `reconstruct` command is exact-mode staged. It validates SAM3D and MoGe safetensors assets, runs MLX MoGe pointmap inference, applies official image/mask/pointmap preprocessing, runs SS condition fusion, SS ShortCut flow, SS decoding, SLat condition fusion, SLat FlowMatching, and the SLat gaussian decoder, then writes an official-field binary `gaussians.ply`. If `--glb-output` is requested, it runs the SLat mesh decoder, extracts a FlexiCubes mesh, and writes a basic Blender-readable `.glb`. This GLB is geometry plus basic material/vertex color; official-quality textured/layout-optimized mesh export remains a later milestone.
+
+```bash
+uv run mlx-spatial-sam3d reconstruct weights/sam-3d-objects-mlx path/to/image.png \
+  --mask path/to/mask.png \
+  --moge-root weights/moge-vitl-mlx \
+  --output outputs/sam3d/object/gaussians.ply \
+  --glb-output outputs/sam3d/object/mesh.glb \
+  --stage1-steps 2 \
+  --stage2-steps 12 \
+  --memory-profile balanced \
+  --trace-output outputs/sam3d/object/trace.json
+```
+
 ## Optional Local Resources
 
 This workstation has local framework checkouts under `/Users/ac/dev/ai/ai-frameworks`, including:

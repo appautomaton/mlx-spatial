@@ -13,6 +13,7 @@ dependencies = [
     "mlx",
     "numpy",
     "pillow>=12.2.0",
+    "pyyaml>=6.0",
     "safetensors",
     "scipy>=1.17.1",
     "xatlas>=0.0.11",
@@ -21,12 +22,14 @@ dependencies = [
 [dependency-groups]
 dev = [
     "huggingface-hub>=0.36",
+    "pt-safe-loader>=0.1.4",
     "pytest>=8",
 ]
 
 [project.scripts]
 mlx-spatial-trellis2 = "mlx_spatial.trellis2:main"
 mlx-spatial-hyworld2 = "mlx_spatial.hyworld2:main"
+mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlx_spatial"]
