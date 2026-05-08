@@ -3,6 +3,8 @@ import mlx.core as mx
 from PIL import Image
 
 from mlx_spatial.hyworld2_preprocess import (
+    HYWORLD2_DEFAULT_MEMORY_PROFILE,
+    HYWORLD2_OFFICIAL_TARGET_SIZE,
     adaptive_hyworld2_target_size,
     discover_hyworld2_images,
     memory_profile_config,
@@ -16,10 +18,14 @@ def _write_rgb(path, size=(640, 480), color=(20, 40, 80)):
 
 
 def test_memory_profiles_resolve_target_and_frame_limits():
+    assert HYWORLD2_DEFAULT_MEMORY_PROFILE == "large"
     balanced = memory_profile_config("balanced")
+    large = memory_profile_config("large")
 
     assert balanced.target_size == 518
     assert balanced.max_frames == 8
+    assert large.target_size == HYWORLD2_OFFICIAL_TARGET_SIZE
+    assert large.max_frames == 32
 
 
 def test_discover_hyworld2_images_sorts_supported_images_and_limits_frames(tmp_path):

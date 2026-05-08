@@ -12,6 +12,8 @@ from PIL import Image
 
 HYWORLD2_IMAGE_EXTENSIONS = (".jpeg", ".jpg", ".png", ".webp")
 HYWORLD2_PATCH_SIZE = 14
+HYWORLD2_OFFICIAL_TARGET_SIZE = 952
+HYWORLD2_DEFAULT_MEMORY_PROFILE = "large"
 
 
 @dataclass(frozen=True)
@@ -101,7 +103,7 @@ def discover_hyworld2_images(input_path: str | Path, *, max_frames: int) -> tupl
 def preprocess_hyworld2_images(
     input_path: str | Path,
     *,
-    memory_profile: str = "balanced",
+    memory_profile: str = HYWORLD2_DEFAULT_MEMORY_PROFILE,
     patch_size: int = HYWORLD2_PATCH_SIZE,
 ) -> HyWorld2PreprocessedInput:
     """Prepare HY-World image inputs as an MLX tensor shaped [1, S, 3, H, W]."""

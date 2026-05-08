@@ -9,6 +9,7 @@ from mlx_spatial.hyworld2 import main
 from mlx_spatial.hyworld2_assets import HYWORLD2_COMPONENT_GROUPS, HYWORLD2_WORLDMIRROR_SUBFOLDER
 from mlx_spatial.hyworld2_inference import (
     HyWorld2InferencePipeline,
+    _intermediate_layers_for_hyworld2,
     normalize_hyworld2_heads,
     validate_hyworld2_output_path,
 )
@@ -153,7 +154,7 @@ def test_reconstruct_inspects_checkpoint_before_model_construction_blocker(tmp_p
     assert result.trace.blocker.stage == "model-construction"
     assert result.trace.enabled_heads == ()
     assert result.trace.metadata["input"]["frame_count"] == 1
-    assert result.trace.metadata["input"]["patch_grid"] == (28, 37)
+    assert result.trace.metadata["input"]["patch_grid"] == (34, 45)
     assert result.trace.metadata["checkpoint"]["ready"] is True
     assert result.trace.metadata["checkpoint"]["missing_groups"] == ("gs_head", "gs_renderer")
     assert result.trace.metadata["checkpoint"]["model_config"]["img_size"] == 518
@@ -254,8 +255,18 @@ def test_hyworld2_reconstruct_cli_writes_trace_and_reports_blocker(tmp_path, cap
         "checkpoint-inspection",
     ]
     assert payload["requested_heads"] == ["depth", "normal", "points"]
-    assert payload["metadata"]["input"]["token_count"] == 28 * 37
+    assert payload["memory_profile"] == "large"
+    assert payload["metadata"]["official_defaults"]["matches_official_target_size"] is True
+    assert payload["metadata"]["input"]["token_count"] == 34 * 45
     assert payload["metadata"]["checkpoint"]["ready"] is True
+
+
+def test_hyworld2_intermediate_layers_follow_official_model_size_map():
+    assert _intermediate_layers_for_hyworld2("small", 12, False) == (2, 5, 8, 11)
+    assert _intermediate_layers_for_hyworld2("base", 12, False) == (2, 5, 8, 11)
+    assert _intermediate_layers_for_hyworld2("large", 24, False) == (4, 11, 17, 23)
+    assert _intermediate_layers_for_hyworld2("giant", 40, False) == (9, 19, 29, 39)
+    assert _intermediate_layers_for_hyworld2("fixture", 4, True) == (0, 1, 2, 3)
 
 
 def test_hyworld2_reconstruct_cli_rejects_output_outside_outputs(tmp_path, capsys):
@@ -305,6 +316,31 @@ def test_fixture_reconstruct_writes_staged_outputs_under_outputs(tmp_path):
     assert trace["metadata"]["fixture_tensors"] is True
     assert trace["metadata"]["heads"]["points"]["export"] is True
     assert trace["outputs"]
+
+
+def test_fixture_reconstruct_writes_optional_mlx_parity_bundle(tmp_path):
+    _write_tiny_fixture_root(tmp_path)
+    image_dir = tmp_path / "images"
+    _write_fixture_images(image_dir)
+    out = _output_dir("fixture-parity-bundle")
+    parity_output = Path("outputs") / "hyworld2" / "fixture-parity-bundle.npz"
+    parity_output.unlink(missing_ok=True)
+
+    result = HyWorld2InferencePipeline(tmp_path).reconstruct(
+        image_dir,
+        output_path=out,
+        heads=("camera", "depth"),
+        memory_profile="safe",
+        fixture_tensors=True,
+        parity_output_path=parity_output,
+    )
+
+    assert result.trace.blocker is None
+    assert parity_output.is_file()
+    assert result.trace.metadata["parity"]["runtime_depends_on_torch"] is False
+    assert result.trace.metadata["parity"]["numeric_parity_verified"] is False
+    assert result.trace.metadata["parity"]["mlx_bundle_path"] == str(parity_output)
+    assert "parity-mlx-bundle" in [output.name for output in result.trace.outputs]
 
 
 def test_fixture_reconstruct_heads_depth_exports_only_depth(tmp_path):
@@ -396,8 +432,10 @@ def test_fixture_reconstruct_requested_gs_exports_gaussians_ply(tmp_path):
     )
 
     assert result.trace.blocker is None
-    assert result.trace.enabled_heads == ("gs",)
+    assert result.trace.requested_heads == ("gs",)
+    assert result.trace.enabled_heads == ("camera", "gs")
     assert not (out / "points").exists()
+    assert not (out / "camera_params.json").exists()
     assert (out / "gaussian" / "attributes.npz").is_file()
     assert (out / "gaussian" / "metadata.json").is_file()
     assert (out / "gaussians.ply").is_file()
@@ -405,7 +443,15 @@ def test_fixture_reconstruct_requested_gs_exports_gaussians_ply(tmp_path):
         "gaussians_ply": "exported",
         "point_cloud_ply": "points.ply is a point-cloud artifact, not 3DGS",
         "renderer": "MLX gs_renderer attribute conv; no CUDA rasterization",
+        "means_source": "gsdepth+predcamera",
+        "camera_dependency": "executed",
         "requires_cuda_gsplat": False,
+    }
+    assert result.trace.metadata["heads"]["camera"] == {
+        "requested": False,
+        "enabled": True,
+        "export": False,
+        "reason": "executed as required dependency for official GS export",
     }
     assert result.trace.metadata["heads"]["gs"] == {
         "requested": True,

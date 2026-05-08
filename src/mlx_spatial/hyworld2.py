@@ -21,6 +21,12 @@ from .hyworld2_inference import (
     HyWorld2InferencePipeline,
     normalize_hyworld2_heads,
 )
+from .hyworld2_parity import (
+    compare_hyworld2_parity_tensors,
+    load_hyworld2_parity_bundle,
+    parity_report_to_dict,
+)
+from .hyworld2_preprocess import HYWORLD2_DEFAULT_MEMORY_PROFILE
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -47,9 +53,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("input")
     reconstruct_parser.add_argument("--output", required=True)
     reconstruct_parser.add_argument("--heads", default=",".join(HYWORLD2_DEFAULT_HEADS))
-    reconstruct_parser.add_argument("--memory-profile", choices=HYWORLD2_MEMORY_PROFILES, default="balanced")
+    reconstruct_parser.add_argument(
+        "--memory-profile",
+        choices=HYWORLD2_MEMORY_PROFILES,
+        default=HYWORLD2_DEFAULT_MEMORY_PROFILE,
+    )
     reconstruct_parser.add_argument("--trace-output")
     reconstruct_parser.add_argument("--fixture-tensors", action="store_true")
+    reconstruct_parser.add_argument(
+        "--parity-output",
+        help="optional MLX tensor bundle for dev-only PyTorch parity comparison",
+    )
+
+    parity_parser = subparsers.add_parser(
+        "parity-compare",
+        help="compare an MLX tensor bundle against a dev-only PyTorch reference bundle",
+    )
+    parity_parser.add_argument("reference")
+    parity_parser.add_argument("actual")
+    parity_parser.add_argument("--tensor", action="append", dest="tensors")
+    parity_parser.add_argument("--atol", type=float, default=1e-4)
+    parity_parser.add_argument("--rtol", type=float, default=1e-4)
+    parity_parser.add_argument("--json-output")
 
     args = parser.parse_args(argv)
     root = getattr(args, "command_root", None) or getattr(args, "root_path", None) or args.root
@@ -87,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             heads=heads,
             memory_profile=args.memory_profile,
             fixture_tensors=args.fixture_tensors,
+            parity_output_path=args.parity_output,
         )
         trace = result.trace
         payload = _jsonable(trace)
@@ -104,6 +130,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"reason={trace.blocker.reason}")
             return 2
         return 0
+
+    if args.command == "parity-compare":
+        reference = load_hyworld2_parity_bundle(args.reference)
+        actual = load_hyworld2_parity_bundle(args.actual)
+        report = compare_hyworld2_parity_tensors(
+            actual.tensors,
+            reference,
+            names=args.tensors,
+            atol=args.atol,
+            rtol=args.rtol,
+        )
+        payload = parity_report_to_dict(report)
+        if args.json_output:
+            output = Path(args.json_output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"passed={report.passed}")
+        print(f"checked={len(report.comparisons)}")
+        print(f"failed={report.failed_names}")
+        for comparison in report.comparisons:
+            if comparison.passed:
+                continue
+            print(
+                f"mismatch {comparison.name} status={comparison.status} "
+                f"max_abs_error={comparison.max_abs_error} reason={comparison.reason}"
+            )
+        return 0 if report.passed else 1
 
     parser.error(f"unsupported command: {args.command}")
 

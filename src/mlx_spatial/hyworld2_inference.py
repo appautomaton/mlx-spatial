@@ -27,7 +27,14 @@ from .hyworld2_heads import (
     run_dpt_head,
     run_gaussian_attribute_head,
 )
-from .hyworld2_preprocess import memory_profile_config, preprocess_hyworld2_images
+from .hyworld2_parity import hyworld2_parity_trace_metadata
+from .hyworld2_parity import write_hyworld2_parity_bundle
+from .hyworld2_preprocess import (
+    HYWORLD2_DEFAULT_MEMORY_PROFILE,
+    HYWORLD2_OFFICIAL_TARGET_SIZE,
+    memory_profile_config,
+    preprocess_hyworld2_images,
+)
 from .hyworld2_worldmirror import VisualGeometryTransformerConfig, run_visual_geometry_transformer
 from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot, reset_mlx_peak_memory
 
@@ -43,6 +50,12 @@ HYWORLD2_REAL_HEAD_PREFIXES = {
     "normal": "norm_head.",
     "points": "pts_head.",
     "gs": "gs_head.",
+}
+HYWORLD2_INTERMEDIATE_LAYERS = {
+    "small": (2, 5, 8, 11),
+    "base": (2, 5, 8, 11),
+    "large": (4, 11, 17, 23),
+    "giant": (9, 19, 29, 39),
 }
 
 
@@ -104,21 +117,30 @@ class HyWorld2InferencePipeline:
         *,
         output_path: str | Path,
         heads: Sequence[str] = HYWORLD2_DEFAULT_HEADS,
-        memory_profile: str = "balanced",
+        memory_profile: str = HYWORLD2_DEFAULT_MEMORY_PROFILE,
         fixture_tensors: bool = False,
+        parity_output_path: str | Path | None = None,
     ) -> HyWorld2ReconstructionResult:
         requested_heads = normalize_hyworld2_heads(heads)
+        execution_heads = _execution_heads_for_hyworld2(requested_heads)
         profile = memory_profile_config(memory_profile)
         reset_mlx_peak_memory()
         memory_snapshots: dict[str, dict[str, int | None]] = {"start": mlx_memory_snapshot().as_dict()}
         head_status = _initial_head_status(requested_heads)
+        for dependency in execution_heads:
+            if dependency not in requested_heads:
+                head_status[dependency]["reason"] = "required dependency for official GS export"
 
         input_root = Path(input_path)
         output_dir = Path(output_path)
+        parity_output = Path(parity_output_path) if parity_output_path is not None else None
+        parity_tensors: dict[str, object] = {}
         validation = validate_hyworld2_assets(self.root)
         completed: list[str] = []
 
         path_blocker = validate_hyworld2_output_path(output_dir)
+        if path_blocker is None and parity_output is not None:
+            path_blocker = validate_hyworld2_output_path(parity_output.parent)
         if path_blocker is not None:
             return HyWorld2ReconstructionResult(
                 trace=self._trace(
@@ -130,7 +152,11 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
-                    metadata={"memory_profile": _profile_metadata(profile), "heads": head_status},
+                    metadata={
+                        "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
+                        "heads": head_status,
+                    },
                 )
             )
 
@@ -150,7 +176,11 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
-                    metadata={"memory_profile": _profile_metadata(profile), "heads": head_status},
+                    metadata={
+                        "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
+                        "heads": head_status,
+                    },
                 )
             )
         completed.append("asset-validation")
@@ -170,7 +200,11 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
-                    metadata={"memory_profile": _profile_metadata(profile), "heads": head_status},
+                    metadata={
+                        "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
+                        "heads": head_status,
+                    },
                 )
             )
         completed.append("input-discovery")
@@ -193,13 +227,18 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
-                    metadata={"memory_profile": _profile_metadata(profile), "heads": head_status},
+                    metadata={
+                        "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
+                        "heads": head_status,
+                    },
                 )
             )
         completed.append("image-preprocessing")
+        parity_tensors["input.imgs"] = preprocessed.tensor
         _release_hyworld_mlx_stage(memory_snapshots, "after-image-preprocessing")
 
-        inspection = inspect_hyworld2_model_assets(self.root, requested_heads=requested_heads)
+        inspection = inspect_hyworld2_model_assets(self.root, requested_heads=execution_heads)
         inspection_metadata = _inspection_metadata(inspection)
         if inspection.blocker is not None:
             return HyWorld2ReconstructionResult(
@@ -219,6 +258,7 @@ class HyWorld2InferencePipeline:
                     output_path=output_dir,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
                         "input": _preprocess_metadata(preprocessed),
                         "checkpoint": inspection_metadata,
                         "heads": head_status,
@@ -253,6 +293,7 @@ class HyWorld2InferencePipeline:
                     output_path=output_dir,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
                         "input": _preprocess_metadata(preprocessed),
                         "checkpoint": inspection_metadata,
                         "heads": head_status,
@@ -264,7 +305,7 @@ class HyWorld2InferencePipeline:
         real_tensors = None
         if not fixture_tensors:
             try:
-                real_tensors = _load_real_hyworld2_tensors(validation.checkpoint_path, requested_heads)
+                real_tensors = _load_real_hyworld2_tensors(validation.checkpoint_path, execution_heads)
                 _release_hyworld_mlx_stage(memory_snapshots, "after-checkpoint-load")
             except (OSError, ValueError) as error:
                 return HyWorld2ReconstructionResult(
@@ -284,6 +325,7 @@ class HyWorld2InferencePipeline:
                         output_path=output_dir,
                         metadata={
                             "memory_profile": _profile_metadata(profile),
+                            "official_defaults": _official_defaults_metadata(memory_profile, profile),
                             "input": _preprocess_metadata(preprocessed),
                             "checkpoint": inspection_metadata,
                             "heads": head_status,
@@ -293,11 +335,7 @@ class HyWorld2InferencePipeline:
                 )
         completed.append("model-construction")
 
-        intermediate_layers = (
-            tuple(index for index in (4, 11, 17, 23) if index < int(model_config.depth))
-            if not fixture_tensors
-            else tuple(range(min(int(model_config.depth), 4)))
-        )
+        intermediate_layers = _intermediate_layers_for_hyworld2(model_config.model_size, model_config.depth, fixture_tensors)
         transformer_config = VisualGeometryTransformerConfig.from_model_config(
             model_config,
             max_tokens=_fixture_max_tokens(preprocessed),
@@ -320,6 +358,7 @@ class HyWorld2InferencePipeline:
                     output_path=output_dir,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
+                        "official_defaults": _official_defaults_metadata(memory_profile, profile),
                         "input": _preprocess_metadata(preprocessed),
                         "checkpoint": inspection_metadata,
                         "heads": head_status,
@@ -328,6 +367,10 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("visual-transformer")
+        if backbone.patch_start_idx is not None:
+            parity_tensors["vgt.patch_start_idx"] = mx.array([backbone.patch_start_idx], dtype=mx.int32)
+        for index, tokens in enumerate(backbone.intermediate_full_tokens or backbone.intermediate_tokens):
+            parity_tensors[f"vgt.token_list.{index}"] = tokens
         if not fixture_tensors and real_tensors is not None:
             real_tensors["visual_transformer"] = {}
         del transformer_tensors
@@ -336,7 +379,7 @@ class HyWorld2InferencePipeline:
         head_outputs: dict[str, object] = {}
         enabled_heads: list[str] = []
         real_head_tensors = {} if fixture_tensors else real_tensors["heads"]
-        for head in requested_heads:
+        for head in execution_heads:
             head_status[head]["enabled"] = True
             if head == "camera":
                 head_tensors = real_head_tensors.get("camera") if not fixture_tensors else None
@@ -406,6 +449,7 @@ class HyWorld2InferencePipeline:
                         output_path=output_dir,
                         metadata={
                             "memory_profile": _profile_metadata(profile),
+                            "official_defaults": _official_defaults_metadata(memory_profile, profile),
                             "input": _preprocess_metadata(preprocessed),
                             "checkpoint": inspection_metadata,
                             "heads": head_status,
@@ -414,6 +458,7 @@ class HyWorld2InferencePipeline:
                     )
                 )
             head_outputs[head] = output
+            _collect_hyworld2_parity_head_tensors(parity_tensors, head, output)
             enabled_heads.append(head)
             if not fixture_tensors:
                 real_head_tensors.pop(head, None)
@@ -483,9 +528,31 @@ class HyWorld2InferencePipeline:
             if head in head_outputs:
                 head_status[head]["export"] = True
                 head_status[head]["reason"] = "exported"
+        for dependency in execution_heads:
+            if dependency not in requested_heads and dependency in head_outputs:
+                head_status[dependency]["export"] = False
+                head_status[dependency]["reason"] = "executed as required dependency for official GS export"
         completed.append("export")
 
         blocker = None
+        parity_metadata = hyworld2_parity_trace_metadata()
+        if parity_output is not None:
+            parity_bundle = write_hyworld2_parity_bundle(
+                parity_output,
+                parity_tensors,
+                metadata={
+                    "runtime": "mlx",
+                    "model_root": str(validation.root),
+                    "input": _preprocess_metadata(preprocessed),
+                    "heads": requested_heads,
+                    "execution_heads": execution_heads,
+                    "fixture_tensors": fixture_tensors,
+                },
+            )
+            output_records.append(
+                HyWorld2StageOutput(name="parity-mlx-bundle", path=parity_bundle, kind="npz")
+            )
+            parity_metadata["mlx_bundle_path"] = str(parity_bundle)
 
         trace = self._trace(
             completed,
@@ -502,12 +569,15 @@ class HyWorld2InferencePipeline:
                 "input": _preprocess_metadata(preprocessed),
                 "checkpoint": inspection_metadata,
                 "heads": head_status,
+                "execution_heads": execution_heads,
+                "official_defaults": _official_defaults_metadata(memory_profile, profile),
                 "fixture_tensors": fixture_tensors,
                 "visual_transformer": {
                     "intermediate_layers": intermediate_layers,
                     "attention_modes": backbone.attention_modes,
                     "real_tensors": not fixture_tensors,
                 },
+                "parity": parity_metadata,
                 "gaussian": _gaussian_metadata(requested_heads, head_outputs),
                 "mlx_memory": memory_snapshots,
             },
@@ -558,7 +628,7 @@ class HyWorld2InferencePipeline:
             config_kind=validation.config_kind,
             input_path=input_path,
             output_path=output_path,
-            metadata=metadata or {},
+            metadata=_truthful_metadata(metadata or {}),
         )
 
 
@@ -579,6 +649,31 @@ def normalize_hyworld2_heads(heads: Sequence[str] | str) -> tuple[str, ...]:
     if not normalized:
         raise ValueError("at least one HY-World head must be requested")
     return tuple(normalized)
+
+
+def _execution_heads_for_hyworld2(requested_heads: tuple[str, ...]) -> tuple[str, ...]:
+    """Return heads that must execute to preserve official inference dependencies."""
+
+    execution: list[str] = []
+    if "gs" in requested_heads and "camera" not in requested_heads:
+        execution.append("camera")
+    for head in requested_heads:
+        if head not in execution:
+            execution.append(head)
+    return tuple(execution)
+
+
+def _intermediate_layers_for_hyworld2(
+    model_size: str,
+    depth: int,
+    fixture_tensors: bool,
+) -> tuple[int, ...]:
+    if fixture_tensors:
+        return tuple(range(min(int(depth), 4)))
+    layers = HYWORLD2_INTERMEDIATE_LAYERS.get(str(model_size))
+    if layers is None:
+        return tuple(index for index in (4, 11, 17, 23) if index < int(depth))
+    return tuple(index for index in layers if index < int(depth))
 
 
 def validate_hyworld2_output_path(output_path: str | Path) -> HyWorld2Blocker | None:
@@ -606,6 +701,22 @@ def _profile_metadata(profile) -> dict[str, int | str]:
         "max_frames": profile.max_frames,
         "activation_guard_bytes": profile.activation_guard_bytes,
     }
+
+
+def _official_defaults_metadata(memory_profile: str, profile) -> dict[str, object]:
+    return {
+        "official_target_size": HYWORLD2_OFFICIAL_TARGET_SIZE,
+        "default_memory_profile": HYWORLD2_DEFAULT_MEMORY_PROFILE,
+        "selected_memory_profile": memory_profile,
+        "selected_target_size": profile.target_size,
+        "matches_official_target_size": profile.target_size == HYWORLD2_OFFICIAL_TARGET_SIZE,
+    }
+
+
+def _truthful_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    enriched = dict(metadata)
+    enriched.setdefault("parity", hyworld2_parity_trace_metadata())
+    return enriched
 
 
 def _release_hyworld_mlx_stage(memory_snapshots: dict[str, dict[str, int | None]], label: str) -> None:
@@ -674,6 +785,37 @@ def _initial_head_status(requested_heads: tuple[str, ...]) -> dict[str, dict[str
         }
         for head in HYWORLD2_SUPPORTED_HEADS
     }
+
+
+def _collect_hyworld2_parity_head_tensors(
+    parity_tensors: dict[str, object],
+    head: str,
+    output: object,
+) -> None:
+    if head == "camera":
+        parity_tensors["predictions.camera_params"] = getattr(output, "camera_params")
+    elif head == "depth":
+        parity_tensors["predictions.depth"] = getattr(output, "values")
+        parity_tensors["predictions.depth_conf"] = getattr(output, "confidence")
+        mask = getattr(output, "depth_mask_logits", None)
+        if mask is not None:
+            parity_tensors["predictions.depth_mask_logits"] = mask
+    elif head == "normal":
+        parity_tensors["predictions.normals"] = getattr(output, "values")
+        parity_tensors["predictions.normals_conf"] = getattr(output, "confidence")
+    elif head == "points":
+        parity_tensors["predictions.pts3d"] = getattr(output, "values")
+        parity_tensors["predictions.pts3d_conf"] = getattr(output, "confidence")
+    elif head == "gs":
+        parity_tensors["predictions.gs_feat"] = getattr(output, "features")
+        parity_tensors["predictions.gs_depth"] = getattr(output, "depth")
+        parity_tensors["predictions.gs_depth_conf"] = getattr(output, "confidence")
+        raw = getattr(output, "raw_params", None)
+        if raw is not None:
+            parity_tensors["predictions.gs_raw_params"] = raw
+        mask = getattr(output, "depth_mask_logits", None)
+        if mask is not None:
+            parity_tensors["predictions.gs_depth_mask_logits"] = mask
 
 
 def _fixture_max_tokens(preprocessed) -> int:
@@ -795,6 +937,8 @@ def _gaussian_metadata(requested_heads: tuple[str, ...], head_outputs: dict[str,
         "gaussians_ply": "exported" if "gs" in head_outputs else "blocked",
         "point_cloud_ply": "points.ply is a point-cloud artifact, not 3DGS",
         "renderer": "MLX gs_renderer attribute conv; no CUDA rasterization",
+        "means_source": "gsdepth+predcamera" if "camera" in head_outputs else "blocked",
+        "camera_dependency": "executed" if "camera" in head_outputs else "missing",
         "requires_cuda_gsplat": False,
     }
 
