@@ -20,6 +20,12 @@ from .sam3d_assets import (
     sam3d_download_command,
     validate_sam3d_assets,
 )
+from .sam3d_export import (
+    SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
+    SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES,
+    SAM3D_GLB_DEFAULT_TARGET_FACES,
+    SAM3D_XATLAS_FACE_GUARD,
+)
 from .sam3d_inference import Sam3dInferencePipeline
 from .sam3d_moge import SAM3D_MOGE_DEFAULT_ROOT
 
@@ -56,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     convert_parser.add_argument("--max-tensor-gb", type=float, default=16.0)
     convert_parser.add_argument("--overwrite", action="store_true")
 
-    reconstruct_parser = subparsers.add_parser("reconstruct", help="run exact SAM3D image+mask to gaussian PLY")
+    reconstruct_parser = subparsers.add_parser("reconstruct", help="run exact SAM3D image+mask to Gaussian PLY and optional GLB")
     reconstruct_parser.add_argument("reconstruct_root")
     reconstruct_parser.add_argument("image")
     reconstruct_parser.add_argument("--mask", required=True)
@@ -67,6 +73,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("--stage1-steps", type=int, default=2)
     reconstruct_parser.add_argument("--stage2-steps", type=int, default=12)
     reconstruct_parser.add_argument("--memory-profile", choices=("safe", "balanced", "large"), default="balanced")
+    reconstruct_parser.add_argument("--glb-postprocess", choices=("cleaned", "basic"), default="cleaned")
+    reconstruct_parser.add_argument("--glb-target-faces", type=int, default=SAM3D_GLB_DEFAULT_TARGET_FACES)
+    reconstruct_parser.add_argument("--glb-min-component-faces", type=int, default=SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES)
+    reconstruct_parser.add_argument(
+        "--glb-min-component-face-fraction",
+        type=float,
+        default=SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
+    )
+    reconstruct_parser.add_argument("--no-glb-simplify", action="store_true")
+    reconstruct_parser.add_argument("--glb-smooth-iterations", type=int, default=0)
+    reconstruct_parser.add_argument("--glb-texture", choices=("gaussian", "none"), default="gaussian")
+    reconstruct_parser.add_argument("--glb-texture-size", type=int, default=1024)
+    reconstruct_parser.add_argument("--glb-gaussian-k", type=int, default=8)
+    reconstruct_parser.add_argument("--glb-texel-chunk-size", type=int, default=262_144)
+    reconstruct_parser.add_argument("--glb-xatlas-face-guard", type=int, default=SAM3D_XATLAS_FACE_GUARD)
     reconstruct_parser.add_argument("--trace-output")
 
     args = parser.parse_args(argv)
@@ -160,17 +181,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "reconstruct":
-        result = Sam3dInferencePipeline(args.reconstruct_root).generate_gaussians_ply(
-            args.image,
-            mask_path=args.mask,
-            output_path=args.output,
-            glb_output_path=args.glb_output,
-            moge_root=args.moge_root,
-            seed=args.seed,
-            stage1_steps=args.stage1_steps,
-            stage2_steps=args.stage2_steps,
-            memory_profile=args.memory_profile,
-        )
+        try:
+            result = Sam3dInferencePipeline(args.reconstruct_root).generate_gaussians_ply(
+                args.image,
+                mask_path=args.mask,
+                output_path=args.output,
+                glb_output_path=args.glb_output,
+                moge_root=args.moge_root,
+                seed=args.seed,
+                stage1_steps=args.stage1_steps,
+                stage2_steps=args.stage2_steps,
+                memory_profile=args.memory_profile,
+                glb_postprocess=args.glb_postprocess,
+                glb_target_faces=0 if args.no_glb_simplify else args.glb_target_faces,
+                glb_min_component_faces=args.glb_min_component_faces,
+                glb_min_component_face_fraction=args.glb_min_component_face_fraction,
+                glb_smooth_iterations=args.glb_smooth_iterations,
+                glb_texture=args.glb_texture,
+                glb_texture_size=args.glb_texture_size,
+                glb_gaussian_k=args.glb_gaussian_k,
+                glb_texel_chunk_size=args.glb_texel_chunk_size,
+                glb_xatlas_face_guard=args.glb_xatlas_face_guard,
+            )
+        except ValueError as error:
+            print("blocker_stage=argument-validation")
+            print("operation=validate SAM3D reconstruct arguments")
+            print(f"reason={error}")
+            return 2
         trace = result.trace
         payload = _jsonable(trace)
         if args.trace_output:

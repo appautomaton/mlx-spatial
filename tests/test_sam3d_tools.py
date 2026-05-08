@@ -269,7 +269,7 @@ def test_sam3d_cli_reconstruct_advances_past_moge_with_pointmap(tmp_path, capsys
     assert not (tmp_path / output).exists()
 
 
-def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_basic_glb_with_fixture_pipeline(tmp_path, capsys, monkeypatch):
+def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture_pipeline(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     weights = tmp_path / "weights"
     moge = tmp_path / "moge"
@@ -389,12 +389,78 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_basic_glb_with_fixture_pi
 
     monkeypatch.setattr(sam3d_inference, "extract_sam3d_mesh_from_features", spy_extract_mesh)
 
-    def spy_write_glb(path, *, vertices, faces, colors=None):
+    def spy_write_glb(path, *, vertices, faces, colors=None, normals=None):
         calls["glb_vertices"] = np.array(vertices, copy=True)
         calls["glb_faces"] = np.array(faces, copy=True)
-        return real_write_glb(path, vertices=vertices, faces=faces, colors=colors)
+        calls["glb_normals_shape"] = None if normals is None else tuple(int(value) for value in normals.shape)
+        return real_write_glb(path, vertices=vertices, faces=faces, colors=colors, normals=normals)
 
     monkeypatch.setattr(sam3d_inference, "write_sam3d_basic_glb", spy_write_glb)
+
+    def fake_bake_texture(
+        mesh,
+        *,
+        gaussian_xyz,
+        gaussian_features_dc,
+        gaussian_opacity,
+        gaussian_scale,
+        texture_size,
+        k_neighbors,
+        texel_chunk_size,
+        xatlas_face_guard,
+    ):
+        calls["texture_mesh_vertices"] = np.array(mesh.vertices, copy=True)
+        calls["texture_mesh_faces"] = np.array(mesh.faces, copy=True)
+        calls["texture_gaussian_count"] = int(np.asarray(gaussian_xyz).shape[0])
+        calls["texture_size"] = int(texture_size)
+        calls["texture_k_neighbors"] = int(k_neighbors)
+        calls["texture_chunk_size"] = int(texel_chunk_size)
+        calls["texture_xatlas_face_guard"] = int(xatlas_face_guard)
+        return SimpleNamespace(
+            vertices=np.asarray(mesh.vertices, dtype=np.float32),
+            faces=np.asarray(mesh.faces, dtype=np.int32),
+            normals=np.asarray(mesh.normals, dtype=np.float32),
+            uvs=np.zeros((mesh.vertices.shape[0], 2), dtype=np.float32),
+            base_color_rgba=np.full((16, 16, 4), 255, dtype=np.uint8),
+            stats={
+                "backend": "gaussian-kdtree",
+                "texture_size": int(texture_size),
+                "gaussian_count": int(np.asarray(gaussian_xyz).shape[0]),
+                "k_neighbors": int(k_neighbors),
+                "texel_chunk_size": int(texel_chunk_size),
+                "sampled_texel_count": 4,
+                "raster_texel_count": 4,
+                "raw_coverage_ratio": 1.0,
+                "final_coverage_ratio": 1.0,
+                "unwrap_backend": "xatlas",
+                "xatlas_face_guard": int(xatlas_face_guard),
+                "unwrap_seconds": 0.0,
+                "unwrap_chunks": 1,
+                "unwrap_chart_count": 1,
+                "unwrap_utilization": 1.0,
+                "elapsed_seconds": 0.0,
+            },
+        )
+
+    def fake_write_textured_glb(path, baked_texture):
+        calls["textured_glb_path"] = str(path)
+        calls["textured_glb_uv_shape"] = tuple(int(value) for value in baked_texture.uvs.shape)
+        output_path = tmp_path / path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"glTFfixture")
+        return SimpleNamespace(
+            path=path,
+            vertex_count=int(baked_texture.vertices.shape[0]),
+            face_count=int(baked_texture.faces.shape[0]),
+            bytes_written=output_path.stat().st_size,
+            has_vertex_color=False,
+            has_normals=True,
+            has_texture=True,
+            format="glb",
+        )
+
+    monkeypatch.setattr(sam3d_inference, "bake_sam3d_gaussian_texture_for_glb", fake_bake_texture)
+    monkeypatch.setattr(sam3d_inference, "write_sam3d_textured_glb", fake_write_textured_glb)
 
     assert main(
         [
@@ -409,6 +475,12 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_basic_glb_with_fixture_pi
             glb_output,
             "--moge-root",
             str(moge),
+            "--glb-texture-size",
+            "16",
+            "--glb-gaussian-k",
+            "4",
+            "--glb-texel-chunk-size",
+            "8",
             "--trace-output",
             trace_output,
         ]
@@ -425,24 +497,100 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_basic_glb_with_fixture_pi
     assert trace["metadata"]["structured_latent"]["coords_shape"] == [2, 4]
     assert trace["metadata"]["structured_latent"]["feature_shape"] == [2, 1]
     assert trace["metadata"]["mesh_decoder"]["extraction"]["vertex_count"] > 0
+    assert trace["metadata"]["mesh_decoder"]["raw_mesh"]["face_count"] > 0
+    assert trace["metadata"]["glb_postprocess"]["mode"] == "cleaned"
+    assert trace["metadata"]["glb_postprocess"]["target_faces"] == 300000
+    assert trace["metadata"]["glb_postprocess"]["min_component_faces"] == 256
+    assert trace["metadata"]["glb_postprocess"]["min_component_face_fraction"] == 0.0005
+    assert trace["metadata"]["glb_postprocess"]["xatlas_face_guard"] == 400000
     assert trace["metadata"]["glb_export"]["face_count"] > 0
+    assert trace["metadata"]["glb_export"]["has_normals"] is True
+    assert trace["metadata"]["glb_export"]["has_texture"] is True
+    assert trace["metadata"]["glb_export"]["texture"]["backend"] == "gaussian-kdtree"
+    assert trace["metadata"]["glb_export"]["texture"]["base_color_shape"] == [16, 16, 4]
+    assert trace["metadata"]["glb_export"]["postprocess"]["mode"] == "cleaned"
+    assert trace["metadata"]["glb_export"]["postprocess"]["components_after"] >= 1
+    assert trace["metadata"]["glb_export"]["artifact_role"].startswith("textured preview mesh GLB")
     assert calls["loaded_mesh_decoder_tensors"] is True
     np.testing.assert_array_equal(calls["mesh_decoder_input_coords"], slat_coords)
     assert calls["mesh_decoder_input_feat_shape"] == (2, 1)
     np.testing.assert_array_equal(calls["extract_mesh_coords"], mesh_coords)
     assert calls["extract_mesh_feat_shape"] == mesh_feats.shape
+    assert calls["texture_mesh_vertices"].shape[1] == 3
+    assert calls["texture_mesh_faces"].shape[1] == 3
+    assert calls["texture_gaussian_count"] > 0
+    assert calls["texture_size"] == 16
+    assert calls["texture_k_neighbors"] == 4
+    assert calls["texture_chunk_size"] == 8
+    assert calls["texture_xatlas_face_guard"] == 400000
+    assert calls["textured_glb_uv_shape"][1] == 2
+
+    calls.clear()
+    basic_glb_output = "outputs/sam3d/mesh-basic.glb"
+    basic_trace_output = "outputs/sam3d/trace-basic.json"
+    assert main(
+        [
+            "reconstruct",
+            str(weights),
+            str(image),
+            "--mask",
+            str(mask),
+            "--output",
+            output,
+            "--glb-output",
+            basic_glb_output,
+            "--glb-texture",
+            "none",
+            "--glb-postprocess",
+            "basic",
+            "--moge-root",
+            str(moge),
+            "--trace-output",
+            basic_trace_output,
+        ]
+    ) == 0
+    basic_trace = json.loads((tmp_path / basic_trace_output).read_text(encoding="utf-8"))
+    assert basic_trace["metadata"]["glb_export"]["postprocess"]["mode"] == "basic"
+    assert basic_trace["metadata"]["glb_export"]["postprocess"]["applied"] is False
     np.testing.assert_allclose(calls["glb_vertices"], calls["expected_vertices"])
     np.testing.assert_array_equal(calls["glb_faces"], calls["expected_faces"])
 
 
-def test_sam3d_cli_reconstruct_rejects_non_outputs_path(tmp_path):
+def test_sam3d_cli_reconstruct_rejects_non_outputs_path(tmp_path, capsys):
     weights = tmp_path / "weights"
     _write_sam3d_fixture(weights)
     image, mask = _write_image_and_mask(tmp_path)
 
-    try:
-        main(["reconstruct", str(weights), str(image), "--mask", str(mask), "--output", str(tmp_path / "bad.ply")])
-    except ValueError as error:
-        assert "must stay under outputs" in str(error)
-    else:
-        raise AssertionError("expected reconstruct to reject output outside outputs")
+    assert main(["reconstruct", str(weights), str(image), "--mask", str(mask), "--output", str(tmp_path / "bad.ply")]) == 2
+    output = capsys.readouterr().out
+    assert "blocker_stage=argument-validation" in output
+    assert "reason=SAM3D output path must stay under outputs" in output
+
+
+def test_sam3d_cli_reconstruct_rejects_gaussian_texture_without_cleaned_postprocess(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    weights = tmp_path / "weights"
+    _write_sam3d_fixture(weights)
+    image, mask = _write_image_and_mask(tmp_path)
+
+    assert (
+        main(
+            [
+                "reconstruct",
+                str(weights),
+                str(image),
+                "--mask",
+                str(mask),
+                "--output",
+                "outputs/sam3d/gaussians.ply",
+                "--glb-output",
+                "outputs/sam3d/mesh.glb",
+                "--glb-postprocess",
+                "basic",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr().out
+    assert "blocker_stage=argument-validation" in output
+    assert "requires --glb-postprocess cleaned" in output

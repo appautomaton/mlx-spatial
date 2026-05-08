@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +45,18 @@ from .sam3d_decoder import (
     read_sam3d_slat_decoder_config,
     run_sam3d_slat_decoder_network,
 )
-from .sam3d_export import write_sam3d_basic_glb, write_sam3d_gaussians_ply
+from .sam3d_export import (
+    SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
+    SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES,
+    SAM3D_GLB_DEFAULT_TARGET_FACES,
+    SAM3D_XATLAS_FACE_GUARD,
+    bake_sam3d_gaussian_texture_for_glb,
+    compute_sam3d_vertex_normals,
+    postprocess_sam3d_mesh_for_glb,
+    write_sam3d_basic_glb,
+    write_sam3d_gaussians_ply,
+    write_sam3d_textured_glb,
+)
 from .sam3d_gaussian import Sam3dGaussianDecoderConfig, decode_sam3d_gaussian_fields
 from .sam3d_mesh import extract_sam3d_mesh_from_features, run_sam3d_mesh_decoder_features
 
@@ -95,7 +106,7 @@ class Sam3dInferenceTrace:
 
 @dataclass(frozen=True)
 class Sam3dGenerationResult:
-    """Result for `image + mask -> gaussians.ply`."""
+    """Result for `image + mask -> gaussians.ply` plus optional preview GLB."""
 
     trace: Sam3dInferenceTrace
     artifact: Sam3dOutputArtifact | None
@@ -119,6 +130,16 @@ class Sam3dInferencePipeline:
         stage1_steps: int = 2,
         stage2_steps: int = 12,
         memory_profile: str = "balanced",
+        glb_postprocess: str = "cleaned",
+        glb_target_faces: int = SAM3D_GLB_DEFAULT_TARGET_FACES,
+        glb_min_component_faces: int = SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES,
+        glb_min_component_face_fraction: float = SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
+        glb_smooth_iterations: int = 0,
+        glb_texture: str = "gaussian",
+        glb_texture_size: int = 1024,
+        glb_gaussian_k: int = 8,
+        glb_texel_chunk_size: int = 262_144,
+        glb_xatlas_face_guard: int = SAM3D_XATLAS_FACE_GUARD,
     ) -> Sam3dGenerationResult:
         """Run the staged SAM3D path, blocking rather than faking unported model stages."""
 
@@ -130,6 +151,30 @@ class Sam3dInferencePipeline:
             raise ValueError("stage1_steps and stage2_steps must be positive")
         if memory_profile not in {"safe", "balanced", "large"}:
             raise ValueError(f"unsupported SAM3D memory profile: {memory_profile}")
+        if glb_postprocess not in {"cleaned", "basic"}:
+            raise ValueError(f"unsupported SAM3D GLB postprocess mode: {glb_postprocess}")
+        if glb_texture not in {"gaussian", "none"}:
+            raise ValueError(f"unsupported SAM3D GLB texture mode: {glb_texture}")
+        if glb_target_faces < 0:
+            raise ValueError(f"glb_target_faces must be non-negative, got {glb_target_faces}")
+        if glb_min_component_faces <= 0:
+            raise ValueError(f"glb_min_component_faces must be positive, got {glb_min_component_faces}")
+        if glb_min_component_face_fraction < 0:
+            raise ValueError(
+                f"glb_min_component_face_fraction must be non-negative, got {glb_min_component_face_fraction}"
+            )
+        if glb_smooth_iterations < 0:
+            raise ValueError(f"glb_smooth_iterations must be non-negative, got {glb_smooth_iterations}")
+        if glb_texture_size <= 0:
+            raise ValueError(f"glb_texture_size must be positive, got {glb_texture_size}")
+        if glb_gaussian_k <= 0:
+            raise ValueError(f"glb_gaussian_k must be positive, got {glb_gaussian_k}")
+        if glb_texel_chunk_size <= 0:
+            raise ValueError(f"glb_texel_chunk_size must be positive, got {glb_texel_chunk_size}")
+        if glb_xatlas_face_guard <= 0:
+            raise ValueError(f"glb_xatlas_face_guard must be positive, got {glb_xatlas_face_guard}")
+        if glb_output is not None and glb_texture == "gaussian" and glb_postprocess != "cleaned":
+            raise ValueError("SAM3D Gaussian textured GLB requires --glb-postprocess cleaned")
         reset_mlx_peak_memory()
         metadata: dict[str, object] = {
             "seed": int(seed),
@@ -141,6 +186,19 @@ class Sam3dInferencePipeline:
             "requested_outputs": {
                 "gaussians_ply": str(output),
                 "mesh_glb": str(glb_output) if glb_output is not None else None,
+            },
+            "glb_postprocess": {
+                "mode": glb_postprocess,
+                "target_faces": int(glb_target_faces),
+                "min_component_faces": int(glb_min_component_faces),
+                "min_component_face_fraction": float(glb_min_component_face_fraction),
+                "simplify": bool(glb_target_faces > 0),
+                "smooth_iterations": int(glb_smooth_iterations),
+                "texture": glb_texture,
+                "texture_size": int(glb_texture_size),
+                "gaussian_k": int(glb_gaussian_k),
+                "texel_chunk_size": int(glb_texel_chunk_size),
+                "xatlas_face_guard": int(glb_xatlas_face_guard),
             },
         }
         _record_mlx_memory(metadata, "start")
@@ -429,7 +487,7 @@ class Sam3dInferencePipeline:
                 "format": ply_stats.format,
                 "fields": ply_stats.fields,
             }
-            del gs_decoder_tensors, raw_gaussian, gaussian_fields
+            del gs_decoder_tensors, raw_gaussian
             _release_mlx_stage_memory(metadata, "after-ply-export")
         except (KeyError, ValueError, OSError, TypeError) as error:
             blocker = Sam3dAssetBlocker(
@@ -444,7 +502,7 @@ class Sam3dInferencePipeline:
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         if glb_output is None:
-            del slat
+            del slat, gaussian_fields
             _release_mlx_stage_memory(metadata, "final")
             trace = Sam3dInferenceTrace(
                 root=self.root,
@@ -491,6 +549,12 @@ class Sam3dInferencePipeline:
                 },
                 "feature_decoder": mesh_features.metadata,
                 "extraction": mesh.metadata,
+                "raw_mesh": {
+                    "vertex_count": int(mesh.vertices.shape[0]) if mesh.vertices is not None else 0,
+                    "face_count": int(mesh.faces.shape[0]) if mesh.faces is not None else 0,
+                    "has_vertex_color": bool(mesh.colors is not None),
+                    "artifact_role": "raw SAM3D mesh-decoder preview surface before GLB postprocess",
+                },
                 "memory_profile": mesh_memory,
             }
             if mesh.blocker is not None:
@@ -521,7 +585,60 @@ class Sam3dInferencePipeline:
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         try:
-            glb_stats = write_sam3d_basic_glb(glb_output, vertices=mesh.vertices, faces=mesh.faces, colors=mesh.colors)
+            if glb_postprocess == "cleaned":
+                postprocessed = postprocess_sam3d_mesh_for_glb(
+                    mesh.vertices,
+                    mesh.faces,
+                    colors=mesh.colors,
+                    target_faces=int(glb_target_faces),
+                    simplify=glb_target_faces > 0,
+                    smooth_iterations=int(glb_smooth_iterations),
+                    min_component_faces=int(glb_min_component_faces),
+                    min_component_face_fraction=float(glb_min_component_face_fraction),
+                )
+                export_vertices = postprocessed.vertices
+                export_faces = postprocessed.faces
+                export_colors = postprocessed.colors
+                export_normals = postprocessed.normals
+                postprocess_metadata = _dataclass_to_plain_dict(postprocessed.stats)
+            else:
+                export_vertices = mesh.vertices
+                export_faces = mesh.faces
+                export_colors = None if mesh.colors is None else np.clip(mesh.colors, 0.0, 1.0).astype(np.float32, copy=False)
+                export_normals = compute_sam3d_vertex_normals(export_vertices, export_faces)
+                postprocess_metadata = {
+                    "mode": "basic",
+                    "applied": False,
+                    "raw_vertices": int(export_vertices.shape[0]),
+                    "raw_faces": int(export_faces.shape[0]),
+                    "has_vertex_color": export_colors is not None,
+                    "has_normals": True,
+                }
+            texture_metadata: dict[str, object]
+            if glb_texture == "gaussian":
+                baked_texture = bake_sam3d_gaussian_texture_for_glb(
+                    postprocessed,
+                    gaussian_xyz=gaussian_fields.xyz,
+                    gaussian_features_dc=gaussian_fields.features_dc,
+                    gaussian_opacity=gaussian_fields.opacity,
+                    gaussian_scale=gaussian_fields.scale,
+                    texture_size=int(glb_texture_size),
+                    k_neighbors=int(glb_gaussian_k),
+                    texel_chunk_size=int(glb_texel_chunk_size),
+                    xatlas_face_guard=int(glb_xatlas_face_guard),
+                )
+                glb_stats = write_sam3d_textured_glb(glb_output, baked_texture)
+                texture_metadata = _dataclass_to_plain_dict(baked_texture.stats)
+                texture_metadata["base_color_shape"] = tuple(int(value) for value in baked_texture.base_color_rgba.shape)
+            else:
+                glb_stats = write_sam3d_basic_glb(
+                    glb_output,
+                    vertices=export_vertices,
+                    faces=export_faces,
+                    colors=export_colors,
+                    normals=export_normals,
+                )
+                texture_metadata = {"backend": "none", "has_texture": False}
             completed.append("glb-export")
             outputs.append(Sam3dOutputArtifact(name="mesh.glb", path=glb_output, kind="mesh-glb"))
             metadata["glb_export"] = {
@@ -530,20 +647,30 @@ class Sam3dInferencePipeline:
                 "face_count": int(glb_stats.face_count),
                 "bytes_written": int(glb_stats.bytes_written),
                 "has_vertex_color": bool(glb_stats.has_vertex_color),
+                "has_normals": bool(glb_stats.has_normals),
+                "has_texture": bool(glb_stats.has_texture),
                 "format": glb_stats.format,
+                "postprocess": postprocess_metadata,
+                "texture": texture_metadata,
+                "artifact_role": (
+                    "textured preview mesh GLB baked from SAM3D Gaussian colors"
+                    if glb_stats.has_texture
+                    else "preview mesh GLB derived from SAM3D mesh decoder; not a textured gaussian-splat conversion"
+                ),
             }
-            del mesh
+            del mesh, gaussian_fields
             _release_mlx_stage_memory(metadata, "final")
-        except (ValueError, OSError) as error:
+        except (ImportError, ValueError, OSError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="glb-export",
-                operation="write SAM3D basic mesh GLB",
+                operation="write SAM3D textured mesh GLB" if glb_texture == "gaussian" else "write SAM3D basic mesh GLB",
                 reason=str(error),
                 metadata={
                     "glb_output": str(glb_output),
                     "vertex_count": int(mesh.vertices.shape[0]),
                     "face_count": int(mesh.faces.shape[0]),
                     "has_vertex_color": mesh.colors is not None,
+                    "glb_postprocess": metadata.get("glb_postprocess"),
                 },
             )
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
@@ -708,6 +835,10 @@ def _pipeline_float_tuple(value) -> tuple[float, ...] | None:
     if not isinstance(value, (list, tuple)):
         raise ValueError("SAM3D pipeline slat mean/std must be a list")
     return tuple(float(item) for item in value)
+
+
+def _dataclass_to_plain_dict(value) -> dict[str, object]:
+    return asdict(value) if hasattr(value, "__dataclass_fields__") else dict(value)
 
 
 def _moge_inspection_metadata(inspection) -> dict[str, object] | None:
