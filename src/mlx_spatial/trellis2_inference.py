@@ -382,10 +382,11 @@ class Trellis2InferencePipeline:
                         operation="TRELLIS.2 textured GLB export",
                         reference=str(output_path),
                         reason=(
-                            "generate-shape is an exact shape-only path and writes OBJ; texture SLat, "
-                            "texture decoder, MeshWithVoxel, UV baking, and GLB export are not implemented yet"
+                            "generate-shape is an exact shape-only path and writes OBJ; use "
+                            "generate-textured for MLX texture SLat, texture decoder, UV baking, "
+                            "and textured GLB export"
                         ),
-                        next_slice="finish exact shape OBJ first, then implement texture and GLB export",
+                        next_slice="run generate-textured with a .glb output path for textured export",
                     ),
                 )
             )

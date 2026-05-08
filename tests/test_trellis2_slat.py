@@ -6,6 +6,7 @@ from safetensors.mlx import save_file
 
 from mlx_spatial.trellis2_slat import (
     SLAT_BLOCK0_INSPECTION_NAMES,
+    SLAT_DENSE_SELF_ATTN_THRESHOLD,
     SLAT_FULL_SELF_ATTN_TOKEN_LIMIT,
     SLAT_INPUT_TENSOR_NAMES,
     SLAT_WINDOWED_SELF_ATTN_THRESHOLD,
@@ -301,6 +302,7 @@ def test_slat_window_groups_partition_large_sparse_coordinates():
     groups = _slat_window_groups(coordinates, window_size=8)
 
     assert groups == ((0, 1), (4,), (2, 3))
+    assert SLAT_DENSE_SELF_ATTN_THRESHOLD == 4096
     assert SLAT_WINDOWED_SELF_ATTN_THRESHOLD == 4096
 
 
@@ -326,7 +328,7 @@ def test_large_slat_attention_uses_exact_chunked_path(monkeypatch):
         return mx.zeros_like(query)
 
     monkeypatch.setattr("mlx_spatial.trellis2_slat._slat_full_self_attention_chunked", fake_chunked)
-    token_count = SLAT_WINDOWED_SELF_ATTN_THRESHOLD + 1
+    token_count = SLAT_DENSE_SELF_ATTN_THRESHOLD + 1
     query = mx.zeros((1, token_count, 1, 2), dtype=mx.float32)
     coordinates = mx.concatenate(
         [

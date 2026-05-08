@@ -49,7 +49,8 @@ SLAT_BLOCK0_INSPECTION_NAMES = (
     "out_layer.bias",
 )
 
-SLAT_WINDOWED_SELF_ATTN_THRESHOLD = 4096
+SLAT_DENSE_SELF_ATTN_THRESHOLD = 4096
+SLAT_WINDOWED_SELF_ATTN_THRESHOLD = SLAT_DENSE_SELF_ATTN_THRESHOLD
 SLAT_FULL_SELF_ATTN_TOKEN_LIMIT = 49152
 SLAT_FULL_SELF_ATTN_QUERY_CHUNK_SIZE = 512
 SLAT_WINDOW_SIZE = 8
@@ -700,7 +701,7 @@ def _slat_self_attention_kernel(
             "exact full SLat self-attention would exceed the configured token guard: "
             f"{token_count} > {SLAT_FULL_SELF_ATTN_TOKEN_LIMIT}"
         )
-    if token_count <= SLAT_WINDOWED_SELF_ATTN_THRESHOLD:
+    if token_count <= SLAT_DENSE_SELF_ATTN_THRESHOLD:
         return _attention(query, key, value, head_dim=head_dim)
     return _slat_full_self_attention_chunked(query, key, value, head_dim=head_dim)
 

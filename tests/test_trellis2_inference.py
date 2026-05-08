@@ -463,7 +463,7 @@ def test_sample_texture_slat_model_passes_normalized_shape_features_to_probe(mon
     assert "concat feature shape (1, 4)" in detail
 
 
-def test_generate_shape_rejects_glb_as_texture_export_blocker(tmp_path):
+def test_generate_shape_rejects_glb_and_points_to_textured_command(tmp_path):
     _write_trellis2_root(tmp_path)
     image = tmp_path / "missing.png"
 
@@ -475,7 +475,7 @@ def test_generate_shape_rejects_glb_as_texture_export_blocker(tmp_path):
     assert not result.ready
     assert result.trace.blocker is not None
     assert result.trace.blocker.operation == "TRELLIS.2 textured GLB export"
-    assert "not implemented yet" in result.trace.blocker.reason
+    assert "use generate-textured" in result.trace.blocker.reason
 
 
 def test_generate_textured_glb_rejects_obj_format(tmp_path):
