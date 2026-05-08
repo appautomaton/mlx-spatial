@@ -213,7 +213,7 @@ outputs/trellis2/attempts/demo-rgb-background-attempt.json
 outputs/trellis2/demo-alpha-sparse-preview.obj
 ```
 
-The current shape local attempt validates `weights/trellis2/`, completes `image-preprocessing-background`, completes MLX DINOv3 `image-conditioning`, completes sparse-structure FlowEuler sampling, runs sparse-structure decoder coordinate extraction, runs shape-SLat sampling, runs the shape decoder to 7-channel FlexiDualGrid fields, and writes a shape OBJ. Texture decoding, UV baking, and GLB export are not implemented yet.
+The current shape local attempt validates `weights/trellis2/`, completes `image-preprocessing-background`, completes MLX DINOv3 `image-conditioning`, completes sparse-structure FlowEuler sampling, runs sparse-structure decoder coordinate extraction, runs shape-SLat sampling, runs the shape decoder to 7-channel FlexiDualGrid fields, and writes a shape OBJ. The textured path is a separate command: `generate-textured` runs texture SLat, the guided texture decoder, Mac-native xatlas/trilinear texture baking, and writes a textured GLB.
 
 The forward-trace path resolves `weights/trellis2/pipeline.json` to:
 
@@ -258,32 +258,9 @@ weights/dinov3-vitl16-pretrain-lvd1689m/
 
 The downloaded local checkpoint currently validates as ViT-L/16: hidden size 1024, 24 layers, 415 tensors, and patch embedding shape `(1024, 3, 16, 16)`.
 
-The current real alpha forward trace completes the MLX DINOv3 conditioning path with local ViT-L/16 weights:
+`attempt-forward-trace` remains a diagnostics surface for inspecting the staged model route and blocker metadata without committing to a full export run. The user-facing generation surfaces are now `generate-shape` for shape OBJ and `generate-textured` for textured GLB. Both keep exact-mode blockers and token guards instead of silently writing approximate artifacts.
 
-```text
-completed_stages:
-  input-image
-  asset-config-validation
-  checkpoint-probe-readiness
-  image-preprocessing-background
-  image-conditioning
-output:
-  name: cond
-  shape: (1, 1029, 1024)
-  dtype: float32
-  detail: MLX DINOv3 conditioning after 24 transformer layers; patch grid=(32, 32)
-```
-
-The next live blocker is now the shape latent decoder stack:
-
-```text
-stage: latent-decoding
-operation: MLX shape latent decoder SparseConvNeXt/FlexiDualGrid forward
-reference: weights/trellis2/ckpts/shape_dec_next_dc_f16c32_fp16.safetensors
-reason: sparse FlowEuler sampling produces `sparse_latent` with shape `(1, 8, 16, 16, 16)`, the local sparse decoder runs Conv3d/ResBlock3d/UpsampleBlock3d/out-layer decoding to `(1, 1, 64, 64, 64)`, thresholding produces 8,653 sparse coordinates for `inputs/trellis2/demo-alpha.webp`, shape-SLat and texture-SLat sampling run with batched sparse-window self-attention, and decoding now reaches the sparse ConvNeXt/FlexiDualGrid decoder boundary
-```
-
-Fake-fixture tests verify the sparse sampling, sparse decoder handoff, shape-SLat sampler, texture-SLat sampler, bounded decoder level iteration, shape subdivision prediction, texture guide-subdivision consumption, output-layer projection, and combined latent decode boundary contracts. The real local alpha trace now reports outputs `('cond', 'sparse_latent')` and blocks at `latent-decoding` / `MLX shape latent decoder SparseConvNeXt/FlexiDualGrid forward`.
+Fixture and integration tests verify sparse sampling, sparse decoder handoff, 512 and cascade shape-SLat routing, texture-SLat sampling, bounded decoder level iteration, shape subdivision prediction, texture guide-subdivision consumption, output-layer projection, FlexiDualGrid mesh extraction, Mac-native mesh cleanup, xatlas unwrap, sparse-grid trilinear texture baking, and GLB writing.
 
 The sparse structure decoder asset is expected at:
 
@@ -291,13 +268,13 @@ The sparse structure decoder asset is expected at:
 weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json
 ```
 
-The shape-SLat path now loads the configured route, projects sparse token features, applies coordinate-based 3D RoPE, shared adaptive modulation, batched sparse-window self-attention for large token counts, image cross-attention, MLP residuals, output projection, FlowEuler guidance, and shape-SLat normalization. The configured route is `1024_cascade`; cascade upsample/refinement is still separate from the bounded 512 sampler path.
+The shape-SLat path loads the configured route, projects sparse token features, applies coordinate-based 3D RoPE, adaptive modulation, exact full or guarded chunked attention, image cross-attention, MLP residuals, output projection, FlowEuler guidance, and shape-SLat normalization. Cascade routes run low-res shape SLat, upsample/deduplicate high-res coordinates, respect `--max-num-tokens`, and decode with the resolved mesh resolution.
 
-The texture-SLat path now uses the same MLX sampler pattern. For `1024_cascade`, it selects the local 1024 texture flow checkpoint, evolves `(N, 32)` texture-noise features while concatenating `(N, 32)` shape-SLat features for model input, applies texture-SLat normalization, and hands off to latent decoding for bounded token sets.
+The texture-SLat path uses the same MLX sampler pattern. For `1024_cascade`, it selects the local 1024 texture flow checkpoint, evolves `(N, 32)` texture-noise features while concatenating `(N, 32)` shape-SLat features for model input, applies texture-SLat normalization, then hands off to the guided texture decoder and GLB export path.
 
-The combined latent decode boundary is mapped after texture SLat. Without latents, it blocks on missing `shape_slat` or `texture_slat`. With fake SLat coordinates/features, the local shape and texture decoder checkpoints load, both `from_latent` projections run, decoder levels run through sparse convolution, layer norm, SiLU MLP, C2S up-blocks, and output-layer projection, and the texture decoder consumes shape-predicted subdivision guides. Weighted sparse convolution now performs per-kernel matmul and indexed accumulation in MLX. `attempt-forward-trace` accepts `--decoder-token-limit` for aggressive local traces; `--decoder-token-limit 9000` advanced a real downloaded-weight run through decoder level-0 and the first shape/texture C2S up-block, then stopped before level 1 after C2S expanded to tens of thousands of tokens.
+The combined decode/export path loads local shape and texture decoder checkpoints, runs `from_latent` projections, decoder levels, sparse convolution, layer norm, SiLU MLP, C2S up-blocks, and output-layer projection. The texture decoder consumes shape-predicted subdivision guides. Weighted sparse convolution performs per-kernel matmul and indexed accumulation in MLX. `--decoder-token-limit` remains the resource guard for expanded-token decoder runs.
 
-Export handling is intentionally gated behind decoded mesh/texture availability. `generate-shape` currently accepts `.obj` targets under ignored `outputs/`; `.glb` returns a structured texture/GLB blocker until the texture pipeline is implemented.
+Export handling is intentionally gated behind decoded mesh/texture availability. `generate-shape` accepts `.obj` targets under ignored `outputs/`; `.glb` targets are rejected with guidance to use `generate-textured`, which requires a `.glb` output and the Mac-native export dependencies.
 
 A coarse debug preview can be generated today from the real sparse-structure coordinates:
 
@@ -309,9 +286,10 @@ That file is an occupancy OBJ preview from the sparse-structure decoder coordina
 
 Next TRELLIS slices should be concrete and separately verified:
 
-- cascade shape-SLat upsample/refinement routing for `1024_cascade` and `1536_cascade`;
-- optimized sparse ConvNeXt/up-block decoder kernels beyond the level-1 expanded-token boundary;
-- texture SLat, texture decoder, UV baking, and textured GLB output.
+- live parity comparison against official TRELLIS.2/trellis-mac outputs for the same seed and image;
+- higher-resolution cascade quality tuning under explicit memory/token guards;
+- mesh topology/remeshing parity after texture bake metrics are stable;
+- Blender-import and visual metric baselines for regenerated 512 and cascade artifacts.
 
 ## SAM 3D Objects Runtime Readiness
 
@@ -359,7 +337,7 @@ The native output target for this milestone is an official-field Gaussian PLY:
 x y z nx ny nz f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3
 ```
 
-The current `reconstruct` command is exact-mode staged. It validates SAM3D and MoGe safetensors assets, runs MLX MoGe pointmap inference, applies official image/mask/pointmap preprocessing, runs SS condition fusion, SS ShortCut flow, SS decoding, SLat condition fusion, SLat FlowMatching, and the SLat gaussian decoder, then writes an official-field binary `gaussians.ply`. If `--glb-output` is requested, it runs the SLat mesh decoder, extracts a FlexiCubes mesh, and writes a basic Blender-readable `.glb`. This GLB is geometry plus basic material/vertex color; official-quality textured/layout-optimized mesh export remains a later milestone.
+The current `reconstruct` command is exact-mode staged. It validates SAM3D and MoGe safetensors assets, runs MLX MoGe pointmap inference, applies official image/mask/pointmap preprocessing, runs SS condition fusion, SS ShortCut flow, SS decoding, SLat condition fusion, SLat FlowMatching, and the SLat gaussian decoder, then writes an official-field binary `gaussians.ply`. If `--glb-output` is requested, it runs the SLat mesh decoder, extracts a FlexiCubes mesh, cleans/simplifies the preview mesh by default, unwraps it with xatlas, bakes Gaussian DC colors into an embedded base-color PNG, and writes a Blender-readable textured `.glb` with normals and UVs. This GLB is still a practical preview mesh; the native high-quality SAM3D artifact remains `gaussians.ply`.
 
 ```bash
 uv run mlx-spatial-sam3d reconstruct weights/sam-3d-objects-mlx path/to/image.png \
@@ -370,7 +348,42 @@ uv run mlx-spatial-sam3d reconstruct weights/sam-3d-objects-mlx path/to/image.pn
   --stage1-steps 2 \
   --stage2-steps 12 \
   --memory-profile balanced \
+  --glb-postprocess cleaned \
+  --glb-target-faces 300000 \
+  --glb-texture gaussian \
+  --glb-texture-size 1024 \
+  --glb-xatlas-face-guard 400000 \
   --trace-output outputs/sam3d/object/trace.json
+```
+
+Use `--glb-texture none` to write the older vertex-color preview GLB. Textured GLB export requires `--glb-postprocess cleaned`; the xatlas face guard blocks accidental raw-million-face unwraps unless you explicitly raise it. Use `--no-glb-simplify` or `--glb-target-faces 0` only when you need the unsimplified cleaned preview mesh for debugging.
+
+## HY-World PyTorch Parity
+
+The shipped HY-World path stays MLX/NumPy-only. PyTorch, CUDA, `flash-attn`, and `gsplat` are not runtime dependencies. To prevent inaccurate parity claims, HY-World traces include `metadata.parity.numeric_parity_verified=false` until a dev-only reference bundle has been compared.
+
+`mlx-spatial-hyworld2 reconstruct` defaults to `--memory-profile large`, which resizes frames to the official WorldMirror 952px target. Use `safe` or `balanced` only when you are intentionally trading source parity for lower memory use.
+
+Use the optional reference dumper only when you intentionally want to run the vendored PyTorch code as an oracle:
+
+```bash
+HYWORLD2_TORCH_REF=1 uv run python tools/hyworld2_dump_torch_reference.py \
+  weights/hy-world-2 inputs/hyworld2 \
+  --vendor-root vendors/HY-World-2.0 \
+  --output outputs/hyworld2/reference-torch.npz
+```
+
+The dumper installs local import shims for `flash-attn` and `gsplat` so macOS can capture tensors up to official native splat attributes without running CUDA rasterization. Write an MLX bundle during reconstruction and compare bundles with:
+
+```bash
+uv run mlx-spatial-hyworld2 reconstruct weights/hy-world-2 inputs/hyworld2 \
+  --output outputs/hyworld2/mlx-run \
+  --heads camera,depth,normal,points,gs \
+  --parity-output outputs/hyworld2/reference-mlx.npz
+
+uv run mlx-spatial-hyworld2 parity-compare \
+  outputs/hyworld2/reference-torch.npz \
+  outputs/hyworld2/reference-mlx.npz
 ```
 
 ## Optional Local Resources
