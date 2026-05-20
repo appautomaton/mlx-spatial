@@ -1,23 +1,21 @@
 ---
 name: auto-eng-review
-description: Evaluate whether a plan is safe to execute. Use after auto-plan when the engineering approach needs validation before implementation begins.
-compatibility: Portable across Claude Code, Codex, and OpenCode. Host-specific runtime hooks and plugins are installed separately by Automaton.
+description: Engineering go/no-go on a plan. Use after auto-plan, before execution.
 metadata:
   stage: plan
-  role: execution-review
 ---
 
 # auto-eng-review
 
-Evaluate whether a plan is safe to execute. Use after auto-plan when the engineering approach needs validation before implementation begins.
+Engineering-safety gate. Validates that a plan is safe to execute before implementation begins.
 
-First action: run `scripts/get-context.mjs` from this skill's installed directory to load active change, stage, `canonical_plan`, and `canonical_design`. Read `PLAN.md`; read `DESIGN.md` only when `canonical_design` is set and resolves to a file.
+First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding. Read `PLAN.md`; read `DESIGN.md` only when `canonical_design` is set and resolves to a file.
 
 ## Preamble
 
-This skill is an execution safety review. It focuses on architecture, data flow, edge cases, and test strategy — not product vision. It identifies risks that could cause the implementation to fail, stall, or require rework.
+Execution safety review. Architecture, data flow, edge cases, test strategy, not product vision. Identifies risks that could cause failure, stalling, or rework.
 
-Context budget: one read of PLAN.md, one optional read of DESIGN.md when `canonical_design` exists, one risk matrix, one verdict.
+Context budget: one PLAN.md read, optional DESIGN.md when `canonical_design` exists, one risk matrix, one verdict. Read source files when assessing technical risk — slice boundaries, dependency assumptions, and blast radius claims are only verifiable against the actual code.
 
 ## Quality Gate
 
@@ -25,15 +23,21 @@ Before appending the engineering review:
 - Ground concerns in slices, file areas, commands, or missing artifacts.
 - Separate blockers from follow-up cleanup.
 - Avoid reopening product scope unless the plan is unbuildable.
-- Read `references/quality.md` if findings are generic or unactionable.
+- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when findings are generic or unactionable.
 
 ## Do
 
-1. **Load state.** Read `.agent/steering/STATUS.md`. Read the canonical `PLAN.md`. If `canonical_design` is null, missing, or points to a missing file, continue without DESIGN.md and note that the plan intentionally has no design artifact.
+### Load State
 
-2. **Restate the slice.** In engineering terms: what is being built, what systems does it touch, and what is the critical path?
+Read `.agent/steering/STATUS.md`. Read the canonical `PLAN.md`. If `canonical_design` is null, missing, or points to a missing file, continue without DESIGN.md and note that the plan intentionally has no design artifact.
 
-3. **Evaluate risks.** For each dimension, rate 0–10 and explain what a 10 looks like.
+### Restate the Plan
+
+In engineering terms: what is being built, what systems does it touch, and what is the critical path?
+
+### Evaluate Risks
+
+For each dimension, rate 0–10 and explain what a 10 looks like.
 
 <RISK-MATRIX>
 
@@ -49,7 +53,9 @@ Before appending the engineering review:
 A score ≤ 3 in any dimension is a blocking concern. Surface it explicitly.
 </RISK-MATRIX>
 
-4. **Render verdict.** Use exactly one of the three approved values.
+### Render Verdict
+
+Use exactly one of the three approved values.
 
 <VERDICT>
 
@@ -62,17 +68,26 @@ Use strict vocabulary. No synonyms.
 | `needs_correction` | Plan is flawed or unsafe. Return to planning. | `auto-plan` |
 </VERDICT>
 
-5. **Append review.** Add a `## Review: Engineering` section to `PLAN.md` using the exact template in `references/review-template.md`.
+### Append Review
 
-6. **Update state.** Run this skill's installed `sync-status.mjs` from the same host skill root. Update `.agent/.automaton/state/current.json` with `engineering_review: <verdict>`.
+Add a `## Review: Engineering` section to `PLAN.md` using the exact template in `references/review-template.md`.
 
-7. **Recommend.** State the next skill based on the verdict.
+### Update State
+
+Run `sync-status.mjs` from this skill's installed directory.
+Update `.agent/.automaton/state/current.json`:
+- `engineering_review` → `<verdict>`
+
+### Recommend
+
+State the next skill based on the verdict.
 
 ## Output
 
 - `PLAN.md` with appended `## Review: Engineering` section
-- `.agent/.automaton/state/current.json` updated with `engineering_review`
-- Recommended next skill
+- `.agent/.automaton/state/current.json` updated with `engineering_review`; `stage` is unchanged by this skill
+- Diagnostic handling: `error`-level diagnostics block the review; `warning`-level diagnostics surface to the next stage
+- Recommended next skill, mapped from verdict per the Review Verdict Routing table in `references/ARTIFACT-LIFECYCLE.md`: `approved` or `approved_with_risks` → `auto-execute`; `needs_correction` → `auto-plan`. The user or host invokes the next skill; auto-eng-review does not require nested invocation.
 
 ## Rules
 
@@ -80,27 +95,27 @@ Use strict vocabulary. No synonyms.
 - Prefer specific engineering objections over generic caution.
 - Do not broaden scope just to feel thorough.
 - Verdict vocabulary is strict. Use only the three approved values.
-- If the plan is missing or unreadable, verdict is `needs_correction` — do not guess.
+- If the plan is missing or unreadable, verdict is `needs_correction`. Do not guess.
 - Missing DESIGN.md is not a blocker when `canonical_design` is null, absent, or intentionally skipped by the plan.
 
 ## Deep
 
 ### Review Template
 
-Read `references/review-template.md` for the exact markdown format.
+Read `references/review-template.md` for the exact markdown format. (~21 lines: 5-field format covering verdict/strength/concern/action/verified, with rules on sentence limits and no extra commentary.)
 
 ### Risk Matrix Examples
 
-Read `references/risk-examples.md` for sample risk matrices from past reviews.
+Read `references/risk-examples.md` for sample risk matrices. (~40 lines: 3 scored examples: API migration → approved_with_risks, new external service → needs_correction, refactor → approved.)
 
 ### Engineering Prime Directives
 
-Read `references/prime-directives.md` for the 9 non-negotiable standards and engineering preferences.
+Read `references/prime-directives.md` for 9 non-negotiable standards and preferences. (~35 lines: 9 standards from zero-silent-failures to scrap-it permission; engineering preferences section covering DRY, testing, observability, security, deployment.)
 
 ### Engineering Review Sections
 
-Read `references/engineering-sections.md` for the 11-section review methodology (architecture, error/rescue, security, data flow, code quality, test, performance, observability, deployment, long-term, design).
+Read `references/engineering-sections.md` for the 11-section methodology. (~160 lines: architecture, error/rescue map, security/threat model, data flow/interaction edge cases, code quality, test review, performance, observability, deployment/rollout, long-term trajectory, design/UX. Each section has specific checks and required ASCII diagrams.)
 
 ### Implementation Alternatives
 
-Read `references/implementation-alternatives.md` for the mandatory 2-3 approach comparison format.
+Read `references/implementation-alternatives.md` for the mandatory 2-3 approach comparison. (~25 lines: APPROACH format template with Summary/Effort/Risk/Pros/Cons/Reuses; rules requiring minimal-viable + ideal-architecture variants.)

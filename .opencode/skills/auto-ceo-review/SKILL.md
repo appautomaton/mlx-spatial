@@ -1,23 +1,21 @@
 ---
 name: auto-ceo-review
-description: Evaluate whether a framed spec is worth building. Use after auto-frame when the product direction needs a go/no-go or scope correction before planning begins.
-compatibility: Portable across Claude Code, Codex, and OpenCode. Host-specific runtime hooks and plugins are installed separately by Automaton.
+description: Product go/no-go on a framed spec. Use after auto-frame, before planning.
 metadata:
   stage: frame
-  role: product-review
 ---
 
 # auto-ceo-review
 
-Evaluate whether a framed spec is worth building. Use after auto-frame when the product direction needs a go/no-go or scope correction before planning begins.
+Product-direction gate. Decides whether a spec is worth building before planning begins.
 
-First action: run `scripts/get-context.mjs` from this skill's installed directory to load active change and stage.
+First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
 
 ## Preamble
 
-This skill is a product bet review. It restates the objective as one crisp bet, identifies what is differentiated and valuable, and calls out where the direction is generic or mis-scoped. It does not design implementation. It does not write code.
+Product bet review. Restates the objective as one crisp bet, identifies differentiation, calls out generic or mis-scoped direction. Does not design implementation or write code.
 
-Context budget: one read of SPEC.md, one review paragraph, one verdict.
+Context budget: one SPEC.md read, one review paragraph, one verdict. Read project files when understanding the codebase helps ground the review — verify that spec claims reflect what actually exists before approving or rejecting.
 
 ## Quality Gate
 
@@ -25,21 +23,25 @@ Before appending the product review:
 - Replace strategic filler with user, action, value, and risk.
 - Separate supported claims from assumptions.
 - Name the strongest risk even when approving.
-- Read `references/quality.md` if the review sounds like polite validation.
+- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when the review sounds like polite validation.
 
 ## Do
 
-1. **Load state.** Read `.agent/steering/STATUS.md`. Read the canonical `SPEC.md`.
+### Load State
 
-2. **Restate the bet.** In one sentence: "We are betting that [specific user] will [specific action] because [specific reason], and the risk is [specific risk]."
+Read `.agent/steering/STATUS.md`. Read the canonical `SPEC.md`.
 
-3. **Evaluate.** Answer:
-   - What is differentiated or defensible here?
-   - What is the strongest user or business value?
-   - What is generic, low-leverage, or mis-scoped?
-   - Is the scope narrow enough to ship and learn from?
+### Restate the Bet
 
-4. **Render verdict.** Use exactly one of the four approved values.
+In one sentence: "We are betting that [specific user] will [specific action] because [specific reason], and the risk is [specific risk]."
+
+### Evaluate
+
+Assess differentiation, user value, generic or mis-scoped elements, and shippability. Ground each in evidence from the spec.
+
+### Render Verdict
+
+Use exactly one of the four approved values.
 
 <VERDICT>
 
@@ -53,43 +55,52 @@ Use strict vocabulary. No synonyms.
 | `descoped` | Direction is out of scope or low-leverage. Do not pursue. | `auto-office-hours` or stop |
 </VERDICT>
 
-5. **Append review.** Add a `## Review: Product` section to `SPEC.md` using the exact template in `references/review-template.md`.
+### Append Review
 
-6. **Update state.** Run this skill's installed `sync-status.mjs` from the same host skill root. Update `.agent/.automaton/state/current.json` with `product_review: <verdict>`.
+Add a `## Review: Product` section to `SPEC.md` using the exact template in `references/review-template.md`.
 
-7. **Recommend.** State the next skill based on the verdict.
+### Update State
+
+Run `sync-status.mjs` from this skill's installed directory.
+Update `.agent/.automaton/state/current.json`:
+- `product_review` → `<verdict>`
+
+### Recommend
+
+State the next skill based on the verdict.
 
 ## Output
 
 - `SPEC.md` with appended `## Review: Product` section
-- `.agent/.automaton/state/current.json` updated with `product_review`
-- Recommended next skill
+- `.agent/.automaton/state/current.json` updated with `product_review`; `stage` is unchanged by this skill
+- Diagnostic handling: `error`-level diagnostics block the review; `warning`-level diagnostics surface to the next stage
+- Recommended next skill, mapped from verdict per the Review Verdict Routing table in `references/ARTIFACT-LIFECYCLE.md`: `approved` or `approved_with_risks` → `auto-plan`; `needs_clarification` → `auto-frame` or `auto-office-hours`; `descoped` → `auto-office-hours` or stop. The user or host invokes the next skill; auto-ceo-review does not require nested invocation.
 
 ## Rules
 
 - Be decisive, not theatrical. A sharp verdict is better than a long analysis.
 - Do not turn the review into implementation design. Stay in product bet territory.
 - Verdict vocabulary is strict. Use only the four approved values.
-- If the spec is missing or unreadable, verdict is `needs_clarification` — do not guess.
+- If the spec is missing or unreadable, verdict is `needs_clarification`. Do not guess.
 
 ## Deep
 
 ### Review Template
 
-Read `references/review-template.md` for the exact markdown format.
+Read `references/review-template.md` for the exact markdown format. (~21 lines: 5-field format covering verdict/strength/concern/action/de-scoped, with rules on sentence limits and no extra commentary.)
 
 ### Product Bet Framing
 
-Read `references/bet-framing.md` for the 10x check, platonic ideal, dream state mapping, and expansion framing.
+Read `references/bet-framing.md` for 10x check, platonic ideal, dream state mapping. (~70 lines: crisp vs. vague bet examples, reframing structure, 10x check, platonic ideal exercise, dream state mapping diagram, temporal interrogation by implementation hour, expansion framing FLAT vs. EXPANSIVE pattern.)
 
 ### Review Modes
 
-Read `references/review-modes.md` for the four scope postures (EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, REDUCTION) and mode selection defaults.
+Read `references/review-modes.md` for four scope postures and mode selection defaults. (~48 lines: SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, SCOPE REDUCTION, each with ceremony/protocol; mode selection table by context.)
 
 ### Product Checklist
 
-Read `references/product-checklist.md` for the premise challenge, differentiation scan, scope calibration, leverage assessment, and anti-goal filter.
+Read `references/product-checklist.md` for premise challenge, differentiation, scope calibration. (~44 lines: 7 check categories covering premise challenge, differentiation scan, scope calibration, leverage assessment, user sovereignty, anti-goal filter, temporal check.)
 
 ### Cognitive Patterns
 
-Read `references/cognitive-patterns.md` for the 18 thinking instincts that shape product judgment.
+Read `references/cognitive-patterns.md` for 18 thinking instincts. (~53 lines: 18 patterns from classification instinct to design-for-trust; application map linking patterns to review tasks.)

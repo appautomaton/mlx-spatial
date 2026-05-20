@@ -1,137 +1,129 @@
 ---
 name: auto-verify
-description: Check implemented work against the plan and user-visible outcomes with fresh evidence. Use when code or artifacts changed and completion claims need proof.
-compatibility: Portable across Claude Code, Codex, and OpenCode. Host-specific runtime hooks and plugins are installed separately by Automaton.
+description: Verify completed plan against acceptance criteria. Use after all slices are executed.
 metadata:
   stage: verify
-  role: controller
 ---
 
 # auto-verify
 
-Check implemented work against the plan and user-visible outcomes with fresh evidence. Use when code or artifacts changed and completion claims need proof.
+Verification gate. Independent audit of a completed plan; runs once, not per-slice.
 
-First action: run `scripts/get-context.mjs` from this skill's installed directory to load active change and stage.
+First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
 
 ## Preamble
 
-auto-verify is the antifraud layer. It does not trust. It re-reads the plan slice, runs the proof commands, compares actual results to acceptance criteria, and reports gaps plainly. Partial evidence is not completion. Intuition is not evidence.
+The antifraud layer. Re-reads the plan, runs proof commands, compares fresh results to acceptance criteria. Does not trust execute's self-assessment. Does not fix what it finds.
 
-Context budget: one read of the plan slice + one run of verification commands. No broad scans.
+Context budget: one PLAN.md read + verification commands per criterion. Read source files when verifying correctness requires inspecting the actual changes, not just command output.
 
 ## Quality Gate
 
-Before writing `VERIFY.md` or the final verification summary:
+Before writing the verification report:
 - Tie every result to fresh command output or direct observation.
-- Name skipped checks explicitly.
-- Treat partial evidence as PARTIAL or FAIL, not completion.
-- Read `references/quality.md` if the summary sounds confident without proof.
+- Name skipped checks explicitly. Omission is not a pass.
+- Treat partial evidence as FAIL for the plan.
+- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when the report sounds confident without proof.
 
 ## Do
 
-### 1. Load State
+### Load State
 
-Read `.agent/steering/STATUS.md`. Read the canonical `PLAN.md`. Read `references/ARTIFACT-LIFECYCLE.md` for verify-stage handoff and state pointer boundaries.
+Read `.agent/steering/STATUS.md`. Read the canonical `PLAN.md`.
 
-If the slice creates, rewrites, edits, outlines, or audits prose, read `references/content-verification.md` and add its content checks to the verification loop.
+If slices link `slices/slice-NNN.md` detail files or reference requirement IDs in `spec/*.md`, load only those files. Linked detail file and traceability IDs are normative; do not verify from an unlinked supplemental file.
 
-### 2. Re-read the Slice
+If any slice involves prose, read `references/content-verification.md` (~54 lines: 8-check verification contract, anti-slop pattern scan, source/fact checks, report shape) and include its content checks.
 
-Identify the current slice from PLAN.md. Re-read:
-- The slice objective
-- The acceptance criteria
-- The verification command specified in the plan
+### Collect Acceptance Criteria
 
-Do not rely on memory from the execution session. Fresh verification beats intuition.
+Gather every acceptance criterion and verification command from every slice in PLAN.md. Build a checklist: slice name → criterion → command. This is a plan-level audit.
 
-### 3. Run Verification
+### Run Verification
 
-<VERIFICATION-LOOP>
-
-Run the verification commands specified in the plan. For each command:
-1. Run it.
-2. Capture the output.
-3. Compare to the expected outcome.
-4. Mark: PASS, FAIL, or PARTIAL.
-
-If the plan did not specify verification commands, derive them from the acceptance criteria and run them. Document what you ran and why.
+Execute verification commands for each criterion. Mark each: PASS, FAIL, or PARTIAL. If a criterion lacks a verification command in the plan, derive one from the acceptance criterion and document what you ran.
 
 For content slices, verify audience, thesis, voice, content anti-goals, channel, source policy, factual risk, format, and anti-slop scan with evidence.
-</VERIFICATION-LOOP>
 
-### 4. Evaluate
+### Evaluate
 
-<EVIDENCE-FIRST>
+Binary: the plan passes only when every criterion across all slices passes. One FAIL means the plan fails.
 
-Partial evidence is not completion. A test that passes 3 out of 4 assertions is FAIL, not "mostly done." A feature that works for the happy path but fails on edge cases is FAIL, not "functional."
-
-Evaluate each acceptance criterion as binary: met or not met. There is no "mostly met."
-</EVIDENCE-FIRST>
-
-### 5. Report
-
-Report findings plainly:
+### Report
 
 ```
-## Verification: [Slice Name]
+## Verification: [Change Name]
 
+### Slice N: [Name]
 - Criterion: [acceptance criterion]
-  - Result: PASS / FAIL / PARTIAL
-  - Evidence: [command output or observation]
-  - Gap: [what is missing, or "none"]
+  Result: PASS / FAIL / PARTIAL
+  Evidence: [command output or observation]
+  Gap: [what is missing, or "none"]
 
-[Repeat for each criterion]
+[Repeat for each criterion in each slice]
 
-**Overall:** PASS / FAIL
-**Remaining gaps:** [list or "none"]
-**Recommended next skill:** [auto-execute | auto-resume | auto-plan]
+PASS summary:
+**Overall:** PASS
+**Passed:** [M] of [M] criteria
+**Gaps:** none
+**Change status:** complete
+**New objective:** use `auto-office-hours` to shape the next objective when you are ready.
+
+FAIL summary:
+**Overall:** FAIL
+**Passed:** [N] of [M] criteria
+**Gaps:** [structured list]
+**Change status:** incomplete
+**Recommended next skill:** auto-execute
 ```
 
-### 6. Update State
+### On Pass
 
-If the slice is fully verified (all criteria PASS):
-- Run this skill's installed `sync-status.mjs` from the same host skill root.
-- Update `.agent/.automaton/state/current.json` with the next slice or stage.
+- Update `.agent/.automaton/state/current.json`: `stage` → `verify`
+- Run `sync-status.mjs` from this skill's installed directory.
+- If `.agent/steering/ROADMAP.md` exists, update the matching phase to `status: done` per `references/ROADMAP-CONTRACT.md`. Match by the phase's `change:` field against `active_change`; skip if empty or no match.
+- End the report with `Change status: complete` and a separate `New objective` line pointing to `auto-office-hours` for future work. Do not print a `Recommended next skill` line on PASS. Use `auto-resume` only for later re-entry or recovery.
 
-If the slice has gaps:
-- Do NOT update state.
-- Return to `auto-execute` with the specific gaps listed.
+### On Fail
 
-<FAILURE-HANDLING>
+Do NOT update state. Annotate failed slices in `PLAN.md` with structured gap blocks:
 
-When verification fails:
-1. Report the failure plainly. No sugarcoating.
-2. List the exact gaps. Not "some issues" — "the login endpoint returns 500 when password is empty; the test does not cover this case."
-3. Recommend `auto-execute` with the specific gaps as the next slice's objective.
-4. Do NOT attempt to fix during verification. Verification and execution are separate stages.
-</FAILURE-HANDLING>
+```
+> **VERIFY-GAP:** [criterion that failed]
+> **Evidence:** [what the command returned]
+> **Fix objective:** [what execute must address]
+```
+
+Recommend `auto-execute`; it reads these annotations on re-entry.
 
 ## Output
 
-- Verification report (plain text or VERIFY.md for important changes)
-- Commands and outcomes
-- Pass/fail per criterion
-- Remaining gaps
-- Recommended next skill
+- Verification report (inline)
+- `PLAN.md` annotated with `VERIFY-GAP` blocks (on failure)
+- `.agent/.automaton/state/current.json` updated to `stage: verify` (on pass only); state unchanged on fail
+- `.agent/steering/ROADMAP.md` phase marked done (on pass, if applicable)
+- Diagnostic handling: `error`-level diagnostics block the verification run; `warning`-level findings appear in the report
+- PASS closeout: report `Change status: complete` and `New objective: use auto-office-hours`; do not emit `Recommended next skill`
+- FAIL closeout: recommend `auto-execute`. The user or host invokes any next skill; auto-verify does not require nested invocation.
 
 ## Rules
 
-- Fresh verification beats intuition. Always re-read the plan slice.
-- Partial evidence is not completion. Binary evaluation only.
-- Keep the report factual and brief. No essays.
-- Do not fix during verification. Report and return to execute.
+- Fresh evidence only. Do not rely on execution-session memory or prior verification results.
+- Binary evaluation. Partial evidence is FAIL for the plan.
+- Do not fix during verification. Report gaps and return to execute.
+- Verify the plan in full: all slices, all criteria.
 - If verification commands are missing from the plan, derive and run them. Document what you ran.
 
 ## Deep
 
 ### Verification Report Template
 
-Read `references/verification-template.md` for the exact markdown format.
+Read `references/verification-template.md` for extended format guidance. (~43 lines: grouped-by-slice report format with Criterion/Result/Evidence/Gap per entry; PASS/FAIL summary shapes; rules on evidence requirements and PARTIAL counting as FAIL.)
 
 ### Common Verification Gaps
 
-Read `references/common-gaps.md` for a checklist of commonly missed verification scenarios.
+Read `references/common-gaps.md` for frequently missed scenarios. (~51 lines: 6-category checklist covering input validation, error handling, state/side-effects, security, observability, edge cases, with specific items per category.)
 
-### Context Budget
+### Artifact Lifecycle
 
-Read `references/CONTEXT-BUDGET.md` for progressive loading rules and degradation tiers.
+Read `references/ARTIFACT-LIFECYCLE.md` when state pointer or handoff rules need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)

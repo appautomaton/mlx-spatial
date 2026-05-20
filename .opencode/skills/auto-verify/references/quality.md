@@ -1,6 +1,6 @@
 # Verify Quality
 
-Load this reference only before writing `VERIFY.md` or the final verification summary.
+Load this reference only before writing the final verification report.
 
 ## VERIFY Anti-Patterns
 
@@ -22,8 +22,8 @@ Load this reference only before writing `VERIFY.md` or the final verification su
 Verification reports attract hedging and confidence inflation. Results should read like lab notes, not press releases.
 
 Scan for:
-- "mostly working", "largely complete" — use PASS, FAIL, or PARTIAL
-- "appears to", "seems to" — either it does or you need another test
+- "mostly working", "largely complete": use PASS, FAIL, or PARTIAL
+- "appears to", "seems to": either it does or you need another test
 - "successfully verified" without naming the command and output
 - Generic positive conclusions ("overall the implementation is solid")
 - Promotional language about test coverage

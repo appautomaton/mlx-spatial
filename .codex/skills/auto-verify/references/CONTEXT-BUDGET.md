@@ -14,12 +14,12 @@ Guidelines for managing context windows across multi-session agentic work.
 When entering any stage, load files in this order. Stop as soon as you have enough context to proceed.
 
 ```
-1. .agent/.automaton/state/current.json (always — < 50 tokens)
-2. STATUS.md             (always — < 200 tokens)
-3. SPEC.md               (if canonical_spec exists — < 1000 tokens)
-4. PLAN.md               (if executing — < 1000 tokens)
+1. .agent/.automaton/state/current.json (always, < 50 tokens)
+2. STATUS.md             (always, < 200 tokens)
+3. SPEC.md               (if canonical_spec exists, < 1000 tokens)
+4. PLAN.md               (if executing, < 1000 tokens)
 5. Wiki pages            (only if referenced by spec or plan)
-6. Source files          (only the files the current slice touches)
+6. Source files          (read as needed to understand the project and produce accurate work)
 ```
 
 ## Context Budget Language
@@ -35,16 +35,7 @@ Frame all work in terms of context consumption, not time.
 
 ## Session Budgets
 
-Typical context window sizes and safe budgets:
-
-| Model | Total Window | Safe Working Budget | Notes |
-|-------|-------------|---------------------|-------|
-| Claude 3.5/3.7 Sonnet | 200K tokens | 120K tokens (60%) | Reserve 40% for response generation |
-| Claude 3 Opus | 200K tokens | 120K tokens (60%) | Same as Sonnet |
-| GPT-4o | 128K tokens | 80K tokens (62%) | Slightly more aggressive load safe |
-| Codex CLI | 200K tokens | 120K tokens (60%) | Assume Claude-class unless known |
-
-**Rule of thumb:** Keep loaded context under 60% of total window. The remaining 40% is for the model's reasoning and response.
+**Rule of thumb:** Keep loaded context under 60% of total window. The remaining 40% is for reasoning and response generation.
 
 ## Context Degradation Tiers
 
@@ -59,9 +50,9 @@ Monitor context usage and adjust behavior accordingly. These are behavioral rule
 
 **Warning signs before panic thresholds fire:**
 
-- **Silent partial completion** — agent claims task is done but implementation is incomplete.
-- **Increasing vagueness** — phrases like "appropriate handling" or "standard patterns" replace specific code.
-- **Skipped steps** — agent omits protocol steps it would normally follow.
+- **Silent partial completion.** Agent claims task is done but implementation is incomplete.
+- **Increasing vagueness.** Phrases like "appropriate handling" or "standard patterns" replace specific code.
+- **Skipped steps.** Agent omits protocol steps it would normally follow.
 
 When you see these, assume context pressure and move to a higher tier of conservation.
 
@@ -71,15 +62,6 @@ When you see these, assume context pressure and move to a higher tier of conserv
 - **Greedy wiki loading.** Loading every file in `.agent/wiki/` because "they might be useful."
 - **Artifact bloat.** SPEC.md that is 800 lines long. Split the change or move detail to DESIGN.md.
 - **Re-read loops.** Reading `package.json` three times in one session because it was not held in working memory.
-
-## Compression Techniques
-
-When context is tight, use these techniques in order:
-
-1. **Summarize before loading.** If a wiki page is > 200 lines, read its headers first, then only the relevant section.
-2. **Table over prose.** A 5-row table compresses better than 5 paragraphs describing the same relationships.
-3. **Pointer over payload.** Reference a file by path rather than quoting its contents unless the exact text is needed.
-4. **Tag over sentence.** `<STOP>` followed by `Missing dependency: <name>` is more parseable than "I cannot proceed because the dependency is missing."
 
 ## No-Re-Read Rule
 

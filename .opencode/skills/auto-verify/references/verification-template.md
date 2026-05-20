@@ -1,34 +1,43 @@
 # Verification Report Template
 
-Use this format for verification reports. Append to `VERIFY.md` or report inline.
+Plan-level format. Group results by slice; verdict applies to the entire plan.
 
 ```markdown
-## Verification: [Slice Name]
+## Verification: [Change Name]
 
-**Date:** [ISO 8601 date]
-**Verifier:** [agent or human]
+### Slice N: [Name]
 
-### Criterion 1: [Acceptance Criterion]
+**Criterion:** [acceptance criterion from plan]
+**Result:** PASS / FAIL / PARTIAL
+**Evidence:** [command output or direct observation]
+**Gap:** [what is missing, or "none"]
 
-- **Result:** PASS / FAIL / PARTIAL
-- **Evidence:** [command output or direct observation]
-- **Gap:** [what is missing, or "none"]
+[Repeat for each criterion in this slice]
 
-### Criterion 2: [Acceptance Criterion]
-
-...
+[Repeat for each slice in the plan]
 
 ### Summary
 
-- **Overall:** PASS / FAIL
-- **Passed:** [N] of [M] criteria
-- **Remaining gaps:** [list or "none"]
-- **Recommended next skill:** [auto-execute | auto-resume | auto-plan]
+PASS summary:
+**Overall:** PASS
+**Passed:** [M] of [M] criteria
+**Remaining gaps:** none
+**Change status:** complete
+**New objective:** use `auto-office-hours` to shape the next objective when you are ready.
+
+FAIL summary:
+**Overall:** FAIL
+**Passed:** [N] of [M] criteria
+**Remaining gaps:** [list]
+**Change status:** incomplete
+**Recommended next skill:** auto-execute
 ```
 
 ## Rules
 
-- Each criterion gets its own section.
+- Each criterion gets its own entry with evidence.
 - Evidence must be a direct quote from command output or a specific observation.
-- "Partial" is only for criteria that have multiple sub-conditions where some pass and some fail.
-- If overall is FAIL, list every gap, not just the first one found.
+- PARTIAL means some sub-conditions pass and some fail. Still counts as FAIL for the plan.
+- If overall is FAIL, list every gap across all slices, not just the first found.
+- Write `VERIFY-GAP` annotations into PLAN.md for each failed criterion so auto-execute finds them on re-entry.
+- If overall is PASS, do not print a `Recommended next skill` line; use the `New objective` line for future work instead.
