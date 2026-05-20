@@ -2,6 +2,7 @@ import mlx.core as mx
 import numpy as np
 
 from mlx_spatial.sam3d_flow import (
+    compare_sam3d_shortcut_outputs,
     denormalize_sam3d_slat,
     sam3d_classifier_free_guidance,
     sam3d_euler_solve,
@@ -23,6 +24,34 @@ def test_sam3d_shortcut_schedule_uses_no_shortcut_during_exact_inference():
     assert schedule.shortcut_d == 0.0
     assert schedule.time_scale == 1000.0
     assert schedule.t_seq.shape == (5,)
+
+
+def test_sam3d_shortcut_reference_report_accepts_fewer_step_fixture():
+    reference = {
+        "shape": mx.array([[1.0, 2.0, 3.0]], dtype=mx.float32),
+        "pose": mx.array([[0.25, -0.5]], dtype=mx.float32),
+    }
+    fewer_step = {
+        "shape": mx.array([[1.0, 2.0 + 1e-6, 3.0]], dtype=mx.float32),
+        "pose": mx.array([[0.25, -0.5]], dtype=mx.float32),
+    }
+
+    report = compare_sam3d_shortcut_outputs(reference, fewer_step, atol=1e-5, rtol=1e-4)
+
+    assert report.passed
+    assert report.tensor_count == 2
+    assert report.max_abs_error < 1e-5
+    assert report.tensor_errors["shape"]["passed"] is True
+
+
+def test_sam3d_shortcut_reference_report_rejects_mismatched_output():
+    reference = {"shape": mx.array([[1.0]], dtype=mx.float32)}
+    fewer_step = {"shape": mx.array([[1.1]], dtype=mx.float32)}
+
+    report = compare_sam3d_shortcut_outputs(reference, fewer_step, atol=1e-5, rtol=1e-4)
+
+    assert not report.passed
+    assert report.tensor_errors["shape"]["passed"] is False
 
 
 def test_sam3d_seeded_normal_is_reproducible():

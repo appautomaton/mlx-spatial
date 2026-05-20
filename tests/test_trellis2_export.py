@@ -17,6 +17,8 @@ from mlx_spatial.trellis2_export import (
     TRELLIS2_XATLAS_FACE_GUARD,
     Trellis2ExportArtifact,
     Trellis2ExportResult,
+    Trellis2MeshImprovementReport,
+    Trellis2MeshQualityMetrics,
     Trellis2PostprocessParityItem,
     Trellis2SparseTrilinearSampleResult,
     Trellis2TextureBakeResult,
@@ -25,8 +27,10 @@ from mlx_spatial.trellis2_export import (
     assess_trellis2_export_boundary,
     bake_trellis2_texture_fields_mac_native,
     bake_trellis2_texture_fields,
+    compare_trellis2_mesh_improvement,
     ensure_trellis2_mac_export_dependencies,
     make_trellis2_face_atlas_uvs,
+    measure_trellis2_mesh_quality,
     missing_trellis2_mac_export_dependencies,
     postprocess_trellis2_mesh_for_glb,
     resolve_trellis2_xatlas_face_guard,
@@ -74,6 +78,35 @@ def _fixture_mesh() -> FlexibleDualGridMesh:
             dtype=np.float32,
         ),
         faces=np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64),
+    )
+
+
+def _fixture_mesh_with_cleanup_gaps() -> FlexibleDualGridMesh:
+    return FlexibleDualGridMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.005, 0.0, 0.0],
+                [0.0, 0.005, 0.0],
+                [0.0, 0.0, 0.005],
+                [0.5, 0.5, 0.5],
+                [0.51, 0.5, 0.5],
+                [0.5, 0.51, 0.5],
+                [0.8, 0.8, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array(
+            [
+                [0, 1, 3],
+                [1, 2, 3],
+                [2, 0, 3],
+                [2, 0, 3],
+                [0, 0, 1],
+                [4, 5, 6],
+            ],
+            dtype=np.int64,
+        ),
     )
 
 
@@ -213,6 +246,10 @@ def test_postprocess_parity_audit_records_known_source_gaps():
     assert all(isinstance(item, Trellis2PostprocessParityItem) for item in audit)
     assert any(item.stage == "texture sampling" and "trilinear" in item.mlx_spatial for item in audit)
     assert any(item.stage == "remeshing" and item.parity == "missing" for item in audit)
+    assert any(
+        item.stage == "mesh cleanup" and "compare_trellis2_mesh_improvement" in item.next_action
+        for item in audit
+    )
 
 
 def test_resolve_xatlas_face_guard_adapts_to_postprocessed_face_count():
@@ -225,32 +262,7 @@ def test_resolve_xatlas_face_guard_adapts_to_postprocessed_face_count():
 
 
 def test_postprocess_mesh_for_glb_removes_bad_faces_components_and_fills_small_holes():
-    mesh = FlexibleDualGridMesh(
-        vertices=np.array(
-            [
-                [0.0, 0.0, 0.0],
-                [0.005, 0.0, 0.0],
-                [0.0, 0.005, 0.0],
-                [0.0, 0.0, 0.005],
-                [0.5, 0.5, 0.5],
-                [0.51, 0.5, 0.5],
-                [0.5, 0.51, 0.5],
-                [0.8, 0.8, 0.8],
-            ],
-            dtype=np.float32,
-        ),
-        faces=np.array(
-            [
-                [0, 1, 3],
-                [1, 2, 3],
-                [2, 0, 3],
-                [2, 0, 3],
-                [0, 0, 1],
-                [4, 5, 6],
-            ],
-            dtype=np.int64,
-        ),
-    )
+    mesh = _fixture_mesh_with_cleanup_gaps()
 
     result = postprocess_trellis2_mesh_for_glb(mesh, target_faces=100, min_component_faces=2)
 
@@ -266,6 +278,42 @@ def test_postprocess_mesh_for_glb_removes_bad_faces_components_and_fills_small_h
     assert result.stats.boundary_edges == 0
     assert result.source_mesh is not None
     assert result.source_mesh.faces.shape[0] == result.stats.cleaned_faces
+
+
+def test_trellis2_mesh_quality_report_compares_official_gap_and_mlx_path(monkeypatch):
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name):
+        if name == "cumesh":
+            return None
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    mesh = _fixture_mesh_with_cleanup_gaps()
+
+    source_metrics = measure_trellis2_mesh_quality(mesh)
+    result = postprocess_trellis2_mesh_for_glb(mesh, target_faces=100, min_component_faces=2)
+    report = compare_trellis2_mesh_improvement(mesh, result)
+
+    assert isinstance(source_metrics, Trellis2MeshQualityMetrics)
+    assert isinstance(report, Trellis2MeshImprovementReport)
+    assert report.official_backend == "cumesh.remeshing.remesh_narrow_band_dc"
+    assert report.official_available is False
+    assert "fast_simplification" in report.mlx_backend
+    assert report.source.face_count == 6
+    assert report.source.connected_components == 2
+    assert report.source.duplicate_faces == 1
+    assert report.source.degenerate_faces == 1
+    assert report.mlx_postprocessed.face_count == result.stats.final_faces
+    assert report.mlx_postprocessed.boundary_edges == 0
+    assert report.mlx_postprocessed.nonmanifold_edges == 0
+    assert report.boundary_edge_delta < 0
+    assert report.nonmanifold_edge_delta < 0
+    assert report.connected_component_delta == -1
+    assert report.postprocess_stats is result.stats
+    assert "defer cumesh remeshing parity" in report.recommendation
 
 
 def test_texture_bake_rejects_bad_texture_field_shapes():
@@ -702,6 +750,8 @@ def test_export_helpers_are_public():
     assert mlx_spatial.TRELLIS2_XATLAS_FACE_GUARD == TRELLIS2_XATLAS_FACE_GUARD
     assert mlx_spatial.Trellis2ExportArtifact is Trellis2ExportArtifact
     assert mlx_spatial.Trellis2ExportResult is Trellis2ExportResult
+    assert mlx_spatial.Trellis2MeshImprovementReport is Trellis2MeshImprovementReport
+    assert mlx_spatial.Trellis2MeshQualityMetrics is Trellis2MeshQualityMetrics
     assert mlx_spatial.Trellis2PostprocessParityItem is Trellis2PostprocessParityItem
     assert mlx_spatial.Trellis2SparseTrilinearSampleResult is Trellis2SparseTrilinearSampleResult
     assert mlx_spatial.Trellis2TextureBakeResult is Trellis2TextureBakeResult
@@ -710,8 +760,10 @@ def test_export_helpers_are_public():
     assert mlx_spatial.assess_trellis2_export_boundary is assess_trellis2_export_boundary
     assert mlx_spatial.bake_trellis2_texture_fields_mac_native is bake_trellis2_texture_fields_mac_native
     assert mlx_spatial.bake_trellis2_texture_fields is bake_trellis2_texture_fields
+    assert mlx_spatial.compare_trellis2_mesh_improvement is compare_trellis2_mesh_improvement
     assert mlx_spatial.ensure_trellis2_mac_export_dependencies is ensure_trellis2_mac_export_dependencies
     assert mlx_spatial.make_trellis2_face_atlas_uvs is make_trellis2_face_atlas_uvs
+    assert mlx_spatial.measure_trellis2_mesh_quality is measure_trellis2_mesh_quality
     assert mlx_spatial.missing_trellis2_mac_export_dependencies is missing_trellis2_mac_export_dependencies
     assert mlx_spatial.postprocess_trellis2_mesh_for_glb is postprocess_trellis2_mesh_for_glb
     assert mlx_spatial.resolve_trellis2_xatlas_face_guard is resolve_trellis2_xatlas_face_guard

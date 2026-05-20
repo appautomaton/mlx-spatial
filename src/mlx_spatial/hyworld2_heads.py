@@ -1335,11 +1335,12 @@ def _feature_fusion_block(
 
 
 def _residual_conv_unit(x: mx.array, *, prefix: str, tensors: dict[str, mx.array]) -> mx.array:
-    output = mx.maximum(x, 0)
+    residual = mx.maximum(x, 0)
+    output = residual
     output = _conv2d_nchw(output, tensors[f"{prefix}.conv1.weight"], tensors[f"{prefix}.conv1.bias"])
     output = mx.maximum(output, 0)
     output = _conv2d_nchw(output, tensors[f"{prefix}.conv2.weight"], tensors[f"{prefix}.conv2.bias"])
-    return output + x
+    return output + residual
 
 
 def _apply_dpt_pos_embed(x: mx.array, *, width: int, height: int, ratio: float = 0.1) -> mx.array:

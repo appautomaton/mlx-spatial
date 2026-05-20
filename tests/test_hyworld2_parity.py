@@ -56,7 +56,16 @@ def test_hyworld2_parity_compare_reports_pass_and_value_mismatch(tmp_path):
     payload = parity_report_to_dict(report)
     assert payload["passed"] is False
     assert payload["failed_names"] == ["b"]
+    assert payload["parity_trace_metadata"]["numeric_parity_verified"] is False
     assert payload["comparisons"][1]["max_abs_error"] == 6.0
+
+    passed_payload = parity_report_to_dict(
+        compare_hyworld2_parity_tensors(
+            {"a": np.array([1.0, 2.0], dtype=np.float32)},
+            {"a": np.array([1.0, 2.0], dtype=np.float32)},
+        )
+    )
+    assert passed_payload["parity_trace_metadata"]["numeric_parity_verified"] is True
 
 
 def test_hyworld2_parity_compare_reports_missing_and_shape_mismatch():

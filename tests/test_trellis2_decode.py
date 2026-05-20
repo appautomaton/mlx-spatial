@@ -1,15 +1,20 @@
 import json
 
 import mlx.core as mx
+import numpy as np
 import pytest
 from safetensors.mlx import save_file
 
 from mlx_spatial.trellis2_decode import (
     STRUCTURED_LATENT_DECODER_TENSOR_NAMES,
+    FlexiDualGridVaeEncoder,
     StructuredLatentDecoderConfig,
+    StructuredLatentEncoderConfig,
     probe_decode_latents_boundary,
     probe_structured_latent_decoder_boundary,
+    read_structured_latent_encoder_config,
     read_structured_latent_decoder_config,
+    run_flexi_dual_grid_vae_encoder,
     run_shape_decoder_to_fields,
     run_texture_decoder_to_representation,
     run_shape_decoder_upsample_coordinates,
@@ -31,6 +36,19 @@ def _small_decoder_config(*, name="SparseUnetVaeDecoder", out_channels=6, pred_s
     )
 
 
+def _small_encoder_config(*, name="FlexiDualGridVaeEncoder"):
+    return StructuredLatentEncoderConfig(
+        name=name,
+        in_channels=6,
+        latent_channels=3,
+        model_channels=(6,),
+        num_blocks=(0,),
+        block_type=("SparseConvNeXtBlock3d",),
+        down_block_type=(),
+        use_fp16=False,
+    )
+
+
 def _write_decoder_config(path, *, name="SparseUnetVaeDecoder", out_channels=6, pred_subdiv=False):
     args = {
         "model_channels": [16, 8],
@@ -46,6 +64,22 @@ def _write_decoder_config(path, *, name="SparseUnetVaeDecoder", out_channels=6, 
     else:
         args["out_channels"] = out_channels
         args["pred_subdiv"] = pred_subdiv
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"name": name, "args": args}))
+
+
+def _write_encoder_config(path, *, name="FlexiDualGridVaeEncoder"):
+    args = {
+        "model_channels": [6],
+        "latent_channels": 3,
+        "num_blocks": [0],
+        "block_type": ["SparseConvNeXtBlock3d"],
+        "down_block_type": [],
+        "block_args": [{}],
+        "use_fp16": False,
+    }
+    if name != "FlexiDualGridVaeEncoder":
+        args["in_channels"] = 6
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"name": name, "args": args}))
 
@@ -92,6 +126,20 @@ def _write_decoder_checkpoint(path, config=None, *, omit=(), bad_from_latent_sha
     save_file(tensors, path)
 
 
+def _write_encoder_checkpoint(path, config=None):
+    config = config or _small_encoder_config()
+    to_latent_weight = np.zeros((2 * config.latent_channels, config.model_channels[-1]), dtype=np.float32)
+    to_latent_weight[: config.latent_channels, : config.latent_channels] = np.eye(config.latent_channels, dtype=np.float32)
+    tensors = {
+        "input_layer.weight": mx.eye(config.model_channels[0], dtype=mx.float32),
+        "input_layer.bias": mx.zeros((config.model_channels[0],), dtype=mx.float32),
+        "to_latent.weight": mx.array(to_latent_weight),
+        "to_latent.bias": mx.zeros((2 * config.latent_channels,), dtype=mx.float32),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, path)
+
+
 def test_read_structured_latent_decoder_config_maps_shape_decoder_fields(tmp_path):
     path = tmp_path / "shape.json"
     _write_decoder_config(path, name="FlexiDualGridVaeDecoder")
@@ -117,6 +165,47 @@ def test_read_structured_latent_decoder_config_maps_texture_decoder_fields(tmp_p
     assert config.out_channels == 6
     assert config.pred_subdiv is False
     assert config.resolution is None
+
+
+def test_read_structured_latent_encoder_config_maps_flexidualgrid_fields(tmp_path):
+    path = tmp_path / "shape-encoder.json"
+    _write_encoder_config(path)
+
+    config = read_structured_latent_encoder_config(tmp_path, "shape-encoder.json")
+
+    assert config.name == "FlexiDualGridVaeEncoder"
+    assert config.in_channels == 6
+    assert config.latent_channels == 3
+    assert config.model_channels == (6,)
+    assert config.down_block_type == ()
+
+
+def test_flexidualgrid_vae_encoder_projects_vertices_and_intersections(tmp_path):
+    config = _small_encoder_config()
+    checkpoint = tmp_path / "shape-encoder.safetensors"
+    _write_encoder_checkpoint(checkpoint, config)
+    coords = mx.array([[0, 0, 0, 0], [0, 1, 1, 1]], dtype=mx.int32)
+    vertices = mx.array([[0.5, 0.75, 0.25], [1.0, 0.5, 0.0]], dtype=mx.float32)
+    intersected = mx.array([[True, False, True], [False, True, False]])
+
+    result = run_flexi_dual_grid_vae_encoder(checkpoint, config, coords, vertices, intersected)
+
+    input_features = np.concatenate(
+        (
+            np.array(vertices, dtype=np.float32) - 0.5,
+            np.array(intersected, dtype=np.float32) - 0.5,
+        ),
+        axis=1,
+    )
+    normalized = _reference_layer_norm(input_features)
+    assert tuple(result.coordinates.shape) == (2, 4)
+    assert np.allclose(np.array(result.features), normalized[:, :3], atol=5e-4)
+    assert np.allclose(np.array(result.logvar), 0.0)
+    assert result.probe.input_feature_shape == (2, 6)
+    assert result.probe.latent_feature_shape == (2, 3)
+
+    wrapped = FlexiDualGridVaeEncoder(checkpoint, config)(coords, vertices, intersected)
+    assert np.allclose(np.array(wrapped.features), np.array(result.features))
 
 
 def test_structured_latent_decoder_probe_runs_from_latent_projection(tmp_path):
@@ -356,3 +445,8 @@ def test_decode_latents_probe_validates_both_decoders_and_blocks_at_shape_stack(
     assert probe.blocker_operation == "MLX shape latent decoder SparseConvNeXt/FlexiDualGrid forward"
     assert "first C2S up-block produced" in probe.blocker_detail
     assert "large-token sparse ConvNeXt/up-block decoder execution" in probe.blocker_detail
+
+
+def _reference_layer_norm(values, eps=1e-5):
+    centered = values - values.mean(axis=-1, keepdims=True)
+    return centered / np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True) + eps)

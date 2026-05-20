@@ -66,6 +66,7 @@ SAM3D_INFERENCE_STAGES = (
     "pipeline-config",
     "image-mask-preprocessing",
     "moge-pointmap",
+    "external-pointmap",
     "official-preprocessing",
     "sparse-structure",
     "structured-latent",
@@ -112,6 +113,14 @@ class Sam3dGenerationResult:
     artifact: Sam3dOutputArtifact | None
 
 
+@dataclass(frozen=True)
+class Sam3dExternalPointmap:
+    """Validated external pointmap input and trace metadata."""
+
+    pointmap: np.ndarray
+    metadata: dict[str, object]
+
+
 class Sam3dInferencePipeline:
     """Exact-mode SAM3D Objects pipeline harness for the MLX port."""
 
@@ -126,6 +135,7 @@ class Sam3dInferencePipeline:
         output_path: str | Path,
         glb_output_path: str | Path | None = None,
         moge_root: str | Path = SAM3D_MOGE_DEFAULT_ROOT,
+        pointmap_path: str | Path | None = None,
         seed: int = 42,
         stage1_steps: int = 2,
         stage2_steps: int = 12,
@@ -180,6 +190,7 @@ class Sam3dInferencePipeline:
             "seed": int(seed),
             "exact_mode": True,
             "moge_root": str(moge_root),
+            "pointmap_source": "external" if pointmap_path is not None else "moge",
             "stage1_steps": int(stage1_steps),
             "stage2_steps": int(stage2_steps),
             "memory_profile": memory_profile,
@@ -256,42 +267,65 @@ class Sam3dInferencePipeline:
         completed.append("image-mask-preprocessing")
         metadata["input"] = _preprocess_metadata(preprocessed)
 
-        moge_result = run_sam3d_moge_pointmap(
-            preprocessed.rgba[..., :3],
-            root=moge_root,
-            memory_profile=memory_profile,
-        )
-        metadata["moge"] = {
-            "ready": moge_result.ready,
-            "inspection": _moge_inspection_metadata(moge_result.inspection),
-        }
-        if moge_result.blocker is not None:
-            return self._blocked(
-                image_path,
-                mask_path,
-                output,
-                glb_output,
-                completed,
-                outputs,
-                moge_result.blocker,
-                metadata,
+        if pointmap_path is not None:
+            try:
+                external_pointmap = load_sam3d_external_pointmap(
+                    pointmap_path,
+                    expected_image_shape=preprocessed.rgba.shape[:2],
+                )
+            except (FileNotFoundError, OSError, ValueError) as error:
+                blocker = Sam3dAssetBlocker(
+                    stage="external-pointmap",
+                    operation="load SAM3D external pointmap input",
+                    reason=str(error),
+                    metadata={"pointmap_path": str(pointmap_path)},
+                )
+                return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            completed.append("external-pointmap")
+            metadata["external_pointmap"] = external_pointmap.metadata
+            metadata["moge"] = {
+                "skipped": True,
+                "reason": "external pointmap input supplied",
+            }
+            pointmap = external_pointmap.pointmap
+        else:
+            moge_result = run_sam3d_moge_pointmap(
+                preprocessed.rgba[..., :3],
+                root=moge_root,
+                memory_profile=memory_profile,
             )
+            metadata["moge"] = {
+                "ready": moge_result.ready,
+                "inspection": _moge_inspection_metadata(moge_result.inspection),
+            }
+            if moge_result.blocker is not None:
+                return self._blocked(
+                    image_path,
+                    mask_path,
+                    output,
+                    glb_output,
+                    completed,
+                    outputs,
+                    moge_result.blocker,
+                    metadata,
+                )
 
-        completed.append("moge-pointmap")
-        assert moge_result.pointmap is not None
-        metadata["moge"]["pointmap"] = {
-            "shape": tuple(int(value) for value in moge_result.pointmap.pointmap.shape),
-            "intrinsics_shape": tuple(int(value) for value in moge_result.pointmap.intrinsics.shape),
-            "valid_pixels": int(moge_result.pointmap.mask.sum()),
-            "depth_min": float(moge_result.pointmap.depth.min()),
-            "depth_max": float(moge_result.pointmap.depth.max()),
-            "metadata": moge_result.pointmap.metadata,
-        }
+            completed.append("moge-pointmap")
+            assert moge_result.pointmap is not None
+            metadata["moge"]["pointmap"] = {
+                "shape": tuple(int(value) for value in moge_result.pointmap.pointmap.shape),
+                "intrinsics_shape": tuple(int(value) for value in moge_result.pointmap.intrinsics.shape),
+                "valid_pixels": int(moge_result.pointmap.mask.sum()),
+                "depth_min": float(moge_result.pointmap.depth.min()),
+                "depth_max": float(moge_result.pointmap.depth.max()),
+                "metadata": moge_result.pointmap.metadata,
+            }
+            pointmap = moge_result.pointmap.pointmap
 
         try:
             official = preprocess_sam3d_official_tensors(
                 preprocessed.rgba,
-                pointmap=moge_result.pointmap.pointmap,
+                pointmap=pointmap,
             )
         except ValueError as error:
             blocker = Sam3dAssetBlocker(
@@ -303,7 +337,9 @@ class Sam3dInferencePipeline:
             return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
         completed.append("official-preprocessing")
         metadata["official_preprocessing"] = _official_preprocess_metadata(official)
-        del moge_result, preprocessed
+        if pointmap_path is None:
+            del moge_result
+        del pointmap, preprocessed
         _release_mlx_stage_memory(metadata, "after-official-preprocessing")
 
         try:
@@ -724,6 +760,62 @@ def _validate_sam3d_output_path(path: str | Path, outputs_root: str | Path = "ou
     except ValueError as error:
         raise ValueError(f"SAM3D output path must stay under {outputs_root}") from error
     return output
+
+
+def load_sam3d_external_pointmap(
+    path: str | Path,
+    *,
+    expected_image_shape: tuple[int, int] | None = None,
+) -> Sam3dExternalPointmap:
+    """Load and validate an external SAM3D pointmap file."""
+
+    pointmap_path = Path(path)
+    suffix = pointmap_path.suffix.lower()
+    if suffix == ".npy":
+        array = np.load(pointmap_path, allow_pickle=False)
+        file_format = "npy"
+    elif suffix == ".npz":
+        with np.load(pointmap_path, allow_pickle=False) as archive:
+            if "pointmap" not in archive.files:
+                raise ValueError("SAM3D external pointmap .npz must contain a 'pointmap' array")
+            array = archive["pointmap"]
+        file_format = "npz"
+    else:
+        raise ValueError("SAM3D external pointmap must be a .npy or .npz file")
+
+    if array.dtype.hasobject:
+        raise ValueError("SAM3D external pointmap must not use an object dtype")
+    if array.ndim != 3:
+        raise ValueError(f"SAM3D external pointmap must have shape (H, W, 3), got {array.shape}")
+    if int(array.shape[2]) != 3:
+        raise ValueError(f"SAM3D external pointmap must have exactly 3 channels, got {array.shape[2]}")
+    if expected_image_shape is not None and tuple(int(value) for value in array.shape[:2]) != tuple(
+        int(value) for value in expected_image_shape
+    ):
+        raise ValueError(
+            f"SAM3D external pointmap spatial shape must match image shape "
+            f"{tuple(int(value) for value in expected_image_shape)}, got {tuple(int(value) for value in array.shape[:2])}"
+        )
+
+    try:
+        pointmap = array.astype(np.float32, copy=False)
+    except (TypeError, ValueError) as error:
+        raise ValueError("SAM3D external pointmap must be convertible to float32") from error
+
+    metadata = {
+        "source_path": str(pointmap_path),
+        "file_format": file_format,
+        "original_shape": tuple(int(value) for value in array.shape),
+        "original_dtype": str(array.dtype),
+        "shape": tuple(int(value) for value in pointmap.shape),
+        "dtype": str(pointmap.dtype),
+        "finite_count": int(np.isfinite(pointmap).sum()),
+        "nan_count": int(np.isnan(pointmap).sum()),
+        "source_numeric_parity": "not_claimed",
+        "source_clipping_parity": "deferred",
+        "source_intrinsics_parity": "deferred",
+    }
+    return Sam3dExternalPointmap(pointmap=pointmap, metadata=metadata)
 
 
 def _validate_sam3d_glb_output_path(path: str | Path, outputs_root: str | Path = "outputs") -> Path:

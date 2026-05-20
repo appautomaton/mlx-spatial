@@ -77,6 +77,23 @@ def _output_dir(name):
     return path
 
 
+def _assert_local_mlx_timing(metadata, completed_stages, *, blocker_stage, successful):
+    timing = metadata["mlx_timing"]
+
+    assert timing["runtime"] == "mlx"
+    assert timing["timing_source"] == "local_mlx_time_perf_counter"
+    assert timing["clock"] == "time.perf_counter"
+    assert timing["source_reference_timings_included"] is False
+    assert timing["total_elapsed_seconds"] >= 0.0
+    assert timing["completed_stages"] == list(completed_stages)
+    assert set(timing["stage_elapsed_seconds"]) == set(completed_stages)
+    assert all(value >= 0.0 for value in timing["stage_elapsed_seconds"].values())
+    assert timing["blocker_stage"] == blocker_stage
+    assert timing["successful_inference"] is successful
+    assert timing["speed_parity_claimed"] is False
+    assert timing["numeric_parity_claimed"] is False
+
+
 def test_normalize_hyworld2_heads_accepts_comma_lists_and_dedupes():
     assert normalize_hyworld2_heads("depth,normal,depth,points") == ("depth", "normal", "points")
 
@@ -259,6 +276,12 @@ def test_hyworld2_reconstruct_cli_writes_trace_and_reports_blocker(tmp_path, cap
     assert payload["metadata"]["official_defaults"]["matches_official_target_size"] is True
     assert payload["metadata"]["input"]["token_count"] == 34 * 45
     assert payload["metadata"]["checkpoint"]["ready"] is True
+    _assert_local_mlx_timing(
+        payload["metadata"],
+        payload["completed_stages"],
+        blocker_stage="model-construction",
+        successful=False,
+    )
 
 
 def test_hyworld2_intermediate_layers_follow_official_model_size_map():
@@ -316,6 +339,12 @@ def test_fixture_reconstruct_writes_staged_outputs_under_outputs(tmp_path):
     assert trace["metadata"]["fixture_tensors"] is True
     assert trace["metadata"]["heads"]["points"]["export"] is True
     assert trace["outputs"]
+    _assert_local_mlx_timing(
+        trace["metadata"],
+        trace["completed_stages"],
+        blocker_stage=None,
+        successful=True,
+    )
 
 
 def test_fixture_reconstruct_writes_optional_mlx_parity_bundle(tmp_path):

@@ -3,6 +3,7 @@ import mlx.core as mx
 
 from mlx_spatial.sam3d_ss_flow import (
     SAM3D_SS_LATENT_ORDER,
+    SAM3D_SS_SHARED_POSE_NAME,
     Sam3dSSFlowConfig,
     _run_ss_mot_self_attention,
     infer_sam3d_ss_flow_config,
@@ -51,6 +52,35 @@ def test_sam3d_ss_mot_self_attention_keeps_shape_protected_from_pose_tokens():
     assert not np.allclose(
         np.array(out_first["6drotation_normalized"]),
         np.array(out_second["6drotation_normalized"]),
+    )
+
+
+def test_sam3d_ss_mot_self_attention_matches_reference_shape_and_pose_outputs():
+    tensors = _tiny_attention_tensors()
+    config = Sam3dSSFlowConfig(model_channels=2, num_heads=1, num_blocks=1, attention_chunk_size=None)
+    hidden = {
+        "shape": mx.array([[[1.0, 0.0], [0.25, 0.75]]], dtype=mx.float32),
+        SAM3D_SS_SHARED_POSE_NAME: mx.array([[[0.0, 1.0], [1.0, 1.0]]], dtype=mx.float32),
+    }
+
+    actual = _run_ss_mot_self_attention(hidden, tensors, prefix="block.self_attn.", config=config)
+
+    shape = np.array(hidden["shape"], dtype=np.float32)[:, :, None, :]
+    pose = np.array(hidden[SAM3D_SS_SHARED_POSE_NAME], dtype=np.float32)[:, :, None, :]
+    q_shape = _reference_rms_norm(shape)
+    q_pose = _reference_rms_norm(pose)
+    expected_shape = _reference_attention(q_shape, q_shape, shape)
+    expected_pose = _reference_attention(
+        q_pose,
+        np.concatenate((q_pose, q_shape), axis=1),
+        np.concatenate((pose, shape), axis=1),
+    )
+
+    assert np.allclose(np.array(actual["shape"]), expected_shape[:, :, 0, :], atol=1e-3)
+    assert np.allclose(
+        np.array(actual[SAM3D_SS_SHARED_POSE_NAME]),
+        expected_pose[:, :, 0, :],
+        atol=1e-3,
     )
 
 
@@ -136,3 +166,16 @@ def _tiny_flow_tensors(model_channels: int) -> dict[str, mx.array]:
     tensors[f"{prefix}d_embedder.mlp.2.weight"] = mx.zeros((model_channels, model_channels), dtype=mx.float32)
     tensors[f"{prefix}d_embedder.mlp.2.bias"] = mx.zeros((model_channels,), dtype=mx.float32)
     return tensors
+
+
+def _reference_rms_norm(values: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(values.astype(np.float32), axis=-1, keepdims=True)
+    return values / np.maximum(norm, 1e-12) * np.sqrt(values.shape[-1])
+
+
+def _reference_attention(query: np.ndarray, key: np.ndarray, value: np.ndarray) -> np.ndarray:
+    scores = np.einsum("blhd,bmhd->bhlm", query, key) * (query.shape[-1] ** -0.5)
+    scores = scores - scores.max(axis=-1, keepdims=True)
+    weights = np.exp(scores)
+    weights = weights / weights.sum(axis=-1, keepdims=True)
+    return np.einsum("bhlm,bmhd->blhd", weights, value)

@@ -223,6 +223,7 @@ def parity_report_to_dict(report: HyWorld2ParityReport) -> dict[str, object]:
         "passed": report.passed,
         "reference_path": str(report.reference_path) if report.reference_path is not None else None,
         "failed_names": list(report.failed_names),
+        "parity_trace_metadata": hyworld2_parity_trace_metadata(report=report),
         "comparisons": [
             {
                 "name": comparison.name,

@@ -8,6 +8,7 @@ the vendored official repo only when HYWORLD2_TORCH_REF=1 is set.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -17,11 +18,17 @@ from typing import Any
 
 import numpy as np
 
-from mlx_spatial.hyworld2_parity import (
-    HYWORLD2_TORCH_PARITY_ENV,
-    require_hyworld2_torch_parity_enabled,
-    write_hyworld2_parity_bundle,
-)
+_PARITY_MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "mlx_spatial" / "hyworld2_parity.py"
+_PARITY_SPEC = importlib.util.spec_from_file_location("_hyworld2_parity_dev", _PARITY_MODULE_PATH)
+if _PARITY_SPEC is None or _PARITY_SPEC.loader is None:
+    raise RuntimeError(f"could not load parity helper from {_PARITY_MODULE_PATH}")
+_PARITY_MODULE = importlib.util.module_from_spec(_PARITY_SPEC)
+sys.modules[_PARITY_SPEC.name] = _PARITY_MODULE
+_PARITY_SPEC.loader.exec_module(_PARITY_MODULE)
+
+HYWORLD2_TORCH_PARITY_ENV = _PARITY_MODULE.HYWORLD2_TORCH_PARITY_ENV
+require_hyworld2_torch_parity_enabled = _PARITY_MODULE.require_hyworld2_torch_parity_enabled
+write_hyworld2_parity_bundle = _PARITY_MODULE.write_hyworld2_parity_bundle
 
 
 DEFAULT_CAPTURE_KEYS = (

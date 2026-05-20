@@ -3,10 +3,12 @@ from types import SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
+import pytest
 from PIL import Image
 from safetensors.mlx import save_file
 
 from mlx_spatial.sam3d import main
+from mlx_spatial.sam3d_inference import load_sam3d_external_pointmap
 from mlx_spatial.sam3d_condition import Sam3dConditionStackOutput
 from mlx_spatial.sam3d_decoder import Sam3dMeshDecoderConfig, Sam3dSLatDecoderConfig
 from mlx_spatial.sam3d_mesh import Sam3dMeshDecoderFeatureResult
@@ -75,6 +77,57 @@ def _fixture_pointmap():
         ],
         dtype=np.float32,
     )
+
+
+def test_sam3d_pointmap_loader_accepts_npy_and_npz(tmp_path):
+    pointmap = _fixture_pointmap()
+    npy_path = tmp_path / "pointmap.npy"
+    npz_path = tmp_path / "pointmap.npz"
+    np.save(npy_path, pointmap)
+    np.savez(npz_path, pointmap=pointmap, ignored=np.zeros((1,), dtype=np.float32))
+
+    loaded_npy = load_sam3d_external_pointmap(npy_path, expected_image_shape=(2, 2))
+    loaded_npz = load_sam3d_external_pointmap(npz_path, expected_image_shape=(2, 2))
+
+    np.testing.assert_allclose(loaded_npy.pointmap, pointmap)
+    np.testing.assert_allclose(loaded_npz.pointmap, pointmap)
+    assert loaded_npy.metadata["file_format"] == "npy"
+    assert loaded_npz.metadata["file_format"] == "npz"
+    assert loaded_npy.metadata["original_shape"] == (2, 2, 3)
+    assert loaded_npy.metadata["original_dtype"] == "float32"
+    assert loaded_npy.metadata["finite_count"] == 12
+    assert loaded_npy.metadata["nan_count"] == 0
+    assert loaded_npy.metadata["source_numeric_parity"] == "not_claimed"
+    assert loaded_npy.metadata["source_clipping_parity"] == "deferred"
+
+
+def test_sam3d_external_pointmap_validation_rejects_invalid_inputs(tmp_path):
+    missing_key = tmp_path / "missing-key.npz"
+    wrong_ndim = tmp_path / "wrong-ndim.npy"
+    wrong_channels = tmp_path / "wrong-channels.npy"
+    wrong_size = tmp_path / "wrong-size.npy"
+    unsupported = tmp_path / "pointmap.txt"
+    object_array = tmp_path / "object.npy"
+
+    np.savez(missing_key, other=_fixture_pointmap())
+    np.save(wrong_ndim, np.zeros((2, 2), dtype=np.float32))
+    np.save(wrong_channels, np.zeros((2, 2, 2), dtype=np.float32))
+    np.save(wrong_size, np.zeros((3, 2, 3), dtype=np.float32))
+    unsupported.write_text("not a pointmap", encoding="utf-8")
+    np.save(object_array, np.array([[[object(), object(), object()]]], dtype=object))
+
+    cases = (
+        (missing_key, "must contain a 'pointmap' array"),
+        (wrong_ndim, "must have shape"),
+        (wrong_channels, "exactly 3 channels"),
+        (wrong_size, "spatial shape must match image shape"),
+        (unsupported, ".npy or .npz"),
+        (object_array, "Object arrays cannot be loaded"),
+    )
+
+    for path, message in cases:
+        with pytest.raises(ValueError, match=message):
+            load_sam3d_external_pointmap(path, expected_image_shape=(2, 2))
 
 
 def _interior_mesh_features(*, origin: int = 0):
@@ -266,6 +319,96 @@ def test_sam3d_cli_reconstruct_advances_past_moge_with_pointmap(tmp_path, capsys
     assert trace["metadata"]["moge"]["pointmap"]["shape"] == [2, 2, 3]
     assert trace["metadata"]["moge"]["pointmap"]["metadata"]["fixture"] is True
     assert trace["metadata"]["official_preprocessing"]["pointmap_shape"] == [3, 518, 518]
+    assert not (tmp_path / output).exists()
+
+
+def test_sam3d_external_pointmap_cli_bypasses_moge_and_records_trace(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    weights = tmp_path / "weights"
+    _write_sam3d_fixture(weights)
+    image, mask = _write_image_and_mask(tmp_path)
+    pointmap_path = tmp_path / "pointmap.npz"
+    np.savez(pointmap_path, pointmap=_fixture_pointmap())
+    output = "outputs/sam3d/gaussians.ply"
+    trace_output = "outputs/sam3d/trace.json"
+
+    import mlx_spatial.sam3d_inference as sam3d_inference
+
+    def fail_moge(*_args, **_kwargs):
+        raise AssertionError("external pointmap route should bypass MoGe")
+
+    monkeypatch.setattr(sam3d_inference, "run_sam3d_moge_pointmap", fail_moge)
+
+    assert main(
+        [
+            "reconstruct",
+            str(weights),
+            str(image),
+            "--mask",
+            str(mask),
+            "--pointmap",
+            str(pointmap_path),
+            "--output",
+            output,
+            "--trace-output",
+            trace_output,
+        ]
+    ) == 2
+
+    cli_output = capsys.readouterr().out
+    assert "blocker_stage=sparse-structure" in cli_output
+    trace = json.loads((tmp_path / trace_output).read_text(encoding="utf-8"))
+    assert trace["completed_stages"] == [
+        "asset-validation",
+        "pipeline-config",
+        "image-mask-preprocessing",
+        "external-pointmap",
+        "official-preprocessing",
+    ]
+    assert trace["metadata"]["pointmap_source"] == "external"
+    assert trace["metadata"]["moge"]["skipped"] is True
+    assert trace["metadata"]["external_pointmap"]["file_format"] == "npz"
+    assert trace["metadata"]["external_pointmap"]["original_shape"] == [2, 2, 3]
+    assert trace["metadata"]["external_pointmap"]["finite_count"] == 12
+    assert trace["metadata"]["external_pointmap"]["source_numeric_parity"] == "not_claimed"
+    assert trace["metadata"]["external_pointmap"]["source_clipping_parity"] == "deferred"
+    assert trace["metadata"]["official_preprocessing"]["pointmap_shape"] == [3, 518, 518]
+    assert not (tmp_path / output).exists()
+
+
+def test_sam3d_external_pointmap_cli_reports_validation_blocker(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    weights = tmp_path / "weights"
+    _write_sam3d_fixture(weights)
+    image, mask = _write_image_and_mask(tmp_path)
+    bad_pointmap = tmp_path / "bad-pointmap.npy"
+    np.save(bad_pointmap, np.zeros((3, 2, 3), dtype=np.float32))
+    output = "outputs/sam3d/gaussians.ply"
+    trace_output = "outputs/sam3d/trace.json"
+
+    assert main(
+        [
+            "reconstruct",
+            str(weights),
+            str(image),
+            "--mask",
+            str(mask),
+            "--pointmap",
+            str(bad_pointmap),
+            "--output",
+            output,
+            "--trace-output",
+            trace_output,
+        ]
+    ) == 2
+
+    cli_output = capsys.readouterr().out
+    assert "blocker_stage=external-pointmap" in cli_output
+    assert "spatial shape must match image shape" in cli_output
+    trace = json.loads((tmp_path / trace_output).read_text(encoding="utf-8"))
+    assert trace["completed_stages"] == ["asset-validation", "pipeline-config", "image-mask-preprocessing"]
+    assert trace["blocker"]["stage"] == "external-pointmap"
+    assert trace["metadata"]["pointmap_source"] == "external"
     assert not (tmp_path / output).exists()
 
 

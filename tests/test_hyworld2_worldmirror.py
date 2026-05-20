@@ -52,7 +52,7 @@ def test_token_assembly_models_camera_register_and_patch_contract():
     np.testing.assert_allclose(np.array(result.rope_positions)[0, :5], np.zeros((5, 2)))
     np.testing.assert_allclose(
         np.array(result.rope_positions)[0, 5:],
-        np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+        np.array([[1.0, 1.0], [1.0, 2.0], [2.0, 1.0], [2.0, 2.0]], dtype=np.float32),
     )
 
 

@@ -125,6 +125,37 @@ class Trellis2MeshPostprocessResult:
 
 
 @dataclass(frozen=True)
+class Trellis2MeshQualityMetrics:
+    vertex_count: int
+    face_count: int
+    boundary_edges: int
+    nonmanifold_edges: int
+    connected_components: int
+    duplicate_faces: int
+    degenerate_faces: int
+    surface_area: float
+    mean_edge_length: float
+    min_edge_length: float
+    max_edge_length: float
+
+
+@dataclass(frozen=True)
+class Trellis2MeshImprovementReport:
+    official_backend: str
+    official_available: bool
+    mlx_backend: str
+    source: Trellis2MeshQualityMetrics
+    mlx_postprocessed: Trellis2MeshQualityMetrics
+    postprocess_stats: Trellis2MeshPostprocessStats | None
+    face_delta: int
+    boundary_edge_delta: int
+    nonmanifold_edge_delta: int
+    connected_component_delta: int
+    surface_area_delta: float
+    recommendation: str
+
+
+@dataclass(frozen=True)
 class Trellis2SparseTrilinearSampleResult:
     attributes: np.ndarray
     valid_mask: np.ndarray
@@ -251,14 +282,14 @@ def trellis2_postprocess_parity_audit() -> tuple[Trellis2PostprocessParityItem, 
             official="cumesh fill_holes, non-manifold repair, component cleanup, simplify, orientation unification",
             mlx_spatial="NumPy bad-face cleanup, small component removal, bounded hole fill, fast_simplification",
             parity="partial",
-            next_action="measure topology metrics before attempting remeshing parity",
+            next_action="track topology and edge-quality metrics with compare_trellis2_mesh_improvement",
         ),
         Trellis2PostprocessParityItem(
             stage="remeshing",
             official="cumesh.remeshing.remesh_narrow_band_dc with BVH project-back",
             mlx_spatial="not implemented",
             parity="missing",
-            next_action="defer until texture bake parity is measurable",
+            next_action="defer parity until a local cumesh reference mesh is available",
         ),
         Trellis2PostprocessParityItem(
             stage="UV unwrap",
@@ -281,6 +312,90 @@ def trellis2_postprocess_parity_audit() -> tuple[Trellis2PostprocessParityItem, 
             parity="functional replacement",
             next_action="keep Blender import and texture shape tests",
         ),
+    )
+
+
+def measure_trellis2_mesh_quality(mesh: FlexibleDualGridMesh) -> Trellis2MeshQualityMetrics:
+    """Measure topology and surface metrics used to track TRELLIS.2 export quality."""
+
+    vertices, faces = _validate_mesh_np(mesh)
+    boundary_edges, nonmanifold_edges = _mesh_edge_stats(faces)
+    edge_lengths = _mesh_edge_lengths(vertices, faces)
+    triangle_areas = _triangle_areas(vertices, faces)
+    _, duplicate_faces = _remove_duplicate_faces(faces)
+    _, _, degenerate_faces = _remove_degenerate_faces(vertices, faces)
+    return Trellis2MeshQualityMetrics(
+        vertex_count=int(vertices.shape[0]),
+        face_count=int(faces.shape[0]),
+        boundary_edges=int(boundary_edges),
+        nonmanifold_edges=int(nonmanifold_edges),
+        connected_components=_mesh_connected_component_count(vertices, faces),
+        duplicate_faces=int(duplicate_faces),
+        degenerate_faces=int(degenerate_faces),
+        surface_area=float(np.sum(triangle_areas, dtype=np.float64)),
+        mean_edge_length=float(np.mean(edge_lengths, dtype=np.float64)),
+        min_edge_length=float(np.min(edge_lengths)),
+        max_edge_length=float(np.max(edge_lengths)),
+    )
+
+
+def compare_trellis2_mesh_improvement(
+    source_mesh: FlexibleDualGridMesh,
+    mlx_postprocessed: Trellis2MeshPostprocessResult | FlexibleDualGridMesh | None = None,
+    *,
+    target_faces: int = TRELLIS2_GLB_DEFAULT_FACE_TARGET,
+    simplify: bool = True,
+    min_component_faces: int = 32,
+    official_backend: str = "cumesh.remeshing.remesh_narrow_band_dc",
+) -> Trellis2MeshImprovementReport:
+    """Compare the local MLX export mesh against the official cumesh-remeshing gap."""
+
+    if mlx_postprocessed is None:
+        postprocess_result = postprocess_trellis2_mesh_for_glb(
+            source_mesh,
+            target_faces=target_faces,
+            simplify=simplify,
+            min_component_faces=min_component_faces,
+        )
+        mlx_mesh = postprocess_result.mesh
+        postprocess_stats = postprocess_result.stats
+    elif isinstance(mlx_postprocessed, Trellis2MeshPostprocessResult):
+        postprocess_result = mlx_postprocessed
+        mlx_mesh = postprocess_result.mesh
+        postprocess_stats = postprocess_result.stats
+    else:
+        mlx_mesh = mlx_postprocessed
+        postprocess_stats = None
+
+    source_metrics = measure_trellis2_mesh_quality(source_mesh)
+    mlx_metrics = measure_trellis2_mesh_quality(mlx_mesh)
+    official_available = importlib.util.find_spec("cumesh") is not None
+    face_delta = mlx_metrics.face_count - source_metrics.face_count
+    boundary_edge_delta = mlx_metrics.boundary_edges - source_metrics.boundary_edges
+    nonmanifold_edge_delta = mlx_metrics.nonmanifold_edges - source_metrics.nonmanifold_edges
+    connected_component_delta = mlx_metrics.connected_components - source_metrics.connected_components
+    surface_area_delta = mlx_metrics.surface_area - source_metrics.surface_area
+    recommendation = _trellis2_mesh_improvement_recommendation(
+        official_available=official_available,
+        source=source_metrics,
+        mlx_postprocessed=mlx_metrics,
+        boundary_edge_delta=boundary_edge_delta,
+        nonmanifold_edge_delta=nonmanifold_edge_delta,
+        connected_component_delta=connected_component_delta,
+    )
+    return Trellis2MeshImprovementReport(
+        official_backend=official_backend,
+        official_available=official_available,
+        mlx_backend="NumPy cleanup + bounded hole fill + optional fast_simplification",
+        source=source_metrics,
+        mlx_postprocessed=mlx_metrics,
+        postprocess_stats=postprocess_stats,
+        face_delta=int(face_delta),
+        boundary_edge_delta=int(boundary_edge_delta),
+        nonmanifold_edge_delta=int(nonmanifold_edge_delta),
+        connected_component_delta=int(connected_component_delta),
+        surface_area_delta=float(surface_area_delta),
+        recommendation=recommendation,
     )
 
 
@@ -1442,6 +1557,56 @@ def _remove_small_connected_components(
     return vertices, faces[keep], int(len(roots) - len(keep_roots)), removed_faces
 
 
+def _triangle_areas(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    tri = vertices[faces].astype(np.float64, copy=False)
+    area2 = np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1)
+    return area2 * 0.5
+
+
+def _mesh_edge_lengths(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    directed = np.empty((faces.shape[0] * 3, 2), dtype=np.int64)
+    directed[0::3] = faces[:, [0, 1]]
+    directed[1::3] = faces[:, [1, 2]]
+    directed[2::3] = faces[:, [2, 0]]
+    endpoints = vertices[directed].astype(np.float64, copy=False)
+    return np.linalg.norm(endpoints[:, 1] - endpoints[:, 0], axis=1)
+
+
+def _mesh_connected_component_count(vertices: np.ndarray, faces: np.ndarray) -> int:
+    parent = np.arange(vertices.shape[0], dtype=np.int64)
+    rank = np.zeros(vertices.shape[0], dtype=np.int8)
+
+    def find(value: int) -> int:
+        root = value
+        while parent[root] != root:
+            root = int(parent[root])
+        while parent[value] != value:
+            next_value = int(parent[value])
+            parent[value] = root
+            value = next_value
+        return root
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        if rank[left_root] < rank[right_root]:
+            parent[left_root] = right_root
+        elif rank[left_root] > rank[right_root]:
+            parent[right_root] = left_root
+        else:
+            parent[right_root] = left_root
+            rank[left_root] += 1
+
+    for a, b, c in faces:
+        union(int(a), int(b))
+        union(int(a), int(c))
+
+    face_roots = np.fromiter((find(int(face[0])) for face in faces), dtype=np.int64, count=faces.shape[0])
+    return int(np.unique(face_roots).shape[0])
+
+
 def _mesh_edge_stats(faces: np.ndarray) -> tuple[int, int]:
     directed = np.empty((faces.shape[0] * 3, 2), dtype=np.int64)
     directed[0::3] = faces[:, [0, 1]]
@@ -1451,6 +1616,30 @@ def _mesh_edge_stats(faces: np.ndarray) -> tuple[int, int]:
     key_view = np.ascontiguousarray(keys).view([("a", keys.dtype), ("b", keys.dtype)]).reshape(-1)
     _, counts = np.unique(key_view, return_counts=True)
     return int(np.count_nonzero(counts == 1)), int(np.count_nonzero(counts != 2))
+
+
+def _trellis2_mesh_improvement_recommendation(
+    *,
+    official_available: bool,
+    source: Trellis2MeshQualityMetrics,
+    mlx_postprocessed: Trellis2MeshQualityMetrics,
+    boundary_edge_delta: int,
+    nonmanifold_edge_delta: int,
+    connected_component_delta: int,
+) -> str:
+    if official_available:
+        return "cumesh is importable; run official remeshing on the same decoded mesh before declaring parity"
+    if mlx_postprocessed.boundary_edges or mlx_postprocessed.nonmanifold_edges:
+        return "keep P2 remeshing gap open; MLX cleanup still leaves topology defects without cumesh"
+    if (
+        boundary_edge_delta <= 0
+        and nonmanifold_edge_delta <= 0
+        and connected_component_delta <= 0
+        and mlx_postprocessed.duplicate_faces <= source.duplicate_faces
+        and mlx_postprocessed.degenerate_faces <= source.degenerate_faces
+    ):
+        return "MLX cleanup is acceptable for preview GLB export; defer cumesh remeshing parity until a reference mesh is available"
+    return "treat the mesh-quality gap as significant and add a remeshing alternative before high-quality export"
 
 
 def _combine_hole_fill_stats(first: MeshHoleFillStats, second: MeshHoleFillStats) -> MeshHoleFillStats:

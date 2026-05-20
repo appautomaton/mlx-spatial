@@ -10,6 +10,8 @@ import mlx.nn as nn
 import numpy as np
 
 from .hyworld2_assets import HyWorld2ModelConfig
+from .hyworld2_transformer import run_dino_block, run_vgt_block
+from .hyworld2_vit import interpolate_dino_pos_embed, run_dino_vit
 
 
 _FLOAT32_BYTES = 4
@@ -288,14 +290,20 @@ def build_worldmirror_rope_positions(
     patch_start_idx: int,
     normalized: bool,
 ) -> mx.array:
-    """Build per-frame special-token and patch-grid RoPE coordinates with MLX arrays."""
+    """Build vendor-compatible per-frame RoPE position indices.
+
+    HY-World shifts patch positions by +1 when special tokens are present so
+    special tokens occupy RoPE index 0 and image patches start at index 1.
+    Normalized RoPE still receives integer indices; normalization happens in
+    the RoPE module itself.
+    """
 
     grid_h, grid_w = patch_grid
     rows = mx.broadcast_to(mx.arange(grid_h, dtype=mx.float32)[:, None], (grid_h, grid_w))
     cols = mx.broadcast_to(mx.arange(grid_w, dtype=mx.float32)[None, :], (grid_h, grid_w))
-    if normalized:
-        rows = rows / max(grid_h - 1, 1)
-        cols = cols / max(grid_w - 1, 1)
+    if patch_start_idx > 0:
+        rows = rows + 1
+        cols = cols + 1
     patch_positions = mx.stack((mx.reshape(rows, (-1,)), mx.reshape(cols, (-1,))), axis=-1)
     special_positions = mx.zeros((patch_start_idx, 2), dtype=mx.float32)
     frame_positions = mx.concatenate((special_positions, patch_positions), axis=0)
@@ -571,74 +579,14 @@ def _official_dino_patch_tokens(
     *,
     patch_grid: tuple[int, int],
 ) -> HyWorld2TokenAssembly:
-    required = (
-        "patch_embed.patch_embed.proj.weight",
-        "patch_embed.patch_embed.proj.bias",
-        "patch_embed.cls_token",
-        "patch_embed.pos_embed",
-        "patch_embed.register_tokens",
-        "patch_embed.norm.weight",
-        "patch_embed.norm.bias",
+    patch_tokens, blocker = run_dino_vit(
+        image_tensor,
+        config,
+        tensors,
+        patch_grid=patch_grid,
     )
-    missing = tuple(name for name in required if name not in tensors)
-    if missing:
-        return HyWorld2TokenAssembly(
-            blocker=_blocker(
-                "model-construction",
-                "HY-World DINO patch embedding tensor lookup",
-                f"missing tensor for DINO patch embedding: {missing[0]}",
-                {"missing": missing},
-            )
-        )
-
-    batch, frames, channels, height, width = tuple(int(dim) for dim in image_tensor.shape)
-    reshaped = mx.reshape(image_tensor, (batch * frames, channels, height, width))
-    mean = mx.array(_RESNET_MEAN, dtype=reshaped.dtype)[None, :, None, None]
-    std = mx.array(_RESNET_STD, dtype=reshaped.dtype)[None, :, None, None]
-    normalized = (reshaped - mean) / std
-    patch_map = _conv2d_nchw(
-        normalized,
-        tensors["patch_embed.patch_embed.proj.weight"],
-        tensors["patch_embed.patch_embed.proj.bias"],
-        stride=config.patch_size,
-        padding=0,
-    )
-    patch_tokens = mx.reshape(
-        mx.transpose(patch_map, (0, 2, 3, 1)),
-        (batch * frames, patch_grid[0] * patch_grid[1], config.embed_dim),
-    )
-
-    cls = mx.broadcast_to(
-        tensors["patch_embed.cls_token"].astype(patch_tokens.dtype),
-        (batch * frames, 1, config.embed_dim),
-    )
-    dino_tokens = mx.concatenate((cls, patch_tokens), axis=1)
-    pos_embed, pos_blocker = _official_dino_pos_embed(tensors["patch_embed.pos_embed"], patch_grid)
-    if pos_blocker is not None or pos_embed is None:
-        return HyWorld2TokenAssembly(blocker=pos_blocker)
-    dino_tokens = dino_tokens + pos_embed.astype(dino_tokens.dtype)
-    register_tokens = mx.broadcast_to(
-        tensors["patch_embed.register_tokens"].astype(dino_tokens.dtype),
-        (batch * frames, config.num_register_tokens, config.embed_dim),
-    )
-    dino_tokens = mx.concatenate((dino_tokens[:, :1], register_tokens, dino_tokens[:, 1:]), axis=1)
-
-    for block_index in range(config.depth):
-        block = _run_dino_transformer_block(dino_tokens, config, tensors, block_index=block_index)
-        if block.blocker is not None or block.hidden_states is None:
-            return HyWorld2TokenAssembly(blocker=block.blocker)
-        dino_tokens = block.hidden_states
-    dino_tokens = _layer_norm(
-        dino_tokens,
-        tensors["patch_embed.norm.weight"],
-        tensors["patch_embed.norm.bias"],
-        eps=1e-6,
-    )
-    patch_tokens = dino_tokens[:, 1 + config.num_register_tokens :, :]
-    patch_tokens = mx.reshape(
-        patch_tokens,
-        (batch, frames, patch_grid[0] * patch_grid[1], config.embed_dim),
-    )
+    if blocker is not None or patch_tokens is None:
+        return HyWorld2TokenAssembly(blocker=_coerce_blocker(blocker))
     return HyWorld2TokenAssembly(patch_tokens=patch_tokens)
 
 
@@ -646,49 +594,8 @@ def _official_dino_pos_embed(
     pos_embed: mx.array,
     patch_grid: tuple[int, int],
 ) -> tuple[mx.array | None, HyWorld2WorldMirrorBlocker | None]:
-    patch_count = patch_grid[0] * patch_grid[1]
-    expected = patch_count + 1
-    if int(pos_embed.shape[1]) == expected:
-        return pos_embed, None
-    stored_patch_count = int(pos_embed.shape[1]) - 1
-    stored_side = int(stored_patch_count**0.5)
-    if stored_side * stored_side != stored_patch_count:
-        return None, _blocker(
-            "model-construction",
-            "HY-World DINO positional embedding interpolation",
-            "checkpoint DINO positional embedding does not contain a square patch grid",
-            {
-                "checkpoint_pos_embed_shape": tuple(pos_embed.shape),
-                "checkpoint_patch_grid": stored_patch_count,
-                "requested_patch_grid": patch_grid,
-            },
-        )
-    try:
-        from scipy import ndimage
-    except ModuleNotFoundError:
-        return None, _blocker(
-            "model-construction",
-            "HY-World DINO positional embedding interpolation",
-            "scipy is required for exact bicubic DINO positional embedding interpolation",
-            {
-                "checkpoint_pos_embed_shape": tuple(pos_embed.shape),
-                "checkpoint_patch_grid": (stored_side, stored_side),
-                "requested_patch_grid": patch_grid,
-            },
-        )
-    pos_np = np.array(pos_embed, dtype=np.float32)
-    cls_pos = pos_np[:, :1, :]
-    patch_pos = pos_np[:, 1:, :].reshape((stored_side, stored_side, int(pos_embed.shape[-1])))
-    resized = ndimage.zoom(
-        patch_pos,
-        (patch_grid[0] / stored_side, patch_grid[1] / stored_side, 1.0),
-        order=3,
-        mode="nearest",
-        prefilter=True,
-    )
-    resized = _fit_resized_pos_embed(resized, patch_grid)
-    patch_tokens = resized.reshape((1, patch_grid[0] * patch_grid[1], int(pos_embed.shape[-1])))
-    return mx.array(np.concatenate((cls_pos, patch_tokens), axis=1), dtype=pos_embed.dtype), None
+    result, blocker = interpolate_dino_pos_embed(pos_embed, patch_grid)
+    return result, _coerce_blocker(blocker)
 
 
 def _fit_resized_pos_embed(values: np.ndarray, patch_grid: tuple[int, int]) -> np.ndarray:
@@ -708,47 +615,15 @@ def _run_dino_transformer_block(
     *,
     block_index: int,
 ) -> HyWorld2AttentionOutput:
-    layer = f"patch_embed.blocks.{block_index}"
-    required = _transformer_block_required_keys(layer, tensors)
-    missing = tuple(key for key in required if key not in tensors)
-    if missing:
-        return HyWorld2AttentionOutput(
-            blocker=_blocker(
-                "visual-transformer",
-                "HY-World DINO transformer block tensor lookup",
-                f"missing tensor for DINO block: {missing[0]}",
-                {"missing": missing, "block_index": block_index},
-            )
-        )
-
-    residual = hidden_states
-    normalized = _layer_norm(
+    result, blocker = run_dino_block(
         hidden_states,
-        tensors[f"{layer}.norm1.weight"],
-        tensors[f"{layer}.norm1.bias"],
-        eps=1e-6,
-    )
-    attended = _self_attention(
-        normalized,
         config,
         tensors,
-        layer_index=block_index,
-        mode="patch_embed.blocks",
-        rope_positions=None,
+        block_index=block_index,
     )
-    if attended.blocker is not None or attended.hidden_states is None:
-        return attended
-    hidden_states = residual + _apply_layer_scale(attended.hidden_states, tensors.get(f"{layer}.ls1.gamma"))
-
-    residual = hidden_states
-    normalized = _layer_norm(
-        hidden_states,
-        tensors[f"{layer}.norm2.weight"],
-        tensors[f"{layer}.norm2.bias"],
-        eps=1e-6,
-    )
-    mlp = _block_mlp(normalized, layer, tensors)
-    return HyWorld2AttentionOutput(hidden_states=residual + _apply_layer_scale(mlp, tensors.get(f"{layer}.ls2.gamma")))
+    if blocker is not None:
+        return HyWorld2AttentionOutput(blocker=_coerce_blocker(blocker))
+    return HyWorld2AttentionOutput(hidden_states=result)
 
 
 def _run_transformer_block(
@@ -760,56 +635,17 @@ def _run_transformer_block(
     mode: str,
     rope_positions: mx.array | None,
 ) -> HyWorld2AttentionOutput:
-    if config.embed_dim % config.num_heads:
-        return HyWorld2AttentionOutput(
-            blocker=_blocker(
-                "visual-transformer",
-                "HY-World attention head dimension validation",
-                f"embed_dim={config.embed_dim} is not divisible by num_heads={config.num_heads}",
-                {"embed_dim": config.embed_dim, "num_heads": config.num_heads},
-            )
-        )
-    layer = f"{mode}_blocks.{layer_index}"
-    required = _transformer_block_required_keys(layer, tensors)
-    missing = tuple(key for key in required if key not in tensors)
-    if missing:
-        return HyWorld2AttentionOutput(
-            blocker=_blocker(
-                "visual-transformer",
-                "HY-World transformer block tensor lookup",
-                f"missing tensor for VisualGeometryTransformer block: {missing[0]}",
-                {"missing": missing, "layer_index": layer_index},
-            )
-        )
-
-    residual = hidden_states
-    normalized = _layer_norm(
+    result, blocker = run_vgt_block(
         hidden_states,
-        tensors[f"{layer}.norm1.weight"],
-        tensors[f"{layer}.norm1.bias"],
-        eps=config.layer_norm_eps,
-    )
-    attended = _self_attention(
-        normalized,
         config,
         tensors,
         layer_index=layer_index,
         mode=mode,
         rope_positions=rope_positions,
     )
-    if attended.blocker is not None or attended.hidden_states is None:
-        return attended
-    hidden_states = residual + _apply_layer_scale(attended.hidden_states, tensors.get(f"{layer}.ls1.gamma"))
-
-    residual = hidden_states
-    normalized = _layer_norm(
-        hidden_states,
-        tensors[f"{layer}.norm2.weight"],
-        tensors[f"{layer}.norm2.bias"],
-        eps=config.layer_norm_eps,
-    )
-    mlp = _block_mlp(normalized, layer, tensors)
-    return HyWorld2AttentionOutput(hidden_states=residual + _apply_layer_scale(mlp, tensors.get(f"{layer}.ls2.gamma")))
+    if blocker is not None:
+        return HyWorld2AttentionOutput(blocker=_coerce_blocker(blocker))
+    return HyWorld2AttentionOutput(hidden_states=result)
 
 
 def _self_attention(
@@ -1238,4 +1074,17 @@ def _blocker(
         operation=operation,
         reason=reason,
         metadata=metadata,
+    )
+
+
+def _coerce_blocker(blocker: object | None) -> HyWorld2WorldMirrorBlocker | None:
+    if blocker is None:
+        return None
+    if isinstance(blocker, HyWorld2WorldMirrorBlocker):
+        return blocker
+    return _blocker(
+        str(getattr(blocker, "stage", "visual-transformer")),
+        str(getattr(blocker, "operation", "HY-World WorldMirror integration")),
+        str(getattr(blocker, "reason", "unknown HY-World integration blocker")),
+        dict(getattr(blocker, "metadata", {})),
     )

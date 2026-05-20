@@ -67,6 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("image")
     reconstruct_parser.add_argument("--mask", required=True)
     reconstruct_parser.add_argument("--moge-root", default=SAM3D_MOGE_DEFAULT_ROOT)
+    reconstruct_parser.add_argument("--pointmap", help="optional external .npy/.npz pointmap input")
     reconstruct_parser.add_argument("--output", required=True)
     reconstruct_parser.add_argument("--glb-output")
     reconstruct_parser.add_argument("--seed", type=int, default=42)
@@ -188,6 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=args.output,
                 glb_output_path=args.glb_output,
                 moge_root=args.moge_root,
+                pointmap_path=args.pointmap,
                 seed=args.seed,
                 stage1_steps=args.stage1_steps,
                 stage2_steps=args.stage2_steps,

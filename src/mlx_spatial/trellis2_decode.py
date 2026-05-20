@@ -21,6 +21,13 @@ STRUCTURED_LATENT_DECODER_BASE_TENSOR_NAMES = (
     "output_layer.bias",
 )
 
+STRUCTURED_LATENT_ENCODER_BASE_TENSOR_NAMES = (
+    "input_layer.weight",
+    "input_layer.bias",
+    "to_latent.weight",
+    "to_latent.bias",
+)
+
 STRUCTURED_LATENT_DECODER_TENSOR_NAMES = STRUCTURED_LATENT_DECODER_BASE_TENSOR_NAMES + (
     "blocks.0.0.conv.weight",
     "blocks.0.0.conv.bias",
@@ -47,6 +54,80 @@ class StructuredLatentDecoderConfig:
     out_channels: int
     resolution: int | None = None
     pred_subdiv: bool | None = None
+
+
+@dataclass(frozen=True)
+class StructuredLatentEncoderConfig:
+    name: str
+    in_channels: int
+    latent_channels: int
+    model_channels: tuple[int, ...]
+    num_blocks: tuple[int, ...]
+    block_type: tuple[str, ...]
+    down_block_type: tuple[str, ...]
+    use_fp16: bool
+
+
+@dataclass(frozen=True)
+class StructuredLatentEncoderProbe:
+    checkpoint_path: str
+    encoder_name: str
+    coordinate_shape: tuple[int, int]
+    vertex_shape: tuple[int, int]
+    intersected_shape: tuple[int, int]
+    input_feature_shape: tuple[int, int]
+    input_projection_shape: tuple[int, int]
+    completed_levels: int
+    first_downblock_coordinate_shape: tuple[int, int] | None
+    first_downblock_output_shape: tuple[int, int] | None
+    latent_feature_shape: tuple[int, int]
+    mean_shape: tuple[int, int]
+    logvar_shape: tuple[int, int]
+    loaded_tensor_names: tuple[str, ...]
+    inspected_tensor_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FlexiDualGridEncoderResult:
+    coordinates: mx.array
+    features: mx.array
+    mean: mx.array
+    logvar: mx.array
+    probe: StructuredLatentEncoderProbe
+
+
+@dataclass(frozen=True)
+class _StructuredLatentEncoderExecution:
+    coordinates: mx.array
+    features: mx.array
+    completed_levels: int
+    first_downblock_coordinate_shape: tuple[int, int] | None
+    first_downblock_output_shape: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class FlexiDualGridVaeEncoder:
+    """Callable MLX contract for the TRELLIS.2 mesh-to-shape-SLat encoder."""
+
+    checkpoint_path: str | Path
+    config: StructuredLatentEncoderConfig
+
+    def __call__(
+        self,
+        coordinates: mx.array,
+        dual_vertices: mx.array,
+        intersected: mx.array,
+        *,
+        sample_posterior: bool = False,
+    ) -> FlexiDualGridEncoderResult:
+        return run_flexi_dual_grid_vae_encoder(
+            self.checkpoint_path,
+            self.config,
+            coordinates,
+            dual_vertices,
+            intersected,
+            sample_posterior=sample_posterior,
+        )
 
 
 @dataclass(frozen=True)
@@ -162,6 +243,39 @@ def read_structured_latent_decoder_config(root: str | Path, config_path: str) ->
         raise
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise ValueError(f"structured latent decoder config is invalid: {error}") from error
+
+
+def read_structured_latent_encoder_config(root: str | Path, config_path: str) -> StructuredLatentEncoderConfig:
+    path = Path(root) / config_path
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        args = payload["args"]
+        name = str(payload["name"])
+        model_channels = tuple(int(value) for value in args["model_channels"])
+        num_blocks = tuple(int(value) for value in args["num_blocks"])
+        block_type = tuple(str(value) for value in args["block_type"])
+        down_block_type = tuple(str(value) for value in args["down_block_type"])
+        if not model_channels or len(model_channels) != len(num_blocks) or len(model_channels) != len(block_type):
+            raise ValueError("model_channels, num_blocks, and block_type must be non-empty with equal length")
+        if len(down_block_type) != len(model_channels) - 1:
+            raise ValueError("down_block_type length must be one less than model_channels")
+        in_channels = int(args.get("in_channels", 6 if name == "FlexiDualGridVaeEncoder" else 0))
+        if in_channels <= 0:
+            raise ValueError("encoder in_channels must be positive")
+        return StructuredLatentEncoderConfig(
+            name=name,
+            in_channels=in_channels,
+            latent_channels=int(args["latent_channels"]),
+            model_channels=model_channels,
+            num_blocks=num_blocks,
+            block_type=block_type,
+            down_block_type=down_block_type,
+            use_fp16=bool(args.get("use_fp16", False)),
+        )
+    except FileNotFoundError:
+        raise
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"structured latent encoder config is invalid: {error}") from error
 
 
 def probe_structured_latent_decoder_boundary(
@@ -350,6 +464,87 @@ def probe_decode_latents_boundary(
             "next unported component is large-token sparse ConvNeXt/up-block decoder execution, followed by "
             "FlexiDualGrid mesh extraction and real-token texture voxel decoding"
         ),
+    )
+
+
+def run_flexi_dual_grid_vae_encoder(
+    checkpoint_path: str | Path,
+    config: StructuredLatentEncoderConfig,
+    coordinates: mx.array,
+    dual_vertices: mx.array,
+    intersected: mx.array,
+    *,
+    sample_posterior: bool = False,
+) -> FlexiDualGridEncoderResult:
+    """Run the TRELLIS.2 FlexiDualGrid encoder on prepared dual-grid tensors."""
+
+    if config.name != "FlexiDualGridVaeEncoder":
+        raise ValueError(f"shape encoder must be FlexiDualGridVaeEncoder, got {config.name}")
+    if config.in_channels != 6:
+        raise ValueError(f"FlexiDualGridVaeEncoder expects 6 input channels, got {config.in_channels}")
+    coordinate_shape, vertex_shape, intersected_shape = _validate_flexi_dual_grid_encoder_inputs(
+        coordinates,
+        dual_vertices,
+        intersected,
+    )
+    input_features = mx.concatenate(
+        (
+            dual_vertices.astype(mx.float32) - 0.5,
+            intersected.astype(mx.float32) - 0.5,
+        ),
+        axis=1,
+    )
+    tensor_names = _structured_latent_encoder_tensor_names(config)
+    tensors = load_checkpoint_tensors(checkpoint_path, names=tensor_names)
+    infos = inspect_checkpoint(checkpoint_path, names=tensor_names)
+    _require_checkpoint_infos(infos, tensor_names)
+    _validate_tensor_shape("input_layer.weight", tensors["input_layer.weight"].shape, (config.model_channels[0], config.in_channels))
+    _validate_tensor_shape("input_layer.bias", tensors["input_layer.bias"].shape, (config.model_channels[0],))
+    _validate_tensor_shape("to_latent.weight", tensors["to_latent.weight"].shape, (2 * config.latent_channels, config.model_channels[-1]))
+    _validate_tensor_shape("to_latent.bias", tensors["to_latent.bias"].shape, (2 * config.latent_channels,))
+
+    projected = _linear_chunked(
+        input_features.astype(tensors["input_layer.weight"].dtype),
+        tensors["input_layer.weight"],
+        tensors["input_layer.bias"],
+    )
+    mx.eval(projected)
+    execution = _run_sparse_unet_encoder_reference(config, coordinates, projected, tensors)
+    latent_raw = _linear_chunked(
+        _layer_norm_no_affine(execution.features.astype(mx.float32), eps=1e-5),
+        tensors["to_latent.weight"].astype(mx.float32),
+        tensors["to_latent.bias"].astype(mx.float32),
+    )
+    mean, logvar = mx.split(latent_raw, 2, axis=1)
+    if sample_posterior:
+        std = mx.exp(0.5 * logvar)
+        features = mean + std * mx.random.normal(mean.shape, dtype=mean.dtype)
+    else:
+        features = mean
+    mx.eval(features, mean, logvar)
+    probe = StructuredLatentEncoderProbe(
+        checkpoint_path=str(checkpoint_path),
+        encoder_name=config.name,
+        coordinate_shape=coordinate_shape,
+        vertex_shape=vertex_shape,
+        intersected_shape=intersected_shape,
+        input_feature_shape=tuple(int(dim) for dim in input_features.shape),
+        input_projection_shape=tuple(int(dim) for dim in projected.shape),
+        completed_levels=execution.completed_levels,
+        first_downblock_coordinate_shape=execution.first_downblock_coordinate_shape,
+        first_downblock_output_shape=execution.first_downblock_output_shape,
+        latent_feature_shape=tuple(int(dim) for dim in features.shape),
+        mean_shape=tuple(int(dim) for dim in mean.shape),
+        logvar_shape=tuple(int(dim) for dim in logvar.shape),
+        loaded_tensor_names=tuple(name for name in tensor_names if name in tensors),
+        inspected_tensor_names=tuple(info.name for info in infos),
+    )
+    return FlexiDualGridEncoderResult(
+        coordinates=execution.coordinates,
+        features=features,
+        mean=mean,
+        logvar=logvar,
+        probe=probe,
     )
 
 
@@ -728,6 +923,173 @@ def _can_run_first_upblock(config: StructuredLatentDecoderConfig) -> bool:
         and config.up_block_type[0] == "SparseResBlockC2S3d"
         and bool(config.pred_subdiv)
     )
+
+
+def _structured_latent_encoder_tensor_names(config: StructuredLatentEncoderConfig) -> tuple[str, ...]:
+    names = list(STRUCTURED_LATENT_ENCODER_BASE_TENSOR_NAMES)
+    for level_index, block_count in enumerate(config.num_blocks):
+        if config.block_type[level_index] != "SparseConvNeXtBlock3d":
+            raise ValueError(f"unsupported encoder block type: {config.block_type[level_index]}")
+        for block_index in range(block_count):
+            prefix = f"blocks.{level_index}.{block_index}"
+            names.extend(
+                (
+                    f"{prefix}.conv.weight",
+                    f"{prefix}.conv.bias",
+                    f"{prefix}.norm.weight",
+                    f"{prefix}.norm.bias",
+                    f"{prefix}.mlp.0.weight",
+                    f"{prefix}.mlp.0.bias",
+                    f"{prefix}.mlp.2.weight",
+                    f"{prefix}.mlp.2.bias",
+                )
+            )
+        if level_index < len(config.num_blocks) - 1:
+            if config.down_block_type[level_index] != "SparseResBlockS2C3d":
+                raise ValueError(f"unsupported encoder down-block type: {config.down_block_type[level_index]}")
+            prefix = f"blocks.{level_index}.{block_count}"
+            names.extend(
+                (
+                    f"{prefix}.norm1.weight",
+                    f"{prefix}.norm1.bias",
+                    f"{prefix}.conv1.weight",
+                    f"{prefix}.conv1.bias",
+                    f"{prefix}.conv2.weight",
+                    f"{prefix}.conv2.bias",
+                )
+            )
+    return tuple(names)
+
+
+def _validate_flexi_dual_grid_encoder_inputs(
+    coordinates: mx.array,
+    dual_vertices: mx.array,
+    intersected: mx.array,
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+    coordinate_shape = tuple(int(dim) for dim in coordinates.shape)
+    vertex_shape = tuple(int(dim) for dim in dual_vertices.shape)
+    intersected_shape = tuple(int(dim) for dim in intersected.shape)
+    if coordinate_shape[1:] != (4,) or len(coordinate_shape) != 2:
+        raise ValueError(f"FlexiDualGrid encoder coordinates must have shape (num_tokens, 4), got {coordinate_shape}")
+    expected_feature_shape = (coordinate_shape[0], 3)
+    if vertex_shape != expected_feature_shape:
+        raise ValueError(f"FlexiDualGrid dual_vertices must have shape {expected_feature_shape}, got {vertex_shape}")
+    if intersected_shape != expected_feature_shape:
+        raise ValueError(f"FlexiDualGrid intersected must have shape {expected_feature_shape}, got {intersected_shape}")
+    if coordinate_shape[0] == 0:
+        raise ValueError("FlexiDualGrid encoder requires at least one token")
+    if bool(mx.any(coordinates[:, 1:].astype(mx.int32) < 0).item()):
+        raise ValueError("FlexiDualGrid encoder spatial coordinates must be non-negative")
+    return coordinate_shape, vertex_shape, intersected_shape
+
+
+def _run_sparse_unet_encoder_reference(
+    config: StructuredLatentEncoderConfig,
+    coordinates: mx.array,
+    projected: mx.array,
+    tensors: dict[str, mx.array],
+) -> _StructuredLatentEncoderExecution:
+    current_coordinates = coordinates
+    current_features = projected.astype(mx.float32)
+    completed_levels = 0
+    first_downblock_coordinate_shape = None
+    first_downblock_output_shape = None
+    for level_index, block_count in enumerate(config.num_blocks):
+        for block_index in range(block_count):
+            current_features = _sparse_convnext_block_forward(
+                current_coordinates,
+                current_features,
+                tensors,
+                prefix=f"blocks.{level_index}.{block_index}",
+            )
+            mx.eval(current_features)
+        completed_levels = level_index + 1
+        if level_index >= len(config.num_blocks) - 1:
+            continue
+        current_coordinates, current_features = _sparse_s2c_downblock_forward(
+            current_coordinates,
+            current_features,
+            tensors,
+            prefix=f"blocks.{level_index}.{block_count}",
+            in_channels=config.model_channels[level_index],
+            out_channels=config.model_channels[level_index + 1],
+        )
+        mx.eval(current_coordinates, current_features)
+        if level_index == 0:
+            first_downblock_coordinate_shape = tuple(int(dim) for dim in current_coordinates.shape)
+            first_downblock_output_shape = tuple(int(dim) for dim in current_features.shape)
+    return _StructuredLatentEncoderExecution(
+        coordinates=current_coordinates,
+        features=current_features,
+        completed_levels=completed_levels,
+        first_downblock_coordinate_shape=first_downblock_coordinate_shape,
+        first_downblock_output_shape=first_downblock_output_shape,
+    )
+
+
+def _sparse_s2c_downblock_forward(
+    coordinates: mx.array,
+    features: mx.array,
+    tensors: dict[str, mx.array],
+    *,
+    prefix: str,
+    in_channels: int,
+    out_channels: int,
+) -> tuple[mx.array, mx.array]:
+    if int(features.shape[1]) != in_channels:
+        raise ValueError(f"S2C down-block expected {in_channels} input channels, got {int(features.shape[1])}")
+    if out_channels % 8 != 0:
+        raise ValueError(f"S2C down-block output channels must be divisible by 8, got {out_channels}")
+    normalized = _layer_norm(
+        features.astype(mx.float32),
+        tensors[f"{prefix}.norm1.weight"].astype(mx.float32),
+        tensors[f"{prefix}.norm1.bias"].astype(mx.float32),
+        eps=1e-6,
+    )
+    hidden = _silu(normalized)
+    hidden = _sparse_conv3d_forward(coordinates, hidden, tensors, prefix=f"{prefix}.conv1")
+    down_coordinates, hidden = _spatial_to_channel(coordinates, hidden)
+    skip_coordinates, skip_features = _spatial_to_channel(coordinates, features.astype(mx.float32))
+    if tuple(down_coordinates.tolist()) != tuple(skip_coordinates.tolist()):
+        raise ValueError("S2C down-block skip coordinates do not match hidden coordinates")
+
+    hidden = _layer_norm_no_affine(hidden, eps=1e-6)
+    hidden = _silu(hidden)
+    hidden = _sparse_conv3d_forward(down_coordinates, hidden, tensors, prefix=f"{prefix}.conv2")
+
+    skip_width = int(skip_features.shape[1])
+    if skip_width % out_channels != 0:
+        raise ValueError(f"S2C down-block cannot reduce skip width {skip_width} to {out_channels} channels")
+    skip_features = mx.mean(mx.reshape(skip_features, (int(skip_features.shape[0]), out_channels, skip_width // out_channels)), axis=-1)
+    return down_coordinates, hidden + skip_features
+
+
+def _spatial_to_channel(coordinates: mx.array, features: mx.array) -> tuple[mx.array, mx.array]:
+    coordinate_shape = tuple(int(dim) for dim in coordinates.shape)
+    feature_shape = tuple(int(dim) for dim in features.shape)
+    if coordinate_shape[1:] != (4,) or len(coordinate_shape) != 2:
+        raise ValueError(f"S2C coordinates must have shape (num_tokens, 4), got {coordinate_shape}")
+    if len(feature_shape) != 2 or feature_shape[0] != coordinate_shape[0]:
+        raise ValueError(f"S2C features must have shape ({coordinate_shape[0]}, channels), got {feature_shape}")
+
+    coords_np = np.array(coordinates.tolist(), dtype=np.int32)
+    parent_np = coords_np.copy()
+    parent_np[:, 1:] //= 2
+    child_indices = (
+        (coords_np[:, 1] % 2)
+        + 2 * (coords_np[:, 2] % 2)
+        + 4 * (coords_np[:, 3] % 2)
+    ).astype(np.int64)
+    parent_keys = sorted({tuple(int(value) for value in row) for row in parent_np.tolist()})
+    parent_index = {key: index for index, key in enumerate(parent_keys)}
+    output = np.zeros((len(parent_keys), feature_shape[1] * 8), dtype=np.float32)
+    source_features = np.array(features.tolist(), dtype=np.float32)
+    for row_index, parent in enumerate(parent_np.tolist()):
+        key = tuple(int(value) for value in parent)
+        child = int(child_indices[row_index])
+        start = child * feature_shape[1]
+        output[parent_index[key], start : start + feature_shape[1]] = source_features[row_index]
+    return mx.array(np.asarray(parent_keys, dtype=np.int32), dtype=mx.int32), mx.array(output, dtype=features.dtype)
 
 
 def _run_sparse_unet_decoder_reference(

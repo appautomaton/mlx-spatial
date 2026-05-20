@@ -8,6 +8,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Sequence
 
+import mlx.core as mx
+
 from .hyworld2_assets import (
     HYWORLD2_DEFAULT_ROOT,
     HYWORLD2_REPO_ID,
@@ -61,6 +63,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("--trace-output")
     reconstruct_parser.add_argument("--fixture-tensors", action="store_true")
     reconstruct_parser.add_argument(
+        "--mlx-device",
+        choices=("default", "cpu", "gpu"),
+        default="default",
+        help="MLX device for the reconstruction process; use cpu for Torch CPU parity checks",
+    )
+    reconstruct_parser.add_argument(
         "--parity-output",
         help="optional MLX tensor bundle for dev-only PyTorch parity comparison",
     )
@@ -106,15 +114,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             heads = normalize_hyworld2_heads(args.heads)
         except ValueError as error:
             parser.error(str(error))
-        result = HyWorld2InferencePipeline(args.reconstruct_root).reconstruct(
-            args.input,
-            output_path=args.output,
-            heads=heads,
-            memory_profile=args.memory_profile,
-            fixture_tensors=args.fixture_tensors,
-            parity_output_path=args.parity_output,
-        )
+        previous_device = _set_mlx_device(args.mlx_device)
+        try:
+            result = HyWorld2InferencePipeline(args.reconstruct_root).reconstruct(
+                args.input,
+                output_path=args.output,
+                heads=heads,
+                memory_profile=args.memory_profile,
+                fixture_tensors=args.fixture_tensors,
+                parity_output_path=args.parity_output,
+            )
+        finally:
+            if previous_device is not None:
+                mx.set_default_device(previous_device)
         trace = result.trace
+        trace.metadata["mlx_device"] = args.mlx_device
         payload = _jsonable(trace)
         if args.trace_output:
             trace_output = Path(args.trace_output)
@@ -159,6 +173,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if report.passed else 1
 
     parser.error(f"unsupported command: {args.command}")
+
+
+def _set_mlx_device(device: str):
+    if device == "default":
+        return None
+    previous = mx.default_device()
+    mx.set_default_device(mx.cpu if device == "cpu" else mx.gpu)
+    return previous
 
 
 def _print_validation(validation) -> None:

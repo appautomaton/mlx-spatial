@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
@@ -124,6 +125,7 @@ class HyWorld2InferencePipeline:
         requested_heads = normalize_hyworld2_heads(heads)
         execution_heads = _execution_heads_for_hyworld2(requested_heads)
         profile = memory_profile_config(memory_profile)
+        timing = _HyWorld2MlxTraceTimer()
         reset_mlx_peak_memory()
         memory_snapshots: dict[str, dict[str, int | None]] = {"start": mlx_memory_snapshot().as_dict()}
         head_status = _initial_head_status(requested_heads)
@@ -152,6 +154,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -176,6 +179,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -184,6 +188,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("asset-validation")
+        timing.record_stage("asset-validation")
 
         if not input_root.exists():
             return HyWorld2ReconstructionResult(
@@ -200,6 +205,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -208,6 +214,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("input-discovery")
+        timing.record_stage("input-discovery")
 
         try:
             preprocessed = preprocess_hyworld2_images(input_root, memory_profile=memory_profile)
@@ -227,6 +234,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -235,6 +243,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("image-preprocessing")
+        timing.record_stage("image-preprocessing")
         parity_tensors["input.imgs"] = preprocessed.tensor
         _release_hyworld_mlx_stage(memory_snapshots, "after-image-preprocessing")
 
@@ -256,6 +265,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -266,6 +276,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("checkpoint-inspection")
+        timing.record_stage("checkpoint-inspection")
 
         if "gs" in requested_heads:
             head_status["gs"] = {
@@ -291,6 +302,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -323,6 +335,7 @@ class HyWorld2InferencePipeline:
                         validation=validation,
                         input_path=input_root,
                         output_path=output_dir,
+                        timing=timing,
                         metadata={
                             "memory_profile": _profile_metadata(profile),
                             "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -334,6 +347,7 @@ class HyWorld2InferencePipeline:
                     )
                 )
         completed.append("model-construction")
+        timing.record_stage("model-construction")
 
         intermediate_layers = _intermediate_layers_for_hyworld2(model_config.model_size, model_config.depth, fixture_tensors)
         transformer_config = VisualGeometryTransformerConfig.from_model_config(
@@ -356,6 +370,7 @@ class HyWorld2InferencePipeline:
                     validation=validation,
                     input_path=input_root,
                     output_path=output_dir,
+                    timing=timing,
                     metadata={
                         "memory_profile": _profile_metadata(profile),
                         "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -367,6 +382,7 @@ class HyWorld2InferencePipeline:
                 )
             )
         completed.append("visual-transformer")
+        timing.record_stage("visual-transformer")
         if backbone.patch_start_idx is not None:
             parity_tensors["vgt.patch_start_idx"] = mx.array([backbone.patch_start_idx], dtype=mx.int32)
         for index, tokens in enumerate(backbone.intermediate_full_tokens or backbone.intermediate_tokens):
@@ -447,6 +463,7 @@ class HyWorld2InferencePipeline:
                         validation=validation,
                         input_path=input_root,
                         output_path=output_dir,
+                        timing=timing,
                         metadata={
                             "memory_profile": _profile_metadata(profile),
                             "official_defaults": _official_defaults_metadata(memory_profile, profile),
@@ -469,6 +486,7 @@ class HyWorld2InferencePipeline:
                     del renderer_tensors
             _release_hyworld_mlx_stage(memory_snapshots, f"after-head-{head}")
         completed.append("head-execution")
+        timing.record_stage("head-execution")
         if not fixture_tensors:
             del real_head_tensors, real_tensors
         _release_hyworld_mlx_stage(memory_snapshots, "after-head-execution")
@@ -533,6 +551,7 @@ class HyWorld2InferencePipeline:
                 head_status[dependency]["export"] = False
                 head_status[dependency]["reason"] = "executed as required dependency for official GS export"
         completed.append("export")
+        timing.record_stage("export")
 
         blocker = None
         parity_metadata = hyworld2_parity_trace_metadata()
@@ -564,6 +583,7 @@ class HyWorld2InferencePipeline:
             input_path=input_root,
             output_path=output_dir,
             outputs=tuple(output_records),
+            timing=timing,
             metadata={
                 "memory_profile": _profile_metadata(profile),
                 "input": _preprocess_metadata(preprocessed),
@@ -613,8 +633,15 @@ class HyWorld2InferencePipeline:
         input_path: Path,
         output_path: Path,
         outputs: Sequence[HyWorld2StageOutput] = (),
+        timing: _HyWorld2MlxTraceTimer | None = None,
         metadata: dict[str, object] | None = None,
     ) -> HyWorld2ReconstructionTrace:
+        trace_metadata = dict(metadata or {})
+        if timing is not None:
+            trace_metadata.setdefault(
+                "mlx_timing",
+                timing.metadata(completed_stages, blocker),
+            )
         return HyWorld2ReconstructionTrace(
             completed_stages=tuple(completed_stages),
             outputs=tuple(outputs),
@@ -628,7 +655,7 @@ class HyWorld2InferencePipeline:
             config_kind=validation.config_kind,
             input_path=input_path,
             output_path=output_path,
-            metadata=_truthful_metadata(metadata or {}),
+            metadata=_truthful_metadata(trace_metadata),
         )
 
 
@@ -717,6 +744,44 @@ def _truthful_metadata(metadata: dict[str, object]) -> dict[str, object]:
     enriched = dict(metadata)
     enriched.setdefault("parity", hyworld2_parity_trace_metadata())
     return enriched
+
+
+class _HyWorld2MlxTraceTimer:
+    def __init__(self) -> None:
+        self._started_at = time.perf_counter()
+        self._last_stage_at = self._started_at
+        self._stage_elapsed: dict[str, float] = {}
+
+    def record_stage(self, stage: str) -> None:
+        now = time.perf_counter()
+        self._stage_elapsed[stage] = max(0.0, now - self._last_stage_at)
+        self._last_stage_at = now
+
+    def metadata(
+        self,
+        completed_stages: Sequence[str],
+        blocker: HyWorld2Blocker | None,
+    ) -> dict[str, object]:
+        now = time.perf_counter()
+        stage_elapsed = {
+            stage: self._stage_elapsed[stage]
+            for stage in completed_stages
+            if stage in self._stage_elapsed
+        }
+        return {
+            "runtime": "mlx",
+            "timing_source": "local_mlx_time_perf_counter",
+            "clock": "time.perf_counter",
+            "source_reference_timings_included": False,
+            "source_reference_status": "blocked_or_not_run_by_mlx_trace",
+            "total_elapsed_seconds": max(0.0, now - self._started_at),
+            "stage_elapsed_seconds": stage_elapsed,
+            "completed_stages": tuple(completed_stages),
+            "blocker_stage": blocker.stage if blocker is not None else None,
+            "successful_inference": blocker is None,
+            "speed_parity_claimed": False,
+            "numeric_parity_claimed": False,
+        }
 
 
 def _release_hyworld_mlx_stage(memory_snapshots: dict[str, dict[str, int | None]], label: str) -> None:
