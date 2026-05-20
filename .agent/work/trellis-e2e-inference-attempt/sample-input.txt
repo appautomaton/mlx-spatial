@@ -1,1 +1,0 @@
-local placeholder image input for inference attempt path validation

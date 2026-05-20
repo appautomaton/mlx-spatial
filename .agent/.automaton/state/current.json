@@ -1,22 +1,6 @@
 {
-  "active_change": "sam3d-mlx-mesh-decoder-algorithm-parity",
-  "stage": "complete",
-  "canonical_spec": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/SPEC.md",
-  "canonical_design": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/DESIGN.md",
-  "canonical_plan": ".agent/work/sam3d-mlx-mesh-decoder-algorithm-parity/PLAN.md",
-  "engineering_review": "approved_with_risks",
-  "what_is_true_now": [
-    "Slices 1-7 are complete.",
-    "Live SAM3D human-object reconstruction wrote `outputs/sam3d/human-object/gaussians.ply` and `outputs/sam3d/human-object/mesh.glb` with trace reaching `glb-export` and no blocker.",
-    "Blender headless import, focused SAM3D tests, full pytest, and diff check passed."
-  ],
-  "next_step": "Prepare commit cleanup/review for the completed SAM3D mesh decoder algorithm parity change.",
-  "open_risks": [
-    "The basic GLB is geometry plus vertex color only; official-quality layout optimization and textured/material postprocess remain future work.",
-    "Large mesh extraction requires the `large` memory profile on this 128 GB machine."
-  ],
-  "previous_change": "hyworld2-worldmirror-mlx-inference",
-  "previous_spec": ".agent/work/hyworld2-worldmirror-mlx-inference/SPEC.md",
-  "previous_plan": ".agent/work/hyworld2-worldmirror-mlx-inference/PLAN.md",
-  "previous_stage": "complete"
+  "active_change": "2026-05-20-production-pipeline-parity",
+  "stage": "plan",
+  "canonical_spec": ".agent/work/2026-05-20-production-pipeline-parity/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-20-production-pipeline-parity/PLAN.md"
 }

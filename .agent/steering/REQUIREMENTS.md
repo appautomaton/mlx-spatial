@@ -1,42 +1,84 @@
 # Requirements
 
-## Observed Constraints
+## Product Commitments
 
-- The root project has no package manifest, source tree, tests, or README observed yet, so implementation planning must begin by defining the library boundary.
-- Vendored projects are multiple independent upstream/reference projects and should not be treated as one coherent root application.
-- The current reference corpus spans at least four capability areas: image-to-3D generation, object reconstruction, geometric prediction, and Apple Silicon porting patterns.
-- `trellis-mac` targets macOS Apple Silicon with Python 3.11+, PyTorch MPS, optional Metal tooling, and documented fallbacks.
-- `TRELLIS.2` documents Linux/NVIDIA/CUDA assumptions and should be treated as an upstream CUDA-first reference.
-- `sam-3d-objects` is separately packaged as `sam3d_objects` using Hatch/Hatchling and dynamic requirements files.
+### Observed
 
-## Inferred Constraints
+- MLX-first inference: all model pipelines must run on Apple Silicon via `mlx` without PyTorch or CUDA at runtime (`README.md:1-4`).
+- Maintain speed and quality of original reference implementations (user-stated goal).
+- Exact-mode staged pipelines: incomplete stages produce structured blockers rather than silent approximations (`README.md:194-195`).
+- Local-only weight management: no automatic downloads during import, tests, or inference (`README.md:177`).
+- Deterministic, reproducible outputs: explicit ordering contracts on sparse conv, topology, and mesh operations.
+- Three model pipelines must produce outputs comparable to their PyTorch originals: TRELLIS.2 (shape OBJ + textured GLB), SAM 3D Objects (Gaussian PLY + textured GLB), HY-World 2.0 (multi-view heads).
 
-- First-party implementation should avoid importing vendor code directly until licensing, API, and porting scope are decided.
-- MLX should be the target runtime for new library code, with vendor PyTorch/CUDA/MPS code used as behavioral and architectural reference.
-- Early work should prioritize a narrow slice that can be verified locally on Apple Silicon before attempting broad model coverage.
+### Inferred
 
-## Unknowns
+- Performance should approach or match PyTorch-on-CUDA baselines on equivalent Apple Silicon hardware.
+- The library should remain usable as both a CLI tool and a Python library import.
 
-- Root package name and module layout.
-- Initial model target: TRELLIS/O-Voxel, SAM 3D object reconstruction, Hunyuan geometric prediction, or shared spatial primitives.
-- Supported hardware floor, memory floor, and acceptable fallbacks.
-- Test strategy for numerical parity, shape contracts, and asset output quality.
-- License compatibility for adapting code, weights, configs, or assets from vendored projects.
-- Whether downloaded checkpoints or generated assets should be managed inside or outside the repository.
+### Needs Confirmation
 
-## Non-Goals For Now
+- Specific performance targets or benchmarks (e.g., "within X% of reference timing on M-series chip Y").
+- Whether the HY-World 2.0 parity flag (`numeric_parity_verified=false`) should become `true` for release.
 
-- Do not claim root install/build/test commands until a root manifest exists.
-- Do not collapse vendored projects into a single architecture without selecting a first target.
-- Do not port CUDA-only kernels wholesale without first identifying the MLX equivalent or a smaller abstraction boundary.
-- Do not treat vendor benchmark numbers as root project performance targets.
+## Technical Constraints and Invariants
+
+### Observed
+
+- Python >=3.11, MLX as sole ML runtime (`pyproject.toml:10-11`).
+- safetensors-only checkpoint loading at runtime (`README.md:116`).
+- No PyTorch, CUDA, flash-attn, or gsplat as runtime dependencies (`README.md:363`).
+- xatlas and fast-simplification are runtime dependencies for mesh export (`pyproject.toml:14,19`).
+- Checkpoint formats: safetensors for MLX, with a dev-only conversion path from PyTorch `.ckpt`/`.pt` via `pt-safe-loader`.
+- Weights, inputs, outputs, and vendors are gitignored (`.gitignore:8-11`).
+- Parity testing requires env var `MLX_SPATIAL_RUN_TORCH_PARITY=1` and local PyTorch checkout (`README.md:401-407`).
+
+### Inferred
+
+- Memory management is important; `mlx_memory.py` suggests memory profiling or constraints are a concern.
+- The `--memory-profile` flag on SAM3D (`balanced`, `safe`, `large`) and `--decoder-token-limit` on TRELLIS.2 indicate resource-bounded execution is a requirement.
+
+### Needs Confirmation
+
+- Minimum Apple Silicon target (M1? M2 Pro?).
+- Maximum supported memory or resolution limits per pipeline.
+
+## Quality and Operational Expectations
+
+- Testing bar: pytest suite with ~49 test files covering all modules. Parity tests are opt-in.
+- No CI automation observed (inferred: not yet configured).
+- No lint or typecheck commands observed in `pyproject.toml`.
+- Release constraint: no network access at runtime; all weights must be locally pre-positioned.
+
+## Integration Boundaries
+
+- Upstream: Hugging Face model weights (TRELLIS.2-4B, SAM 3D Objects, RMBG 2.0, DINOv3, MoGe, HY-World 2.0) downloaded via CLI and stored locally.
+- Downstream: CLI users consuming OBJ, GLB, and PLY outputs; Python library consumers importing `mlx_spatial`.
+- External tooling: `huggingface-cli` for weight download (dev-only), `xatlas` for UV unwrapping (runtime).
+
+## Non-Goals
+
+- Training or fine-tuning any model.
+- Replacing MLX with another ML framework.
+- Supporting non-Apple-Silicon hardware.
+- Automatic model weight downloading at runtime.
+- Importing or modifying vendored reference code at runtime.
+- Running PyTorch in the production inference path.
+
+## Open Risks and Unknowns
+
+- HY-World 2.0 numeric parity is not yet verified (`numeric_parity_verified=false`).
+- Performance parity against PyTorch-on-CUDA has no established benchmark suite yet (inferred).
+- No CI, lint, or typecheck pipeline exists (observed: absent from `pyproject.toml` and no `.github/`).
+- Memory profiles for large inputs (high-res textures, cascade routes) may need more explicit bounds.
+- Textured GLB export quality depends on xatlas behavior, which may vary across macOS versions.
 
 ## Evidence Anchors
 
-- Root shape: `.`
-- Vendor boundary: `vendors/`
-- Apple Silicon constraints: `vendors/trellis-mac/README.md`, `vendors/trellis-mac/pyproject.toml`
-- CUDA/Linux constraints: `vendors/TRELLIS.2/README.md`, `vendors/HunyuanWorld-Mirror/README.md`
-- SAM package constraints: `vendors/sam-3d-objects/pyproject.toml`
-
-List the accepted product and technical constraints.
+- `pyproject.toml:10-20` — runtime dependencies
+- `pyproject.toml:23-27` — dev dependencies
+- `README.md:194-195` — structured blocker design
+- `README.md:116` — safetensors-only loading
+- `README.md:177` — no runtime downloads
+- `README.md:363` — no PyTorch/CUDA runtime
+- `.gitignore` — excluded paths

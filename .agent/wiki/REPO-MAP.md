@@ -1,77 +1,117 @@
 # Repo Map
 
-## Conclusion
+## One-Sentence Model
 
-This repository is at bootstrap stage for an MLX-oriented 3D/spatial model library. The root has no application or package manifest yet; current concrete content is `.agent/` steering state and a `vendors/` reference corpus of upstream 3D/spatial projects.
+MLX-first 3D/spatial model inference library for Apple Silicon that ports TRELLIS.2, SAM 3D Objects, and HY-World 2.0 to run natively without PyTorch or CUDA.
 
-## Sources Read
+## What This Repository Owns
 
-| Path | Why it matters |
-|---|---|
-| `.` | Shows the root currently contains `.agent/`, `.claude/`, `.opencode/`, `.git/`, and `vendors/`, with no root README or package manifest observed. |
-| `.agent/steering/STATUS.md` | Existing steering file was scaffold text only. |
-| `.agent/steering/PROJECT.md` | Existing steering file was scaffold text only. |
-| `vendors/` | Shows five vendored reference projects at one boundary. |
-| `vendors/trellis-mac/README.md` | Apple Silicon image-to-3D reference and concrete Mac/MPS adaptation details. |
-| `vendors/trellis-mac/pyproject.toml` | Python package metadata and CLI script evidence for the Apple Silicon TRELLIS port. |
-| `vendors/sam-3d-objects/README.md` | Single/multi-object 3D reconstruction reference surface. |
-| `vendors/sam-3d-objects/pyproject.toml` | Python package metadata for the SAM 3D object reconstruction reference. |
-| `vendors/HunyuanWorld-Mirror/README.md` | Geometric prediction reference across depth, camera, normals, point clouds, and 3D Gaussians. |
-| `vendors/TRELLIS.2/README.md` | Upstream TRELLIS.2 sparse voxel/image-to-3D reference and CUDA/Linux constraints. |
-
-## Observed Topology
-
-| Area | Observed shape | Evidence |
-|---|---|---|
-| Root project | Bootstrap workspace with no root README or root package manifest observed. | `.` |
-| Agent state | Automaton steering exists but was scaffold-only before this refresh. | `.agent/steering/STATUS.md`, `.agent/steering/PROJECT.md` |
-| Reference corpus | Five sibling vendor projects: `HunyuanWorld-Mirror`, `HunyuanWorld-Voyager`, `sam-3d-objects`, `trellis-mac`, `TRELLIS.2`. | `vendors/` |
-| Apple Silicon reference | `trellis-mac` ports TRELLIS.2 image-to-3D generation from CUDA-only to Apple Silicon using PyTorch MPS and Metal/fallback backends. | `vendors/trellis-mac/README.md`, `vendors/trellis-mac/pyproject.toml` |
-| Upstream image-to-3D reference | `TRELLIS.2` is a 4B image-to-3D model using O-Voxel structured latents, with Linux/CUDA installation assumptions. | `vendors/TRELLIS.2/README.md` |
-| Object reconstruction reference | `sam-3d-objects` reconstructs object shape, texture, pose, and layout from single images and masks. | `vendors/sam-3d-objects/README.md`, `vendors/sam-3d-objects/pyproject.toml` |
-| Geometric prediction reference | `HunyuanWorld-Mirror` predicts camera poses, intrinsics, depth maps, point clouds, multi-view depths, surface normals, camera parameters, and 3D Gaussians. | `vendors/HunyuanWorld-Mirror/README.md` |
+- Native MLX inference implementations for three 3D models: TRELLIS.2, SAM 3D Objects, HY-World 2.0
+- Shared spatial primitives: O-Voxel coordinates, sparse voxel topology, sparse convolution maps, mesh/export utilities
+- CLI tools for asset validation, weight conversion, inference, and parity checking
+- Local weight management (no runtime network downloads)
 
 ## Runtime Surfaces
 
-| Surface | Status | Evidence |
-|---|---|---|
-| Root library | Not present yet. No root source/package surface observed in the bounded scan. | `.` |
-| CLI | Present only in vendor references. `trellis-mac` exposes `trellis-generate = "generate:main"` and documents `python generate.py`. | `vendors/trellis-mac/pyproject.toml`, `vendors/trellis-mac/README.md` |
-| Demo scripts | Present only in vendor references. SAM 3D Objects documents `python demo.py`; TRELLIS.2 documents setup/inference flows. | `vendors/sam-3d-objects/README.md`, `vendors/TRELLIS.2/README.md` |
-| UI/API/worker | No root UI, API, or worker surface observed. | `.` |
+| Surface | Path | Role | Entry Points | Notes |
+|---------|------|------|--------------|-------|
+| Library core | `src/mlx_spatial/` | Python package | `import mlx_spatial` | 47 modules, single package |
+| TRELLIS.2 pipeline | `src/mlx_spatial/trellis2*.py` | Image-to-3D generation | CLI: `mlx-spatial-trellis2` | DINOv3 conditioning, RMBG removal, sparse structure flow, shape/texture SLat, decoders, FlexiDualGrid mesh, GLB export |
+| SAM 3D Objects pipeline | `src/mlx_spatial/sam3d*.py` | Image+mask→Gaussian PLY/GLB | CLI: `mlx-spatial-sam3d` | MoGe depth, SS/SLat flow, Gaussian decoder, FlexiCubes mesh, xatlas texture bake |
+| HY-World 2.0 pipeline | `src/mlx_spatial/hyworld2*.py` | Multi-view reconstruction | CLI: `mlx-spatial-hyworld2` | Camera/depth/normal/points/Gaussian heads, WorldMirror parity |
+| Shared primitives | `src/mlx_spatial/{ovoxel,topology,sparse_conv,grid,checkpoint,model_assets,export_utils,mlx_memory}.py` | Model-neutral helpers | `import mlx_spatial` | Coordinate ops, topology, sparse conv, checkpoint load |
+| Test suite | `tests/` | Verification | `uv run pytest` | ~49 test files, `torch_parity` marker |
+| Dev tools | `tools/` | Reference dumping | `tools/hyworld2_dump_torch_reference.py` | PyTorch oracle for parity |
 
-## Stack
+## Stack and Infrastructure
 
-| Layer | Observed facts | Evidence |
-|---|---|---|
-| Intended direction | MLX-oriented 3D/spatial model library is user-stated during onboarding, not yet encoded in root files. | user prompt, `.` |
-| Current executable code | Python-based vendor projects. | `vendors/trellis-mac/pyproject.toml`, `vendors/sam-3d-objects/pyproject.toml` |
-| Apple target reference | macOS Apple Silicon, Python 3.11+, PyTorch/MPS, Metal toolchain optional/fallback. | `vendors/trellis-mac/README.md`, `vendors/trellis-mac/pyproject.toml` |
-| CUDA/Linux references | TRELLIS.2 and HunyuanWorld-Mirror currently document CUDA/Linux-oriented assumptions. | `vendors/TRELLIS.2/README.md`, `vendors/HunyuanWorld-Mirror/README.md` |
-| Packaging | Hatch-based package in `sam-3d-objects`; basic PEP 621 metadata and script entry point in `trellis-mac`. | `vendors/sam-3d-objects/pyproject.toml`, `vendors/trellis-mac/pyproject.toml` |
+- Language: Python >=3.11
+- ML runtime: Apple MLX (`mlx`)
+- Build: hatchling (`pyproject.toml` `[build-system]`)
+- Package manager: uv (`uv.lock`, `uv sync`)
+- Runtime deps: mlx, numpy, pillow, safetensors, scipy, fast-simplification, xatlas, pyyaml (`pyproject.toml:11-20`)
+- Dev deps: pytest>=8, huggingface-hub>=0.36, pt-safe-loader>=0.1.4 (`pyproject.toml:23-27`)
+- Checkpoint format: safetensors only (no `.pt`/`.pth` at runtime)
 
-## Commands Observed
+## Commands That Work Today
 
-| Command | Scope | Status |
-|---|---|---|
-| `bash setup.sh` | `vendors/trellis-mac` | Documented vendor setup command. |
-| `python generate.py path/to/image.png` | `vendors/trellis-mac` | Documented vendor generation command. |
-| `trellis-generate` | `vendors/trellis-mac` | Script entry point declared in `pyproject.toml`. |
-| `python demo.py` | `vendors/sam-3d-objects` | Documented vendor demo command after setup. |
-| `. ./setup.sh --new-env --basic --flash-attn --nvdiffrast --nvdiffrec --cumesh --o-voxel --flexgemm` | `vendors/TRELLIS.2` | Documented upstream setup command. |
+- install: `uv sync`
+- test: `uv run pytest`
+- parity test: `MLX_SPATIAL_RUN_TORCH_PARITY=1 uv run pytest -m torch_parity`
+- CLI (trellis2): `uv run mlx-spatial-trellis2 {validate,inspect,probe,dinov3-validate,download-command,generate-shape,generate-textured,attempt-forward-trace}`
+- CLI (sam3d): `uv run mlx-spatial-sam3d {validate,inspect,download-command,convert,reconstruct}`
+- CLI (hyworld2): `uv run mlx-spatial-hyworld2 reconstruct ...`
 
-No root install, build, test, lint, or package command was observed in the bounded scan.
+## Apps, Packages, and Boundaries
 
-## Inferred Direction
+- Single package: `src/mlx_spatial/` — no separate apps or monorepo packages
+- Vendored references: `vendors/` (gitignored, not imported at runtime, used for parity comparison)
+- Local weights: `weights/` (gitignored, managed via CLI tools)
+- Local I/O: `inputs/`, `outputs/` (gitignored)
 
-The repository is likely meant to become a clean MLX library that ports or reimplements selected 3D/spatial model components from the vendored references, prioritizing Apple Silicon viability. This is inferred from the user prompt plus the presence of `trellis-mac` as an Apple Silicon adaptation reference.
+## External Systems and Integrations
 
-## Unknowns
+- Hugging Face Hub: weight download via `huggingface-cli` (dev-only, not runtime dep)
+- Apple MLX framework: hard runtime dependency
+- xatlas: Mac-native UV unwrapping (runtime dep)
+- fast-simplification: mesh simplification (runtime dep)
+- Local PyTorch checkout at `/Users/ac/dev/ai/ai-frameworks/pytorch`: optional parity reference (inferred from README.md:403)
+- DINOv3 model weights (`facebook/dinov3-vitl16-pretrain-lvd1689m`): local only, validated via CLI
+- RMBG 2.0 model (`briaai/RMBG-2.0`): gated, non-commercial, local only
 
-| Unknown | Why it matters | Evidence boundary |
-|---|---|---|
-| Root package name, layout, and public API | Needed before implementation planning. | No root package files observed in `.`. |
-| First supported model family | The vendor corpus spans image-to-3D generation, object reconstruction, and geometric prediction. | `vendors/` |
-| MLX dependency/version policy | Determines kernels, tensor APIs, tests, and examples. | No root manifest observed in `.`. |
-| Whether vendors are source-of-truth, references only, or submodules to preserve | Affects cleanup and licensing strategy. | `vendors/` |
-| Licensing constraints across vendored projects | Must be resolved before copying or adapting code. | Vendor README/license details were not fully scanned. |
+## Existing Conventions
+
+### Observed
+
+- Exact-mode staged pipelines with structured blockers for unimplemented stages (`README.md:194-195`)
+- safetensors-only checkpoint loading at runtime (`README.md:116`)
+- Deterministic, reproducible primitives with explicit ordering contracts (sparse conv map rows, topology offsets)
+- No automatic network access or model downloads at import/test/runtime
+- Vendor code in `vendors/` is reference-only, never imported
+- Parity verification is opt-in dev tooling, not a runtime requirement
+
+### Inferred
+
+- Performance optimization is secondary to correctness; the user's stated goal is to maintain speed *and* quality of original implementations
+- Module naming convention: `{model}_{concern}.py` (e.g., `trellis2_slat.py`, `sam3d_decoder.py`)
+
+### Needs Confirmation
+
+- Whether there is a CI pipeline or release workflow (none observed in repo)
+- Whether `mlx_memory.py` represents a shared memory management strategy across all pipelines
+
+## Verification and Release Surfaces
+
+- Test runner: pytest (`pyproject.toml:38`)
+- Custom marker: `torch_parity` for optional PyTorch comparison (`pyproject.toml:40-41`)
+- No CI config, no release automation observed (inferred: not yet configured)
+- No typecheck or lint commands observed in `pyproject.toml`
+
+## Likely Hotspots for the First Changes
+
+- `src/mlx_spatial/trellis2_forward.py`: TRELLIS.2 staged inference dispatcher
+- `src/mlx_spatial/sam3d_inference.py`: SAM 3D pipeline orchestrator
+- `src/mlx_spatial/hyworld2_inference.py`: HY-World inference entry
+- `src/mlx_spatial/sparse_conv.py`: Shared weighted sparse convolution (performance-critical)
+- `src/mlx_spatial/ovoxel.py`: FlexiDualGrid mesh extraction (complex, surface-level)
+
+## Sources Read
+
+- `README.md` — project scope, all pipeline descriptions, CLI commands, conventions
+- `pyproject.toml` — package metadata, dependencies, entry points, test config
+- `.gitignore` — gitignored paths (weights, inputs, outputs, vendors)
+- `src/mlx_spatial/__init__.py` — public API surface (257 exports)
+- `src/mlx_spatial/` directory listing — internal module structure
+- `tests/` directory listing — test file inventory
+- `tools/` directory listing — dev tooling
+
+## Open Questions
+
+- No CI or release pipeline was observed. Is one planned?
+- Is `mlx_memory.py` a cross-pipeline memory strategy or specific to one model?
+- Are there performance benchmarks or regression tests beyond parity checks?
+
+## Import Verdict
+
+- steering confidence: high
+- recommended next skill: `auto-frame`

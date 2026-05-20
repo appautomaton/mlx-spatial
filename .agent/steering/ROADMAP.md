@@ -1,63 +1,26 @@
 # Roadmap
 
-## Phase 1: Define The Root Library Boundary
+## Phase 1: Gap Matrix and HY-World 2.0 Backbone
 
-Objective: Create a concrete root package identity, README, manifest, and minimal module layout for the MLX spatial library.
+- status: done
+- change: `2026-05-20-gap-matrix-parity`
+- objective: Created the structured gap matrix and closed critical inference blockers for HY-World 2.0 — the transformer backbone layers plus camera/rotation/geometry utilities and GS activation/SH functions.
 
-Why now: The bounded scan found no root package, source tree, README, install command, test command, or lint command.
+## Phase 2: Production Pipeline Parity (Final)
 
-Likely outputs: Root README, package manifest, `src/` or equivalent package layout, basic import smoke test, and explicit statement that `vendors/` is reference material.
+- status: pending
+- change: `2026-05-20-production-pipeline-parity`
+- objective: Close all remaining inference gaps across SAM 3D, TRELLIS.2, and HY-World 2.0 — consolidating GS/SH completion, TRELLIS.2 texturing pipeline, sparse interpolation, and cross-pipeline mesh postprocessing into one spec. 10 gaps across three groups.
+- evidence: 10 gaps remain after removing already-ported modules (SAM-MOT in `sam3d_ss_flow.py`, SAM-SHORTCUT in `sam3d_flow.py`) and training-only items. See `spec/gap-matrix.md` for original gap IDs.
+- exit signal: All remaining gaps produce numerically matching or performance-comparable output against vendor references; all three pipelines reach full inference parity on Apple Silicon.
 
-Exit signal: A fresh clone can install the root package and import its top-level module without touching vendor setup flows.
+## Deferred or Not Now
 
-Evidence: `.`, `vendors/`, `vendors/trellis-mac/pyproject.toml`, `vendors/sam-3d-objects/pyproject.toml`.
-
-## Phase 2: Choose The First Spatial Slice
-
-Objective: Select one narrow capability to port or build first.
-
-Why now: The vendor corpus contains several competing directions: TRELLIS/O-Voxel image-to-3D, SAM object reconstruction, and Hunyuan geometric prediction.
-
-Likely outputs: A short spec naming the first model family or shared primitive, supported inputs/outputs, and excluded vendor features.
-
-Exit signal: Implementation can start without re-litigating project scope.
-
-Evidence: `vendors/trellis-mac/README.md`, `vendors/TRELLIS.2/README.md`, `vendors/sam-3d-objects/README.md`, `vendors/HunyuanWorld-Mirror/README.md`.
-
-## Phase 3: Establish MLX Tensor And Geometry Primitives
-
-Objective: Build the smallest reusable MLX-backed primitives required by the first slice, such as tensor shape contracts, camera/depth helpers, voxel or point representations, and export boundaries.
-
-Why now: Vendor references rely on PyTorch, CUDA, MPS, Metal, sparse convolution, voxel, mesh, point, and Gaussian representations.
-
-Likely outputs: Minimal MLX modules, shape/type tests, and documented limitations compared with vendor behavior.
-
-Exit signal: The first selected slice has tested local primitives independent of vendor imports.
-
-Evidence: `vendors/trellis-mac/README.md`, `vendors/TRELLIS.2/README.md`, `vendors/HunyuanWorld-Mirror/README.md`.
-
-## Phase 4: Implement One End-To-End Reference Flow
-
-Objective: Deliver one small, runnable pipeline from input artifact to spatial output using first-party code and explicit vendor parity checks where feasible.
-
-Why now: Vendor commands demonstrate complete flows, but the root project needs its own verified surface.
-
-Likely outputs: Example command or script, fixture input, deterministic smoke test, and documented output format.
-
-Exit signal: A user can run one root command or example without entering a vendor directory.
-
-Evidence: `vendors/trellis-mac/README.md`, `vendors/sam-3d-objects/README.md`, `vendors/TRELLIS.2/README.md`.
-
-## Phase 5: Verify Portability, Licensing, And Performance Boundaries
-
-Objective: Convert the prototype into a maintainable library surface with documented hardware, dependency, and licensing boundaries.
-
-Why now: The reference projects mix licenses, checkpoint access, hardware assumptions, and vendor-specific acceleration stacks.
-
-Likely outputs: License notes, dependency policy, benchmark harness, memory notes, and explicit unsupported paths.
-
-Exit signal: The root project can accept new model slices without re-solving repository policy.
-
-Evidence: `vendors/trellis-mac/README.md`, `vendors/sam-3d-objects/README.md`, `vendors/TRELLIS.2/README.md`, `vendors/HunyuanWorld-Mirror/README.md`.
-
-List the next implementation phases in order.
+- Performance optimization (excluded — no user demand for benchmarks at this stage)
+- CI and release infrastructure (excluded — no external consumers yet)
+- Supporting non-Apple-Silicon hardware or non-MLX backends
+- Model fine-tuning or training capabilities
+- Cloud deployment or API serving surface
+- DINOv2 support in TRELLIS.2 (superseded by DINOv3)
+- Visualization-only features (PBR rendering, voxel rendering, Gradio apps)
+- Multi-GPU/distributed inference
