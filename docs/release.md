@@ -76,7 +76,10 @@ It builds with `uv build` and publishes through `pypa/gh-action-pypi-publish@rel
 
 ## Publish Step
 
-Do not publish from local shell credentials as part of release readiness. A maintainer should review the worktree, create the release/tag as appropriate, and trigger the trusted-publishing workflow.
+Do not publish from local shell credentials as part of release readiness. A
+maintainer should review the worktree and trigger trusted publishing by creating
+a GitHub Release for the intended tag or by using the manual workflow dispatch.
+Pushing a tag alone does not publish to PyPI.
 
 ## Last Local Verification
 

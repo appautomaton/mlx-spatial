@@ -10,7 +10,7 @@ Production defaults:
     --slat-steps for quality runs. Use --slat-steps 1 only for smoke tests.
 
 Example:
-    python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg \
+    python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg \\
       --output-dir outputs/trellis2/cup-of-tea-shape-script
 """
 

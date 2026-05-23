@@ -119,6 +119,10 @@ Script defaults:
 - fixture tensors: disabled
 - optional GS head: intentionally not exposed by this script because Gaussian preview/export is not release-ready
 
+For frame directories, `large` preserves the official 952px path but can exceed
+the attention guard as frame count grows. Use `--memory-profile balanced` for a
+more reliable multi-frame run.
+
 ## Packaging
 
 Check release artifacts for blocked local paths:

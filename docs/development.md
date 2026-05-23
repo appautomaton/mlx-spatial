@@ -16,7 +16,7 @@ SAM3D-focused checks:
 ```bash
 uv run pytest tests/test_sam3d*.py -q
 python scripts/sam3d/reconstruct.py --help
-python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-primary-default/trace.json
+python scripts/sam3d/inspect_trace.py --help
 ```
 
 Package checks:

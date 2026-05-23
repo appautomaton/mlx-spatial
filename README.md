@@ -178,7 +178,9 @@ outputs/hyworld2/kidsroom-scene-script/
 ```
 
 The script uses the verified release path: real Tencent safetensors, `large`
-memory profile, and `camera,depth,normal,points` heads.
+memory profile, and `camera,depth,normal,points` heads. For frame directories,
+use `--memory-profile balanced` when the `large` profile hits the attention
+guard.
 
 ## Repository Layout
 
@@ -198,6 +200,7 @@ vendors/             ignored upstream checkouts
 - [scripts/README.md](scripts/README.md): recommended inference scripts and their defaults.
 - [docs/sam3d.md](docs/sam3d.md): SAM3D setup, inference, quality gates, PLY expectations, and coordinate notes.
 - [docs/trellis2.md](docs/trellis2.md): TRELLIS.2 asset layout, no-conversion note, scripts, and export caveats.
+- [docs/hyworld2.md](docs/hyworld2.md): HY-WorldMirror asset layout, scene inputs, memory profiles, and outputs.
 - [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
 - [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
 - [docs/model-publishing.md](docs/model-publishing.md): AppAutomaton-first model bundles and model-card rules.

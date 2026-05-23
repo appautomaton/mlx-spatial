@@ -2,8 +2,8 @@
 """Run SAM 3D Objects reconstruction with mlx-spatial recommended defaults.
 
 Example:
-    python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
-      --mask inputs/sam3d/living-room/mask-3.png \
+    python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \\
+      --mask inputs/sam3d/living-room/mask-3.png \\
       --output-dir outputs/sam3d/living-room-script
 """
 
