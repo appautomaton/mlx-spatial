@@ -36,6 +36,8 @@ _LITO_REAL_MAX_INIT_COORDS_BY_PROFILE = {
     "large": 8192,
 }
 LITO_INIT_COORD_CAP_PROFILE = "profile"
+LITO_PLY_STORAGES = ("binary_little_endian", "ascii")
+LITO_DEFAULT_PLY_STORAGE = "binary_little_endian"
 
 
 @dataclass(frozen=True)
@@ -1332,9 +1334,26 @@ def normalize_lito_gs_dict(gs_dict: dict[str, Any]) -> dict[str, np.ndarray]:
     return normalized
 
 
-def write_lito_gaussians_ply(path: str | Path, gaussians: dict[str, Any]) -> None:
+def normalize_lito_ply_storage(ply_storage: str) -> str:
+    """Normalize the checkpoint-backed LiTo PLY storage mode."""
+
+    normalized = str(ply_storage).strip().lower().replace("-", "_")
+    if normalized == "binary":
+        normalized = "binary_little_endian"
+    if normalized not in LITO_PLY_STORAGES:
+        raise ValueError(f"unsupported LiTo PLY storage: {ply_storage}")
+    return normalized
+
+
+def write_lito_gaussians_ply(
+    path: str | Path,
+    gaussians: dict[str, Any],
+    *,
+    ply_storage: str = LITO_DEFAULT_PLY_STORAGE,
+) -> None:
     """Write checkpoint-backed LiTo Gaussians using upstream 3DGS PLY fields."""
 
+    ply_storage = normalize_lito_ply_storage(ply_storage)
     normalized = normalize_lito_gs_dict(gaussians)
     xyz = normalized["xyz_w"]
     count = int(xyz.shape[0])
@@ -1361,16 +1380,22 @@ def write_lito_gaussians_ply(path: str | Path, gaussians: dict[str, Any]) -> Non
     rows = np.concatenate([xyz, normal, f_dc, f_rest, opacity, scaling, quaternion], axis=1)
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    header = ["ply", "format ascii 1.0", "comment mlx-spatial LiTo checkpoint-backed 3DGS export"]
+    header = ["ply", f"format {ply_storage} 1.0", "comment mlx-spatial LiTo checkpoint-backed 3DGS export"]
     header.append(f"element vertex {count}")
     header.extend(f"property float {name}" for name in properties)
     header.append("end_header")
-    with output.open("w", encoding="ascii", newline="\n") as handle:
-        handle.write("\n".join(header))
-        handle.write("\n")
-        for row in rows:
-            handle.write(" ".join(f"{float(value):.8g}" for value in row))
+    if ply_storage == "ascii":
+        with output.open("w", encoding="ascii", newline="\n") as handle:
+            handle.write("\n".join(header))
             handle.write("\n")
+            for row in rows:
+                handle.write(" ".join(f"{float(value):.8g}" for value in row))
+                handle.write("\n")
+        return
+
+    with output.open("wb") as handle:
+        handle.write(("\n".join(header) + "\n").encode("ascii"))
+        rows.astype("<f4", copy=False).tofile(handle)
 
 
 def _read_safetensor_headers(path: Path) -> dict[str, tuple[tuple[int, ...], str]]:
@@ -2683,7 +2708,9 @@ def _sh_degree_from_coeff_count(coeffs: int) -> int:
 
 __all__ = [
     "DirectMlxLitoBackend",
+    "LITO_DEFAULT_PLY_STORAGE",
     "LITO_INIT_COORD_CAP_PROFILE",
+    "LITO_PLY_STORAGES",
     "LitoBackendUnavailable",
     "LitoGaussianDecoderProfile",
     "LitoPatchEncoderConfig",
@@ -2705,6 +2732,7 @@ __all__ = [
     "load_lito_patch_encoder_weight_arrays",
     "load_lito_voxel_decoder_weight_arrays",
     "normalize_lito_gs_dict",
+    "normalize_lito_ply_storage",
     "occ_grid_to_lito_init_coord",
     "resolve_lito_init_coord_cap",
     "run_lito_patch_encoder_condition_tokens",

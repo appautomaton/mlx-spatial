@@ -1053,7 +1053,7 @@ def test_write_lito_gaussians_ply_uses_checkpoint_schema(tmp_path):
         "rgb_sh": np.arange(96, dtype=np.float32).reshape(2, 16, 3) / 100.0,
     }
 
-    backend.write_lito_gaussians_ply(output, gs_dict)
+    backend.write_lito_gaussians_ply(output, gs_dict, ply_storage="ascii")
 
     lines = output.read_text(encoding="ascii").splitlines()
     assert lines[2] == "comment mlx-spatial LiTo checkpoint-backed 3DGS export"
@@ -1064,6 +1064,28 @@ def test_write_lito_gaussians_ply_uses_checkpoint_schema(tmp_path):
     header_end = lines.index("end_header")
     assert len(lines[header_end + 1 :]) == 2
     assert len(lines[header_end + 1].split()) == 62
+
+
+def test_write_lito_gaussians_ply_defaults_to_binary_little_endian(tmp_path):
+    backend = importlib.import_module("mlx_spatial.lito_real_backend")
+    output = tmp_path / "real-schema-binary.ply"
+    gs_dict = {
+        "xyz_w": np.array([[0.0, 0.1, 0.2], [0.3, 0.4, 0.5]], dtype=np.float32),
+        "scaling": np.full((2, 3), 0.02, dtype=np.float32),
+        "quaternion": np.array([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]], dtype=np.float32),
+        "opacity": np.full((2, 1), 0.8, dtype=np.float32),
+        "rgb_sh": np.arange(96, dtype=np.float32).reshape(2, 16, 3) / 100.0,
+    }
+
+    backend.write_lito_gaussians_ply(output, gs_dict)
+
+    data = output.read_bytes()
+    assert b"format binary_little_endian 1.0\n" in data[:128]
+    assert b"element vertex 2\n" in data
+    _, body = data.split(b"end_header\n", maxsplit=1)
+    values = np.frombuffer(body, dtype="<f4").reshape(2, 62)
+    assert values.shape == (2, 62)
+    assert np.allclose(values[0, :3], [0.0, 0.1, 0.2])
 
 
 def test_checkpoint_generate_failure_leaves_no_output_after_backend_creation_fails(tmp_path, monkeypatch):

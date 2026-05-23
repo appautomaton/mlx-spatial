@@ -8,6 +8,7 @@ from typing import Sequence
 
 from .lito_assets import LITO_DEFAULT_ROOT, LITO_RAW_DEFAULT_ROOT, download_command, inspect, validate
 from .lito_inference import (
+    LITO_DEFAULT_PLY_STORAGE,
     LITO_DEFAULT_MEMORY_PROFILE,
     LITO_MEMORY_PROFILES,
     LITO_RECOMMENDED_CFG_SCALE,
@@ -19,6 +20,7 @@ from .lito_inference import (
     LitoInferencePipeline,
     metrics_to_json,
     normalize_lito_init_coord_cap,
+    normalize_lito_ply_storage,
 )
 
 
@@ -46,6 +48,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate_parser.add_argument("--root", "--weights-root", dest="command_root", default=None)
     generate_parser.add_argument("--output", required=True)
     generate_parser.add_argument("--format", choices=("ply", "splat", "safetensors"), default="ply")
+    generate_parser.add_argument(
+        "--ply-storage",
+        default=LITO_DEFAULT_PLY_STORAGE,
+        metavar="{binary_little_endian|ascii}",
+        type=normalize_lito_ply_storage,
+        help="checkpoint-backed PLY storage; binary_little_endian is compact and Blender/KIRI-compatible",
+    )
     generate_parser.add_argument(
         "--memory-profile",
         choices=LITO_MEMORY_PROFILES,
@@ -115,12 +124,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cfg_scale=args.cfg_scale,
                 resolution=args.resolution,
                 render_size=args.render_size,
+                ply_storage=args.ply_storage,
             )
         except (FileNotFoundError, ValueError, LitoBackendUnavailable, LitoRealGenerationNotImplemented) as error:
             print(f"error={error}")
             return 1
         print(f"output={Path(args.output)}")
         print(f"format={args.format}")
+        if args.format == "ply" and not args.source_contract_smoke:
+            print(f"ply_storage={args.ply_storage}")
         print(f"gaussians={int(result.gaussians['xyz_w'].shape[0])}")
         if args.source_contract_smoke:
             print("mode=source-contract-smoke")

@@ -22,11 +22,13 @@ if SRC.is_dir():
 def main(argv: list[str] | None = None) -> int:
     from mlx_spatial.lito import main as lito_main
     from mlx_spatial.lito_inference import (
+        LITO_DEFAULT_PLY_STORAGE,
         LITO_DEFAULT_MEMORY_PROFILE,
         LITO_MEMORY_PROFILES,
         LITO_RECOMMENDED_CFG_SCALE,
         LITO_RECOMMENDED_NUM_STEPS,
         LITO_RECOMMENDED_RESOLUTION,
+        normalize_lito_ply_storage,
     )
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -40,6 +42,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="output 3DGS file")
     parser.add_argument("--format", choices=("ply", "splat", "safetensors"), default="ply")
+    parser.add_argument(
+        "--ply-storage",
+        default=LITO_DEFAULT_PLY_STORAGE,
+        metavar="{binary_little_endian|ascii}",
+        type=normalize_lito_ply_storage,
+        help="checkpoint-backed PLY storage",
+    )
     parser.add_argument("--memory-profile", choices=LITO_MEMORY_PROFILES, default=LITO_DEFAULT_MEMORY_PROFILE)
     parser.add_argument("--num-steps", type=int, default=LITO_RECOMMENDED_NUM_STEPS)
     parser.add_argument("--cfg-scale", type=float, default=LITO_RECOMMENDED_CFG_SCALE)
@@ -63,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         str(args.output),
         "--format",
         args.format,
+        "--ply-storage",
+        args.ply_storage,
         "--memory-profile",
         args.memory_profile,
         "--num-steps",

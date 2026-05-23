@@ -83,6 +83,7 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
         def generate(self, image_path, **kwargs):
             observed["image_path"] = str(image_path)
             observed["output_path"] = str(kwargs["output_path"])
+            observed["ply_storage"] = kwargs["ply_storage"]
             return type("Result", (), {"gaussians": {"xyz_w": np.zeros((1, 3), dtype=np.float32)}})()
 
     monkeypatch.setattr("mlx_spatial.lito.LitoInferencePipeline", RecordingPipeline)
@@ -99,6 +100,8 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
             "safe",
             "--max-init-coords-per-batch",
             "none",
+            "--ply-storage",
+            "ascii",
             "--source-contract-smoke",
         ]
     )
@@ -111,6 +114,7 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
         "source_contract_smoke": True,
         "image_path": str(image),
         "output_path": str(output),
+        "ply_storage": "ascii",
     }
 
 

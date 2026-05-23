@@ -27,10 +27,12 @@ from .lito_dit import LITO_MEMORY_PROFILES as _DIT_MEMORY_PROFILES
 from .lito_dit import LitoDiT
 from .lito_render import LitoRenderer
 from .lito_real_backend import (
+    LITO_DEFAULT_PLY_STORAGE,
     LITO_INIT_COORD_CAP_PROFILE,
     LitoBackendUnavailable,
     LitoRealBackendConfig,
     create_lito_real_backend,
+    normalize_lito_ply_storage,
     resolve_lito_init_coord_cap,
     write_lito_gaussians_ply,
 )
@@ -176,6 +178,7 @@ class LitoInferencePipeline:
         cfg_scale: float = LITO_RECOMMENDED_CFG_SCALE,
         resolution: int | tuple[int, int] = LITO_RECOMMENDED_RESOLUTION,
         render_size: int | None = None,
+        ply_storage: str = LITO_DEFAULT_PLY_STORAGE,
     ) -> LitoGenerationResult:
         """Run LiTo generation."""
 
@@ -189,6 +192,7 @@ class LitoInferencePipeline:
                 cfg_scale=cfg_scale,
                 resolution=resolution,
                 render_size=render_size,
+                ply_storage=ply_storage,
             )
 
         return self._generate_source_contract_smoke(
@@ -213,9 +217,11 @@ class LitoInferencePipeline:
         cfg_scale: float,
         resolution: int | tuple[int, int],
         render_size: int | None,
+        ply_storage: str,
     ) -> LitoGenerationResult:
         assert self.real_asset_summary is not None
         output_format = _normalize_output_format(output_format, output_path)
+        ply_storage = normalize_lito_ply_storage(ply_storage) if output_format == "ply" else LITO_DEFAULT_PLY_STORAGE
         output = Path(output_path) if output_path is not None else None
         metrics: dict[str, dict[str, float]] = {}
         image = Path(image_path)
@@ -260,7 +266,7 @@ class LitoInferencePipeline:
         artifacts = self._stage(
             "export",
             metrics,
-            lambda: _export_real_outputs(gaussians, output, output_format),
+            lambda: _export_real_outputs(gaussians, output, output_format, ply_storage=ply_storage),
         )
         metadata = {
             "pipeline": "lito-checkpoint-backed",
@@ -275,6 +281,7 @@ class LitoInferencePipeline:
             "recommended_compute_dtype": LITO_RECOMMENDED_MLX_COMPUTE_DTYPE,
             "image_path": str(image),
             "artifacts": {name: str(path) for name, path in artifacts.items()},
+            "ply_storage": ply_storage if output_format == "ply" else None,
             "checkpoints": dict(self.real_asset_summary.checkpoint_key_counts),
         }
         return LitoGenerationResult(
@@ -651,13 +658,19 @@ def _export_outputs(gaussians: dict[str, np.ndarray], output: Path | None, outpu
     return artifacts
 
 
-def _export_real_outputs(gaussians: dict[str, np.ndarray], output: Path | None, output_format: str) -> dict[str, Path]:
+def _export_real_outputs(
+    gaussians: dict[str, np.ndarray],
+    output: Path | None,
+    output_format: str,
+    *,
+    ply_storage: str,
+) -> dict[str, Path]:
     if output is None:
         return {}
     output.parent.mkdir(parents=True, exist_ok=True)
     artifacts: dict[str, Path] = {}
     if output_format == "ply":
-        write_lito_gaussians_ply(output, gaussians)
+        write_lito_gaussians_ply(output, gaussians, ply_storage=ply_storage)
         artifacts["ply"] = output
         sidecar = output.with_suffix(".safetensors")
         _write_gaussians_safetensors(sidecar, gaussians)

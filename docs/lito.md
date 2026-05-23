@@ -96,6 +96,8 @@ uv run mlx-spatial-lito generate inputs/lito/sample.png \
   --print-metrics
 ```
 
+Checkpoint-backed PLY export defaults to standard `binary_little_endian` storage, matching the format expected by normal PLY readers while keeping large uncapped outputs much smaller than ASCII. Use `--ply-storage ascii` only for debugging or text diffs. This does not change the viewer requirement: use a Gaussian-splat-aware viewer such as KIRI's Blender 3DGS add-on. Blender's native Stanford PLY importer can read PLY containers, but it does not render LiTo Gaussian splat fields correctly.
+
 A current quality-check run uses all occupied init cells from the sampled latent:
 
 ```bash
@@ -126,7 +128,7 @@ uv run mlx-spatial-lito generate inputs/trellis2/beer-mug.png \
 
 That run writes a checkpoint-backed PLY with `925952` vertices from `14468` occupied init cells and also stayed around `15.28 GB` peak active memory.
 
-The uncapped ASCII PLY files are large (`~765 MB` for teacup and `~619 MB` for beer mug). Keep them under `outputs/lito/`; they are ignored and should not be committed. Use a Gaussian-splat-aware viewer such as KIRI's Blender 3DGS add-on for visual inspection. Blender's native Stanford PLY importer treats the file as a generic point cloud and will not render LiTo Gaussian splats correctly. The `inputs/lito/smoke.png` file is only a color-blob framework probe and should not be used for qualitative LiTo assessment.
+The old uncapped ASCII PLY files from bring-up were large (`~765 MB` for teacup and `~619 MB` for beer mug). Binary PLY reduces the storage overhead, but these are still large Gaussian-splat artifacts and should stay under `outputs/lito/`; they are ignored and should not be committed. The `inputs/lito/smoke.png` file is only a color-blob framework probe and should not be used for qualitative LiTo assessment.
 
 Run the synthetic source-contract smoke path only when that is what you mean to test:
 
@@ -141,7 +143,7 @@ uv run mlx-spatial-lito generate inputs/lito/sample.png \
 
 Any existing `outputs/lito/smoke*.ply` files from the bring-up run are source-contract smoke artifacts, not real Apple checkpoint-backed LiTo results. Their PLY headers say `comment mlx-spatial LiTo source-contract smoke 3DGS export`.
 
-The `generate` command supports `--format {ply,splat,safetensors}`, `--memory-profile {safe,balanced,large}`, `--max-init-coords-per-batch {profile|none|N}`, `--num-steps`, `--cfg-scale`, `--seed`, `--print-metrics`, and `--source-contract-smoke`. The default output format is PLY.
+The `generate` command supports `--format {ply,splat,safetensors}`, `--ply-storage {binary_little_endian|ascii}`, `--memory-profile {safe,balanced,large}`, `--max-init-coords-per-batch {profile|none|N}`, `--num-steps`, `--cfg-scale`, `--seed`, `--print-metrics`, and `--source-contract-smoke`. The default output format is PLY with binary-little-endian storage for checkpoint-backed results.
 
 Current checkpoint-backed backend progress covers the inference path: real safetensors-to-MLX weight loading, LiTo DINO/RGBA image conditioning to `(B, 1374, 2048)` condition tokens for 518px inputs, LiTo DiT velocity/sampling, LiTo voxel decoder low-res `ss_latent`, TRELLIS sparse-structure occupancy decode, occupancy-to-init-coordinate extraction, Gaussian point-query encoding, all Gaussian Perceiver blocks with localized-voxel self-attention, weighted output heads, Gaussian decode, and checkpoint-backed PLY export.
 
