@@ -1,6 +1,8 @@
 {
-  "active_change": "2026-05-20-production-pipeline-parity",
-  "stage": "plan",
-  "canonical_spec": ".agent/work/2026-05-20-production-pipeline-parity/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-20-production-pipeline-parity/PLAN.md"
+  "active_change": "2026-05-22-lito-mlx-inference-pipeline",
+  "stage": "verify",
+  "canonical_spec": ".agent/work/2026-05-22-lito-mlx-inference-pipeline/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-22-lito-mlx-inference-pipeline/PLAN.md",
+  "product_review": "approved_with_risks",
+  "engineering_review": "approved_with_risks"
 }
