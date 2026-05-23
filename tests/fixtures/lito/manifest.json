@@ -1,0 +1,293 @@
+{
+  "condition": {
+    "backend": "source_contract_local",
+    "cases": [
+      {
+        "input": "cond_input_0.safetensors",
+        "output": "cond_output_0.safetensors",
+        "seed": 20260623,
+        "shape": {
+          "alpha": [
+            1,
+            1,
+            32,
+            32,
+            1
+          ],
+          "cond_tokens": [
+            1,
+            17,
+            64
+          ],
+          "straight_rgb": [
+            1,
+            1,
+            32,
+            32,
+            3
+          ]
+        }
+      },
+      {
+        "input": "cond_input_1.safetensors",
+        "output": "cond_output_1.safetensors",
+        "seed": 20260624,
+        "shape": {
+          "alpha": [
+            1,
+            1,
+            32,
+            32,
+            1
+          ],
+          "cond_tokens": [
+            1,
+            17,
+            64
+          ],
+          "straight_rgb": [
+            1,
+            1,
+            32,
+            32,
+            3
+          ]
+        }
+      },
+      {
+        "input": "cond_input_2.safetensors",
+        "output": "cond_output_2.safetensors",
+        "seed": 20260625,
+        "shape": {
+          "alpha": [
+            1,
+            1,
+            32,
+            32,
+            1
+          ],
+          "cond_tokens": [
+            1,
+            17,
+            64
+          ],
+          "straight_rgb": [
+            1,
+            1,
+            32,
+            32,
+            3
+          ]
+        }
+      }
+    ],
+    "dtype": "float16 output, float32 input",
+    "files": [
+      "cond_input_0.safetensors",
+      "cond_output_0.safetensors",
+      "cond_input_1.safetensors",
+      "cond_output_1.safetensors",
+      "cond_input_2.safetensors",
+      "cond_output_2.safetensors"
+    ],
+    "fixture_role": "shape_dtype_token_order_contract",
+    "license": "synthetic local fixture; no Apple sample redistribution",
+    "shape": {
+      "cond_tokens": [
+        1,
+        17,
+        64
+      ]
+    },
+    "upstream_entry": "lito.trainers.lito_dit_trainer.LiToDiTTrainer.get_image_conditioning",
+    "upstream_sources": [
+      "vendors/ml-lito/src/lito/trainers/lito_dit_trainer.py",
+      "vendors/ml-lito/src/lito/models/dino.py"
+    ]
+  },
+  "dit": {
+    "backend": "source_contract_local",
+    "dtype": "float16",
+    "files": [
+      "dit_input_0.safetensors",
+      "dit_step_0_0.safetensors",
+      "dit_step_mid_0.safetensors",
+      "dit_step_final_0.safetensors"
+    ],
+    "fixture_role": "microtrajectory_contract",
+    "license": "synthetic local fixture; no Apple sample redistribution",
+    "seed": 42,
+    "shape": {
+      "cond_tokens": [
+        1,
+        17,
+        64
+      ],
+      "latent": [
+        1,
+        8192,
+        32
+      ]
+    },
+    "upstream_entry": "lito.odelibs.ode_solvers.odeint",
+    "upstream_sources": [
+      "vendors/ml-lito/src/lito/mlx/models/dit.py",
+      "vendors/ml-lito/src/lito/odelibs/ode_solvers.py",
+      "vendors/ml-lito/src/lito/trainers/lito_dit_trainer.py"
+    ]
+  },
+  "fixture_kind": "source_contract_local",
+  "generated_by": "scripts/lito/write_contract_fixtures.py",
+  "no_cuda_contract": {
+    "cuda_allowed": false,
+    "torch_parity": "optional_cpu_mps_only",
+    "vendor_runtime_imports": false
+  },
+  "render": {
+    "backend": "source_contract_local",
+    "dtype": "float32",
+    "files": [
+      "render_input_0.safetensors",
+      "render_output_0.safetensors",
+      "render_output_0.png"
+    ],
+    "fixture_role": "gaussian_camera_image_contract",
+    "license": "synthetic local fixture; no Apple sample redistribution",
+    "seed": 20260823,
+    "shape": {
+      "alpha": [
+        1,
+        1,
+        64,
+        64,
+        1
+      ],
+      "image": [
+        1,
+        1,
+        64,
+        64,
+        3
+      ],
+      "xyz_w": [
+        128,
+        3
+      ]
+    },
+    "upstream_entry": "lito.trainers.lito_trainer.LightTokenizationTrainer.render_gaussians",
+    "upstream_sources": [
+      "vendors/ml-lito/src/lito/trainers/lito_trainer.py",
+      "vendors/ml-lito/libraries/plibs/src/plibs/gs_utils.py"
+    ]
+  },
+  "schema_version": 1,
+  "tokenizer": {
+    "backend": "source_contract_local",
+    "cases": [
+      {
+        "input": "tokenizer_input_0.safetensors",
+        "output": "tokenizer_output_0.safetensors",
+        "seed": 20260523,
+        "shape": {
+          "latent_tokens": [
+            1,
+            8192,
+            32
+          ],
+          "ray_origin_direction_w": [
+            1,
+            2048,
+            6
+          ],
+          "rgb": [
+            1,
+            2048,
+            3
+          ],
+          "xyz_w": [
+            1,
+            2048,
+            3
+          ]
+        }
+      },
+      {
+        "input": "tokenizer_input_1.safetensors",
+        "output": "tokenizer_output_1.safetensors",
+        "seed": 20260524,
+        "shape": {
+          "latent_tokens": [
+            1,
+            8192,
+            32
+          ],
+          "ray_origin_direction_w": [
+            1,
+            2048,
+            6
+          ],
+          "rgb": [
+            1,
+            2048,
+            3
+          ],
+          "xyz_w": [
+            1,
+            2048,
+            3
+          ]
+        }
+      },
+      {
+        "input": "tokenizer_input_2.safetensors",
+        "output": "tokenizer_output_2.safetensors",
+        "seed": 20260525,
+        "shape": {
+          "latent_tokens": [
+            1,
+            8192,
+            32
+          ],
+          "ray_origin_direction_w": [
+            1,
+            2048,
+            6
+          ],
+          "rgb": [
+            1,
+            2048,
+            3
+          ],
+          "xyz_w": [
+            1,
+            2048,
+            3
+          ]
+        }
+      }
+    ],
+    "dtype": "float16 output, float32 input",
+    "files": [
+      "tokenizer_input_0.safetensors",
+      "tokenizer_output_0.safetensors",
+      "tokenizer_input_1.safetensors",
+      "tokenizer_output_1.safetensors",
+      "tokenizer_input_2.safetensors",
+      "tokenizer_output_2.safetensors"
+    ],
+    "fixture_role": "shape_dtype_range_contract",
+    "license": "synthetic local fixture; no Apple sample redistribution",
+    "shape": {
+      "latent_tokens": [
+        1,
+        8192,
+        32
+      ]
+    },
+    "upstream_entry": "lito.trainers.lito_trainer.LightTokenizationTrainer.get_latents",
+    "upstream_sources": [
+      "vendors/ml-lito/src/lito/trainers/lito_trainer.py",
+      "vendors/ml-lito/src/lito/models/spoint_encoder.py"
+    ]
+  }
+}

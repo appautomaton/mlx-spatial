@@ -9,31 +9,25 @@ import mlx.core as mx
 import numpy as np
 
 
-SAM3D_SLAT_STD = mx.array(
-    [
-        2.377650737762451,
-        2.386378288269043,
-        2.124418020248413,
-        2.1748552322387695,
-        2.663944721221924,
-        2.371192216873169,
-        2.6217446327209473,
-        2.684523105621338,
-    ],
-    dtype=mx.float32,
+SAM3D_SLAT_STD = (
+    2.377650737762451,
+    2.386378288269043,
+    2.124418020248413,
+    2.1748552322387695,
+    2.663944721221924,
+    2.371192216873169,
+    2.6217446327209473,
+    2.684523105621338,
 )
-SAM3D_SLAT_MEAN = mx.array(
-    [
-        -2.1687545776367188,
-        -0.004347046371549368,
-        -0.13352349400520325,
-        -0.08418072760105133,
-        -0.5271206498146057,
-        0.7238689064979553,
-        -1.1414450407028198,
-        1.2039363384246826,
-    ],
-    dtype=mx.float32,
+SAM3D_SLAT_MEAN = (
+    -2.1687545776367188,
+    -0.004347046371549368,
+    -0.13352349400520325,
+    -0.08418072760105133,
+    -0.5271206498146057,
+    0.7238689064979553,
+    -1.1414450407028198,
+    1.2039363384246826,
 )
 
 
@@ -189,4 +183,6 @@ def sam3d_euler_solve(
 def denormalize_sam3d_slat(features: mx.array) -> mx.array:
     """Apply official `slat * std + mean` channel denormalization."""
 
-    return features * SAM3D_SLAT_STD.astype(features.dtype) + SAM3D_SLAT_MEAN.astype(features.dtype)
+    std = mx.array(SAM3D_SLAT_STD, dtype=features.dtype)
+    mean = mx.array(SAM3D_SLAT_MEAN, dtype=features.dtype)
+    return features * std + mean

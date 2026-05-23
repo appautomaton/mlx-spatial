@@ -1,42 +1,60 @@
 ---
-active_change: 2026-05-20-production-pipeline-parity
-stage: plan
+active_change: 2026-05-22-lito-mlx-inference-pipeline
+stage: execute
 ---
 
 # Status
 
 ## Current Change
 
-- active change: `2026-05-20-production-pipeline-parity`
-- current stage: `plan`
+- active change: `2026-05-22-lito-mlx-inference-pipeline`
+- current stage: `execute`
+- Canonical artifact paths live in `.agent/.automaton/state/current.json` and the artifacts themselves; this file does not duplicate them.
 
 ## What Is True Now
 
-- PLAN.md written at `.agent/work/2026-05-20-gap-matrix-parity/PLAN.md` with 11 ordered slices.
-- Spec and gap matrix are in `.agent/work/2026-05-20-gap-matrix-parity/SPEC.md` and `spec/gap-matrix.md`.
-- Slices 1, 2, 3, 4, 5, 6, and 7 are complete; Slice 2 added HY-World transformer block and DINO ViT public facades with extracted-reference parity tests.
-- Slice 4 has a local integration pass: WorldMirror now composes the extracted transformer/DINO ViT modules and `uv run pytest tests/test_hyworld2_*.py -v` passes.
-- Slice 4 dev-only Torch reference setup is complete (`torch==2.12.0`, `torchvision==0.27.0`, `uv pip check` passes).
-- Slice 4 parity compare now passes on Cat_Girl in MLX CPU parity mode: `outputs/hyworld2/cat-girl-518-cpu-parity-report.json` has `passed=true`, 13 tensors checked, and `parity_trace_metadata.numeric_parity_verified=true`.
-- Slice 4 correction note: strict Torch CPU numeric parity requires `--mlx-device cpu`; default/GPU MLX still has backend precision drift and is not the Slice 4 evidence path.
-- Slice 5 adds MLX sparse nearest/trilinear interpolation helpers and dense-grid reference tests. Plan correction: TRELLIS.2 advertises these names in the sparse registry, but the checked-in vendor `spatial` modules do not define the functions.
-- Slice 6 confirms the SAM3D MOT sparse-structure-flow path in `sam3d_ss_flow.py`: merged pose latents, protected shape attention, pose decoding, and reference-value MOT self-attention tests. `uv run pytest tests/test_sam3d_ss_flow.py tests/test_sam3d_ss.py -v` passes with 9 tests.
-- Slice 7 adds the named TRELLIS.2 FlexiDualGrid encoder contract and verifies the existing textured GLB path. `uv run pytest tests/test_trellis2_decode.py tests/test_trellis2_inference.py tests/test_trellis2_export.py -v` passes with 82 tests; the extended asset/tool guard set passes with 103 tests.
-- Slice 8 Metal GS rasterizer is complete. It adds `src/mlx_spatial/gs_rasterize.py`, `src/mlx_spatial/metal/gs_rasterize.metal`, exports in `src/mlx_spatial/__init__.py`, and `tests/test_gs_rasterize.py`. `uv run pytest tests/test_gs_rasterize.py -v` passes with 9 tests, including anisotropic quaternion projection and Metal-vs-CPU parity within 1%.
-- Slice 8 checkpoint was discharged as non-blocking for continuation: `gsplat` is not installed locally, the runtime renderer must stay MLX-only, and available local test/review verification passed. Follow-up validation remains: dev-only gsplat/PyTorch standard-image parity and/or visual inspection.
-- Slice 9 is complete. It adds `src/mlx_spatial/sam3d_render.py` for SAM3D orbit cameras, multi-view Gaussian rendering through the Slice 8 rasterizer, SAM3D Gaussian field adaptation, and rigid ICP-style layout post-optimization. `uv run pytest tests/test_sam3d_*.py -k "render or layout or holes" -v` passes with 7 selected tests.
-- Slice 10 is complete. It adds SAM3D shortcut parity reporting and HY-World grid utilities. `uv run pytest tests/test_sam3d_flow.py tests/test_hyworld2_*.py -k "shortcut or grid" -v` passes with 7 selected tests.
-- Slice 11 is complete. It adds TRELLIS.2 mesh quality metrics and a source-vs-MLX improvement report that records the official `cumesh.remeshing.remesh_narrow_band_dc` remeshing gap. `uv run pytest tests/test_trellis2_export.py -v` passes with 36 tests.
-- Final verification passed. Fresh checks: HY-World suite 151 passed, HY-World CPU parity compare 13 tensors passed with `numeric_parity_verified=true`, sparse interpolation suite 13 passed/1 optional local PyTorch checkout parity skipped, SAM3D suite 124 passed, GS rasterizer suite 9 passed, TRELLIS.2 suite 200 passed.
+- Active change is in `execute` stage with Slice 5Q-4 final verification passed after the uncapped teacup output was judged fair-looking in a proper Gaussian-splat viewer.
+- Selected shape: parity/source-contract, scale: capability. Selected lenses: product + engineering. Product review: `approved_with_risks`. Engineering review: `approved_with_risks` after the no-CUDA correction.
+- Pipeline shape: LiTo follows the established `<name>_*.py` + `mlx-spatial-<name>` convention used by SAM 3D, TRELLIS.2, and HY-World 2.0.
+- Execution topology: Slice 0A is completed vendor/assets/routing evidence. Slice 0B is completed as the serial source-contract fixture gate: `scripts/lito/write_contract_fixtures.py` generated deterministic local `tests/fixtures/lito/` plus `manifest.json`, and `scripts/lito/validate_fixtures.py` passed. Slices 1–4 are source-contract complete. Slice 5 now has a checkpoint-backed safetensors-to-MLX path, but AC-07 remains open until the new Slice 5Q quality-closure plan proves real-object output quality.
+- Plan-level defaults: `.ply` output (`--format` flag for `splat`/`safetensors`), runtime `plyfile` dependency only if runtime writer code imports it, adapter-only as Risk F default, `plyfile` in `[dependency-groups.dev]`, sample-input download URL documented (no redistribution unless license permits), `generate` CLI verb, `LITO_MEMORY_PROFILES = ("safe", "balanced", "large")` with `balanced` default. Torch remains external/transient for CPU/MPS probes; it is not in the project dependency groups because `uv lock` pulled CUDA packages when attempted.
+- Execution discipline (Refresh B): `/tmp/lito-*` for scratch (no working-tree leaks per AC-15); 90 GB soft / 100 GB hard memory thresholds enforced via `mx.metal.get_active_memory()` / `mx.metal.get_peak_memory()` with `LitoMemoryLimitExceeded` raised at the hard ceiling; autonomous fallbacks via `WebFetch`/`WebSearch`/`playwright-cli` for transient failures and lookup-style unknowns; only declared decision checkpoints (Risk F, license-blocked, routing re-route) escalate to user.
+- Performance instrumentation: `LitoGenerationResult.metrics` returns per-stage `{wall_time_s, peak_active_memory_gb, peak_cache_memory_gb}` for `preprocess`, `condition`, `tokenize`, `dit`, `decode`, `render`, `export`.
+- Upstream-recommended generation settings are captured at Slice 0A and embedded as `LITO_RECOMMENDED_*` constants in `lito_inference.py`; CLI / library / `scripts/lito/generate.py` use them as defaults. Defaults are not invented.
+- Risk F decision is captured in `PLAN.md` with a conditional checkpoint that trips only if Slice 0 audits the LF-render and reports the adapter pattern infeasible.
+- Latest quality-closure evidence: Slice 5Q-2 pass 1 fixed the first high-confidence decode/init-coverage mismatch by adding `--max-init-coords-per-batch {profile|none|N}` while keeping the runtime no-CUDA and MLX-native. Human visual inspection rejected the 1024-cell teacup output, so Slice 5Q-2 pass 2 fixed the next conditioning/preprocessing mismatch for useful-alpha RGBA inputs: optical-axis crop/pad now follows upstream `keep_optical_axis=True` behavior. Human inspection of the 4096-cell crop output showed improvement but missing regions. A memory-conscious occupancy diagnostic found `17317` occupied init cells for the teacup latent, so the 4096 candidate covered only about `23.7%` of occupied structure. The accepted-looking teacup candidate is `outputs/lito/teacup-quality-crop-uncapped.ply`, generated with `--max-init-coords-per-batch none`; it inspects as checkpoint-backed, finite, `1108288` vertices, `62` properties, no structural inspector flags, opacity probability median `0.056885`, scale exp median `0.004650`, quaternion norm median `1.000000`, and `failure_classification=stats_sane_visual_review_required`. Peak active memory stayed about `15.28 GB`; peak cache memory reached about `21.87 GB`. The second real-object uncapped candidate is `outputs/lito/beer-mug-quality-uncapped.ply`; it inspects as checkpoint-backed, finite, `925952` vertices, `62` properties, no structural inspector flags, opacity probability median `0.048492`, scale exp median `0.006928`, quaternion norm median `1.000000`, and `failure_classification=stats_sane_visual_review_required`. The accepted quality note is: output is usable in a Gaussian-splat-aware viewer, but teacup handle-hole topology is not perfect and mesh/GLB extraction is out of scope.
+
+## Release Strategy (clarified 2026-05-23)
+
+The 0.0.1 release-readiness change (`2026-05-22-mlx-spatial-0-0-1-release-readiness`) is execute-complete locally but **has not been tagged**. Maintainer trigger of the PyPI trusted-publishing workflow is pending. LiTo lands in **0.0.2** as part of normal commits.
+
+The 0.0.1 release group is **not frozen** for this change. `pyproject.toml` (scripts + dev deps), `docs/`, `README.md`, `uv.lock` may be modified by LiTo. Files that should not be touched without explicit decision:
+
+- `.github/workflows/workflow.yaml` (the publishing workflow — change requires release ops review)
+- `LICENSE` (legal)
+- `scripts/` (release scripts — only touch if behavior actually changes)
+- `.agent/work/2026-05-22-mlx-spatial-0-0-1-release-readiness/` (immutable historical artifact)
+
+The single hard constraint: `uv build` continues to produce a clean wheel and sdist after LiTo lands, so the 0.0.1 (or 0.0.2) tag remains producible. This is verified in Slice 5.
+
+Known pre-existing dirty worktree state (verified 2026-05-23; carried from before the active change):
+
+- modified automaton infrastructure under `.agent/.automaton/{bin,lib}/`
+- modified steering: `.agent/steering/ROADMAP.md` (already), `.agent/steering/STATUS.md` (this file)
+- modified older-change artifacts: `.agent/work/2026-05-20-gap-matrix-parity/spec/gap-matrix.md`, `.agent/work/2026-05-20-production-pipeline-parity/PLAN.md`
+- new untracked directories: `.agent/work/2026-05-20-production-pipeline-parity/orchestration/`, `.agent/work/2026-05-22-mlx-spatial-0-0-1-release-readiness/`, `.agent/work/2026-05-22-lito-mlx-inference-pipeline/`
+- `.agent/.automaton/state/install-manifest.json`
+
+Before the LiTo active change, `src/mlx_spatial/` and `tests/` had no pre-existing runtime/test dirt. Current edits under those paths belong to the LiTo Slice 0A asset/import work.
 
 ## Next Step
 
-Change is complete. Use `auto-office-hours` to shape the next objective when ready.
+Commit the active LiTo source/tests/docs/agent artifacts, excluding ignored `vendors/`, `weights/`, `inputs/`, and `outputs/`. After commit, route to `auto-verify` if a final automaton verification report is desired.
 
 ## Open Risks
 
-- Slice 8 is correctness-first, not performance-complete: Python projects/sorts splats and the Metal kernel renders one pixel per thread without float atomics. Tiled/binning performance work remains future work.
-- Slice 8 higher-degree SH is not implemented unless callers pre-evaluate RGB. Degree-0 SH and direct RGB are supported.
-- No CI pipeline exists; quality gate is manual (`uv run pytest`).
-- Parity verification depends on local PyTorch reference outputs (dev-only, not CI-gated).
-- The optional local PyTorch checkout used by `tests/test_sparse_conv_parity.py` is not importable as installed C extensions, so that single optional parity test still skips even with `MLX_SPATIAL_RUN_TORCH_PARITY=1`.
+- LiTo now has a source-contract smoke pipeline and a checkpoint-backed no-CUDA inference path with accepted quality evidence from uncapped real-object outputs. Upstream CUDA/PyTorch/gsplat paths remain static source references; optional Torch parity is CPU/MPS-only and not a runtime backend. Default `generate` still raises `LitoBackendUnavailable` if converted LiTo/TRELLIS weights are missing or if sampling produces no occupied TRELLIS cells.
+- `uv build` passes with `plyfile` dev-only. Runtime `plyfile` was not added because the default PLY writer is hand-written.
+- Memory threshold tests exercise the warning and hard-ceiling abort paths synthetically. The real safe-profile run peaked at about 15.28 GB active MLX memory and caps init cells at 512 before 64x Gaussian expansion; balanced/large profile behavior remains broader performance work.
+- Maintainer has not yet triggered the 0.0.1 PyPI publish. LiTo work proceeds in parallel and does not block on that trigger. Eventual tag is **0.0.2**.
+- SAM 3D model redistribution remains license/gating-sensitive; LiTo's weight-redistribution stance (deferred to Phase 4+) mirrors the same caution.

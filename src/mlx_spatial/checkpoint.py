@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import mlx.core as mx
 from safetensors import safe_open
 
 
@@ -59,6 +58,8 @@ def load_checkpoint_tensors(
 ) -> dict[str, mx.array]:
     """Load selected tensors from a local safetensors checkpoint as MLX arrays."""
 
+    import mlx.core as mx
+
     checkpoint_path = _validate_checkpoint_path(path)
     exact_names, name_prefixes, has_filter = _normalize_filters(names, prefixes)
     if not has_filter:
@@ -93,6 +94,8 @@ def _load_checkpoint_tensors_with_mlx_load(
     exact_names: set[str],
     prefixes: tuple[str, ...],
 ) -> dict[str, mx.array]:
+    import mlx.core as mx
+
     tensors = mx.load(str(checkpoint_path))
     loaded = {
         name: tensors[name]

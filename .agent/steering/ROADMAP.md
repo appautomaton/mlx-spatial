@@ -8,19 +8,25 @@
 
 ## Phase 2: Production Pipeline Parity (Final)
 
-- status: pending
+- status: done
 - change: `2026-05-20-production-pipeline-parity`
 - objective: Close all remaining inference gaps across SAM 3D, TRELLIS.2, and HY-World 2.0 — consolidating GS/SH completion, TRELLIS.2 texturing pipeline, sparse interpolation, and cross-pipeline mesh postprocessing into one spec. 10 gaps across three groups.
 - evidence: 10 gaps remain after removing already-ported modules (SAM-MOT in `sam3d_ss_flow.py`, SAM-SHORTCUT in `sam3d_flow.py`) and training-only items. See `spec/gap-matrix.md` for original gap IDs.
 - exit signal: All remaining gaps produce numerically matching or performance-comparable output against vendor references; all three pipelines reach full inference parity on Apple Silicon.
 
-## Deferred or Not Now
+## Phase 3: LiTo MLX Inference Pipeline
 
-- Performance optimization (excluded — no user demand for benchmarks at this stage)
-- CI and release infrastructure (excluded — no external consumers yet)
-- Supporting non-Apple-Silicon hardware or non-MLX backends
-- Model fine-tuning or training capabilities
-- Cloud deployment or API serving surface
-- DINOv2 support in TRELLIS.2 (superseded by DINOv3)
-- Visualization-only features (PBR rendering, voxel rendering, Gradio apps)
-- Multi-GPU/distributed inference
+- status: in-progress
+- change: `2026-05-22-lito-mlx-inference-pipeline`
+- objective: Port Apple LiTo image-to-3DGS inference into `mlx-spatial` as a new pipeline matching the established `<name>_*.py` + `mlx-spatial-<name>` shape, with per-module MLX source-contract probes and no CUDA runtime path.
+- evidence: Slice 0 resolved local research/development checkpoint conversion, no weight redistribution, no Apple generated or modified sample fixture redistribution, Apple CDN `.ckpt` to local safetensors conversion, adapter-only LF rendering via `gs_rasterize.py`, and deterministic local `tests/fixtures/lito/` source-contract fixtures.
+- exit signal: `mlx-spatial-lito generate <image>` produces a checkpoint-backed LiTo 3DGS result, not only a source-contract smoke PLY; no existing pipeline regresses.
+
+## Phase 4+ Candidates
+
+- LiTo training and fine-tuning on MLX.
+- LiTo weight redistribution via `mlx-community` with a license-compatible model card and no unsupported derivative packaging.
+- LiTo mesh extraction from 3DGS+LF outputs through Flexicubes, marching cubes, or an equivalent mesh path.
+- LiTo multi-image and video conditioning.
+- M2/M3 LiTo memory profile using tiling or streaming below the 90 GB soft threshold.
+- Cross-pipeline ablations comparing LiTo, TRELLIS.2, and Hunyuan3D-2.5.

@@ -123,6 +123,18 @@ For frame directories, `large` preserves the official 952px path but can exceed
 the attention guard as frame count grows. Use `--memory-profile balanced` for a
 more reliable multi-frame run.
 
+## LiTo
+
+Run Apple LiTo source-contract image-to-3DGS smoke generation:
+
+```bash
+python scripts/lito/generate.py inputs/lito/sample.png \
+  --output outputs/lito/sample.ply
+```
+
+The script uses the upstream-recorded LiTo defaults from `LITO_RECOMMENDED_*`
+and writes a PLY plus a safetensors sidecar when `--format ply` is selected.
+
 ## Packaging
 
 Check release artifacts for blocked local paths:

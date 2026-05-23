@@ -9,8 +9,21 @@ from typing import Callable
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
-from .trellis2_rmbg_forward import Rmbg2MlxRuntimeError, remove_background_rmbg2_mlx
 from .trellis2_rmbg import Rmbg2PortBlocker, assess_rmbg2_mlx_port
+
+
+class Rmbg2MlxRuntimeError(RuntimeError):
+    """Lazy proxy error for RMBG forward failures."""
+
+
+def remove_background_rmbg2_mlx(image: Image.Image, *, root: str | Path) -> Image.Image:
+    from .trellis2_rmbg_forward import Rmbg2MlxRuntimeError as ForwardRuntimeError
+    from .trellis2_rmbg_forward import remove_background_rmbg2_mlx as remove_background
+
+    try:
+        return remove_background(image, root=root)
+    except ForwardRuntimeError as error:
+        raise Rmbg2MlxRuntimeError(str(error)) from error
 
 
 @dataclass(frozen=True)

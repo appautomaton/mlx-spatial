@@ -1,5 +1,7 @@
 """MLX-first spatial primitives."""
 
+from importlib import import_module
+
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
 from .grid import regular_grid, create_uv_grid, fourier_embeddings, fourier_embeddings_np
 from .model_assets import DINOv3_VITL16_ASSETS, RMBG2_ASSETS, TRELLIS2_ASSETS, validate_model_assets
@@ -17,19 +19,11 @@ from .ovoxel import (
     remesh_narrow_band_dual_contouring,
     unflatten_indices,
 )
-from .sam3d import (
+from .sam3d_assets import (
     SAM3D_OBJECTS_ACCESS_NOTE,
     SAM3D_OBJECTS_DEFAULT_ROOT,
     SAM3D_OBJECTS_MLX_DEFAULT_ROOT,
     SAM3D_OBJECTS_REPO_ID,
-    convert_sam3d_assets_to_safetensors,
-    convert_torch_checkpoint_to_safetensors,
-    download_sam3d_assets,
-    inspect_sam3d_model_assets,
-    sam3d_download_command,
-    validate_sam3d_assets,
-)
-from .sam3d_assets import (
     Sam3dAssetBlocker,
     Sam3dAssetValidation,
     Sam3dCheckpointInventory,
@@ -39,8 +33,14 @@ from .sam3d_assets import (
     Sam3dPipelineConfig,
     Sam3dPipelineInspection,
     Sam3dPipelinePath,
+    convert_sam3d_assets_to_safetensors,
+    convert_torch_checkpoint_to_safetensors,
+    download_sam3d_assets,
+    inspect_sam3d_model_assets,
     read_sam3d_pipeline_config,
     resolve_sam3d_pipeline_path,
+    sam3d_download_command,
+    validate_sam3d_assets,
 )
 from .sam3d_flow import (
     Sam3dShortcutComparisonReport,
@@ -70,22 +70,6 @@ from .sam3d_export import (
     write_sam3d_textured_glb,
     write_sam3d_gaussians_ply,
 )
-from .sam3d_moge import (
-    SAM3D_MOGE_DEFAULT_ROOT,
-    SAM3D_MOGE_REQUIRED_KEYS,
-    Sam3dMogeInspection,
-    Sam3dMogePointmap,
-    Sam3dMogeResult,
-    inspect_sam3d_moge_assets,
-    run_sam3d_moge_pointmap,
-)
-from .sam3d_inference import (
-    SAM3D_INFERENCE_STAGES,
-    Sam3dGenerationResult,
-    Sam3dInferencePipeline,
-    Sam3dInferenceTrace,
-    Sam3dOutputArtifact,
-)
 from .sam3d_render import (
     Sam3dLayoutOptimizationResult,
     Sam3dMultiviewRenderResult,
@@ -104,13 +88,6 @@ from .sam3d_preprocess import (
     preprocess_sam3d_image_mask,
     preprocess_sam3d_official_tensors,
 )
-from .hyworld2_camera import (
-    camera_params_to_matrices,
-    extrinsics_to_vector,
-    quat_to_rotmat,
-    rotmat_to_quat,
-    vector_to_extrinsics,
-)
 from .hyworld2_geometry import (
     closed_form_inverse_se3,
     colmap_to_opencv_intrinsics,
@@ -125,29 +102,6 @@ from .hyworld2_grid import (
     create_hyworld2_uv_grid,
     hyworld2_patch_rope_positions,
     hyworld2_position_grid_to_embed,
-)
-from .hyworld2_layers import (
-    apply_1d_rope,
-    apply_2d_rope,
-    apply_layer_scale,
-    block_mlp,
-    block_swiglu_ffn,
-    head_layer_norm,
-    layer_norm,
-    linear,
-    scaled_dot_product_attention,
-)
-from .hyworld2_transformer import (
-    Block,
-    DistBlock,
-    NestedTensorBlock,
-    run_dino_block,
-    run_vgt_block,
-)
-from .hyworld2_vit import (
-    DinoVisionTransformer,
-    interpolate_dino_pos_embed,
-    run_dino_vit,
 )
 from .hyworld2_sh import (
     eval_sh,
@@ -205,12 +159,6 @@ from .trellis2_rmbg import (
     inspect_rmbg2_checkpoint,
     inspect_rmbg2_key_inventory,
     load_rmbg2_tensors,
-)
-from .trellis2_rmbg_forward import (
-    Rmbg2MlxForwardResult,
-    Rmbg2MlxRuntimeError,
-    remove_background_rmbg2_mlx,
-    run_rmbg2_mlx,
 )
 from .trellis2 import (
     DINOv3_ACCESS_NOTE,
@@ -344,6 +292,56 @@ from .trellis2_texturing import (
     Trellis2TexturingPipeline,
     Trellis2TexturingResult,
 )
+
+_LAZY_EXPORTS = {
+    "SAM3D_MOGE_DEFAULT_ROOT": "mlx_spatial.sam3d_moge",
+    "SAM3D_MOGE_REQUIRED_KEYS": "mlx_spatial.sam3d_moge",
+    "Sam3dMogeInspection": "mlx_spatial.sam3d_moge",
+    "Sam3dMogePointmap": "mlx_spatial.sam3d_moge",
+    "Sam3dMogeResult": "mlx_spatial.sam3d_moge",
+    "inspect_sam3d_moge_assets": "mlx_spatial.sam3d_moge",
+    "run_sam3d_moge_pointmap": "mlx_spatial.sam3d_moge",
+    "SAM3D_INFERENCE_STAGES": "mlx_spatial.sam3d_inference",
+    "Sam3dGenerationResult": "mlx_spatial.sam3d_inference",
+    "Sam3dInferencePipeline": "mlx_spatial.sam3d_inference",
+    "Sam3dInferenceTrace": "mlx_spatial.sam3d_inference",
+    "Sam3dOutputArtifact": "mlx_spatial.sam3d_inference",
+    "camera_params_to_matrices": "mlx_spatial.hyworld2_camera",
+    "extrinsics_to_vector": "mlx_spatial.hyworld2_camera",
+    "quat_to_rotmat": "mlx_spatial.hyworld2_camera",
+    "rotmat_to_quat": "mlx_spatial.hyworld2_camera",
+    "vector_to_extrinsics": "mlx_spatial.hyworld2_camera",
+    "apply_1d_rope": "mlx_spatial.hyworld2_layers",
+    "apply_2d_rope": "mlx_spatial.hyworld2_layers",
+    "apply_layer_scale": "mlx_spatial.hyworld2_layers",
+    "block_mlp": "mlx_spatial.hyworld2_layers",
+    "block_swiglu_ffn": "mlx_spatial.hyworld2_layers",
+    "head_layer_norm": "mlx_spatial.hyworld2_layers",
+    "layer_norm": "mlx_spatial.hyworld2_layers",
+    "linear": "mlx_spatial.hyworld2_layers",
+    "scaled_dot_product_attention": "mlx_spatial.hyworld2_layers",
+    "Block": "mlx_spatial.hyworld2_transformer",
+    "DistBlock": "mlx_spatial.hyworld2_transformer",
+    "NestedTensorBlock": "mlx_spatial.hyworld2_transformer",
+    "run_dino_block": "mlx_spatial.hyworld2_transformer",
+    "run_vgt_block": "mlx_spatial.hyworld2_transformer",
+    "DinoVisionTransformer": "mlx_spatial.hyworld2_vit",
+    "interpolate_dino_pos_embed": "mlx_spatial.hyworld2_vit",
+    "run_dino_vit": "mlx_spatial.hyworld2_vit",
+    "Rmbg2MlxForwardResult": "mlx_spatial.trellis2_rmbg_forward",
+    "Rmbg2MlxRuntimeError": "mlx_spatial.trellis2_rmbg_forward",
+    "remove_background_rmbg2_mlx": "mlx_spatial.trellis2_rmbg_forward",
+    "run_rmbg2_mlx": "mlx_spatial.trellis2_rmbg_forward",
+}
+
+
+def __getattr__(name: str):
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "Block",
