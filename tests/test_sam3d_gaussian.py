@@ -4,6 +4,7 @@ from mlx_spatial.sam3d_export import pack_sam3d_gaussian_rows
 from mlx_spatial.sam3d_gaussian import (
     Sam3dGaussianDecoderConfig,
     decode_sam3d_gaussian_fields,
+    sam3d_gaussian_config_from_representation_config,
     sam3d_hammersley_perturbation,
 )
 
@@ -64,3 +65,31 @@ def test_decode_sam3d_gaussian_fields_rejects_wrong_feature_width():
         assert "raw feature width" in str(error)
     else:
         raise AssertionError("expected gaussian raw feature width mismatch to fail")
+
+
+def test_gaussian_config_from_representation_config_uses_official_yaml_values():
+    config = sam3d_gaussian_config_from_representation_config(
+        resolution=128,
+        representation_config={
+            "num_gaussians": 4,
+            "voxel_size": 2.5,
+            "perturb_offset": False,
+            "3d_filter_kernel_size": 0.002,
+            "scaling_bias": 0.01,
+            "opacity_bias": 0.2,
+            "scaling_activation": "exp",
+            "lr": {"_rotation": 0.25},
+        },
+    )
+
+    assert config.resolution == 128
+    assert config.num_gaussians == 4
+    assert config.output_channels == 56
+    assert config.voxel_size == 2.5
+    assert config.perturb_offset is False
+    assert config.minimum_kernel_size == 0.002
+    assert config.scaling_bias == 0.01
+    assert config.opacity_bias == 0.2
+    assert config.scaling_activation == "exp"
+    assert config.lr["_xyz"] == 1.0
+    assert config.lr["_rotation"] == 0.25

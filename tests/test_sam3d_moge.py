@@ -1,9 +1,11 @@
 import numpy as np
+from PIL import Image
 
 from mlx_spatial.sam3d_moge import (
     _moge_num_tokens,
     _moge_resized_size,
     _remap_moge_points_exp,
+    _resize_hwc_float,
     normalized_view_plane_uv_numpy,
     recover_focal_shift_numpy,
 )
@@ -37,6 +39,20 @@ def test_remap_moge_points_exp_scales_xy_by_positive_z():
 
     assert np.allclose(remapped[0, 0], [2.0, -3.0, 1.0])
     assert np.allclose(remapped[0, 1], [2.0, 4.0, 2.0])
+
+
+def test_resize_hwc_float_preserves_float_precision_without_uint8_quantization():
+    image = np.array(
+        [
+            [[0.001, 0.111, 0.222], [0.333, 0.444, 0.555]],
+            [[0.666, 0.777, 0.888], [0.999, 0.123, 0.234]],
+        ],
+        dtype=np.float32,
+    )
+
+    resized = _resize_hwc_float(image, (2, 2), Image.Resampling.BICUBIC)
+
+    np.testing.assert_allclose(resized, image, rtol=0, atol=1e-7)
 
 
 def test_recover_focal_shift_numpy_recovers_simple_projective_fixture():

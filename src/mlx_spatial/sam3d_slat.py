@@ -240,7 +240,7 @@ def _run_slat_velocity(
             prefix=f"{prefix}out_blocks.{index}.",
             upsample=index % max(config.num_io_res_blocks, 1) == 0,
         )
-    tensor = tensor.replace(sam3d_layer_norm(tensor.feats))
+    tensor = tensor.replace(sam3d_layer_norm(tensor.feats, eps=1e-5))
     return _sparse_linear(tensor.feats.astype(feats.dtype), tensors, prefix=f"{prefix}out_layer.")
 
 

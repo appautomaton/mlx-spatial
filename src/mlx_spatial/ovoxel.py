@@ -438,3 +438,239 @@ def _order_clean_boundary_loops(boundary_edges: np.ndarray) -> list[list[int]]:
 
 def _softplus(values: np.ndarray) -> np.ndarray:
     return np.log1p(np.exp(-np.abs(values))) + np.maximum(values, 0)
+
+
+def remesh_narrow_band_dual_contouring(
+    coords: np.ndarray,
+    dual_vertices: np.ndarray,
+    intersected_flag: np.ndarray,
+    *,
+    aabb: Sequence[Sequence[float]] = ((-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)),
+    grid_size: int | Sequence[int] | None = None,
+) -> FlexibleDualGridMesh:
+    """Remesh FlexiDualGrid narrow-band fields via dual contouring.
+
+    Builds a watertight triangle mesh by extracting dual vertices at
+    edge crossings, grouping them into quads per intersecting edge,
+    and triangulating with optimal split alignment.
+
+    This is the Mac-native CPU replacement for
+    ``cumesh.remeshing.remesh_narrow_band_dc``.
+
+    Args:
+        coords: (N, 3) int32 voxel cell coordinates.
+        dual_vertices: (N, 3) float32 local vertex offsets within each cell,
+            typically in [-0.5, 0.5].
+        intersected_flag: (N, 3) bool flags for x/y/z edge intersections.
+        aabb: Axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z)).
+        grid_size: 3-int grid resolution. If None, inferred as max(coords) + 1.
+
+    Returns:
+        FlexibleDualGridMesh with vertices and faces.
+    """
+    c = np.asarray(coords, dtype=np.int32)
+    dv = np.asarray(dual_vertices, dtype=np.float32)
+    flags = np.asarray(intersected_flag, dtype=bool)
+    if c.ndim != 2 or c.shape[1] != 3:
+        raise ValueError(f"coords must have shape (N, 3), got {c.shape}")
+    if dv.shape != (c.shape[0], 3):
+        raise ValueError(f"dual_vertices must have shape ({c.shape[0]}, 3), got {dv.shape}")
+    if flags.shape != (c.shape[0], 3):
+        raise ValueError(f"intersected_flag must have shape ({c.shape[0]}, 3), got {flags.shape}")
+    if c.shape[0] == 0:
+        return FlexibleDualGridMesh(
+            vertices=np.zeros((0, 3), dtype=np.float32),
+            faces=np.zeros((0, 3), dtype=np.int64),
+        )
+
+    bounds = np.asarray(aabb, dtype=np.float32)
+    if bounds.shape != (2, 3):
+        raise ValueError(f"aabb must have shape (2, 3), got {bounds.shape}")
+
+    if grid_size is None:
+        grid = c.max(axis=0) + 1
+    elif isinstance(grid_size, int):
+        grid = np.array([grid_size, grid_size, grid_size], dtype=np.int32)
+    else:
+        grid = np.asarray(tuple(int(d) for d in grid_size), dtype=np.int32)
+    if grid.shape != (3,) or np.any(grid <= 0):
+        raise ValueError(f"grid_size must contain three positive dimensions, got {grid}")
+
+    voxel_size = (bounds[1] - bounds[0]) / grid.astype(np.float32)
+    vertices = (c.astype(np.float32) + dv) * voxel_size.reshape(1, 3) + bounds[0].reshape(1, 3)
+
+    coord_to_index: dict[tuple[int, int, int], int] = {}
+    for idx in range(c.shape[0]):
+        key = (int(c[idx, 0]), int(c[idx, 1]), int(c[idx, 2]))
+        coord_to_index[key] = idx
+
+    quads: list[list[int]] = []
+    for idx in range(c.shape[0]):
+        cell = (int(c[idx, 0]), int(c[idx, 1]), int(c[idx, 2]))
+        for axis in range(3):
+            if not flags[idx, axis]:
+                continue
+            quad = []
+            valid_quad = True
+            for offset in _EDGE_NEIGHBOR_VOXEL_OFFSET[axis]:
+                nb = (cell[0] + int(offset[0]), cell[1] + int(offset[1]), cell[2] + int(offset[2]))
+                nb_idx = coord_to_index.get(nb)
+                if nb_idx is None:
+                    valid_quad = False
+                    break
+                quad.append(nb_idx)
+            if valid_quad:
+                quads.append(quad)
+
+    if not quads:
+        return FlexibleDualGridMesh(
+            vertices=np.zeros((0, 3), dtype=np.float32),
+            faces=np.zeros((0, 3), dtype=np.int64),
+        )
+
+    q = np.array(quads, dtype=np.int64)
+    split_1 = q[:, _QUAD_SPLIT_1]
+    split_2 = q[:, _QUAD_SPLIT_2]
+    align_1 = _split_alignment(vertices, split_1)
+    align_2 = _split_alignment(vertices, split_2)
+    faces = np.where((align_1 > align_2)[:, None], split_1, split_2).reshape(-1, 3)
+
+    return FlexibleDualGridMesh(
+        vertices=vertices.astype(np.float32, copy=False),
+        faces=faces.astype(np.int64, copy=False),
+    )
+
+
+def fill_narrow_band_mesh_holes(
+    mesh: FlexibleDualGridMesh,
+    *,
+    max_hole_edges: int = 64,
+    max_hole_area: float | None = None,
+) -> tuple[FlexibleDualGridMesh, MeshHoleFillStats]:
+    """Fill clean boundary loops in a narrow-band dual-contouring mesh.
+
+    Similar to ``fill_flexible_dual_grid_mesh_holes`` but uses the
+    general mesh hole-filling path. Detects boundary edges, extracts
+    simple closed loops, and fills each with fan triangulation.
+
+    Args:
+        mesh: Input FlexibleDualGridMesh.
+        max_hole_edges: Maximum loop perimeter in edge count.
+        max_hole_area: Optional maximum polygon area.
+
+    Returns:
+        Tuple of (filled_mesh, hole_fill_stats).
+    """
+    if max_hole_edges < 3:
+        raise ValueError(f"max_hole_edges must be at least 3, got {max_hole_edges}")
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(f"mesh vertices must have shape (N, 3), got {vertices.shape}")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError(f"mesh faces must have shape (M, 3), got {faces.shape}")
+    if vertices.shape[0] == 0 or faces.shape[0] == 0:
+        raise ValueError("mesh must contain vertices and faces")
+    if np.any(faces < 0) or np.any(faces >= vertices.shape[0]):
+        raise ValueError("mesh faces contain vertex indices outside the vertex array")
+
+    boundary_edges, adjacency, skipped_complex = _find_boundary_edges_and_complex_components_dc(faces)
+    loops = _order_clean_boundary_loops(boundary_edges)
+
+    new_vertices: list[np.ndarray] = []
+    new_faces: list[tuple[int, int, int]] = []
+    skipped_large = 0
+
+    for loop in loops:
+        if len(loop) > max_hole_edges:
+            skipped_large += 1
+            continue
+
+        loop_verts = vertices[np.array(loop, dtype=np.int64)]
+        if max_hole_area is not None:
+            area = _loop_area(loop_verts)
+            if area > max_hole_area:
+                skipped_large += 1
+                continue
+
+        center_index = vertices.shape[0] + len(new_vertices)
+        new_vertices.append(loop_verts.mean(axis=0).astype(np.float32, copy=False))
+        for i, start in enumerate(loop):
+            end = loop[(i + 1) % len(loop)]
+            new_faces.append((center_index, int(start), int(end)))
+
+    if new_vertices:
+        filled = FlexibleDualGridMesh(
+            vertices=np.concatenate([vertices, np.array(new_vertices, dtype=np.float32)], axis=0),
+            faces=np.concatenate([faces, np.array(new_faces, dtype=np.int64)], axis=0),
+        )
+    else:
+        filled = FlexibleDualGridMesh(vertices=vertices, faces=faces)
+
+    stats = MeshHoleFillStats(
+        boundary_edges_before=int(boundary_edges.shape[0]),
+        clean_boundary_loops=len(loops),
+        filled_loops=len(new_vertices),
+        skipped_large_loops=skipped_large,
+        skipped_complex_components=skipped_complex,
+        vertices_added=len(new_vertices),
+        faces_added=len(new_faces),
+    )
+    return filled, stats
+
+
+def _find_boundary_edges_and_complex_components_dc(faces: np.ndarray) -> tuple[np.ndarray, dict[int, list[int]], int]:
+    directed = np.empty((faces.shape[0] * 3, 2), dtype=np.int64)
+    directed[0::3] = faces[:, [0, 1]]
+    directed[1::3] = faces[:, [1, 2]]
+    directed[2::3] = faces[:, [2, 0]]
+
+    keys = np.sort(directed, axis=1)
+    key_view = np.ascontiguousarray(keys).view([("a", keys.dtype), ("b", keys.dtype)]).reshape(-1)
+    _, first_indices, counts = np.unique(key_view, return_index=True, return_counts=True)
+    boundary = directed[first_indices[counts == 1]]
+
+    adjacency: dict[int, list[int]] = {}
+    for s, e in boundary:
+        adjacency.setdefault(int(s), []).append(int(e))
+        adjacency.setdefault(int(e), []).append(int(s))
+
+    if boundary.shape[0] == 0:
+        return boundary, adjacency, 0
+
+    visited_edges: set[tuple[int, int]] = set()
+    complex_components = 0
+    for s, e in boundary:
+        edge = (int(min(s, e)), int(max(s, e)))
+        if edge in visited_edges:
+            continue
+        stack = [int(s)]
+        comp_verts: set[int] = set()
+        comp_edges: set[tuple[int, int]] = set()
+        while stack:
+            v = stack.pop()
+            if v in comp_verts:
+                continue
+            comp_verts.add(v)
+            for nbr in adjacency.get(v, []):
+                ce = (min(v, nbr), max(v, nbr))
+                comp_edges.add(ce)
+                if ce not in visited_edges:
+                    visited_edges.add(ce)
+                    stack.append(nbr)
+        if any(len(adjacency.get(v, [])) != 2 for v in comp_verts) or len(comp_edges) != len(comp_verts):
+            complex_components += 1
+
+    return boundary, adjacency, complex_components
+
+
+def _loop_area(loop_vertices: np.ndarray) -> float:
+    if loop_vertices.shape[0] < 3:
+        return 0.0
+    center = loop_vertices.mean(axis=0)
+    total = 0.0
+    for i in range(loop_vertices.shape[0]):
+        j = (i + 1) % loop_vertices.shape[0]
+        total += float(np.linalg.norm(np.cross(loop_vertices[i] - center, loop_vertices[j] - center)) * 0.5)
+    return total

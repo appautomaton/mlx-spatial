@@ -139,6 +139,30 @@ def test_sam3d_slat_decoder_torso_can_feed_distinct_output_heads():
     assert tuple(mesh.shape) == (2, 5)
 
 
+def test_sam3d_slat_decoder_torso_uses_torch_functional_layer_norm_epsilon():
+    config = Sam3dSLatDecoderConfig(
+        resolution=4,
+        model_channels=2,
+        latent_channels=2,
+        num_blocks=0,
+        num_heads=1,
+        window_size=4,
+    )
+    tensors = {
+        "input_layer.weight": mx.eye(2, dtype=mx.float32),
+        "input_layer.bias": mx.zeros((2,), dtype=mx.float32),
+    }
+    coords = np.array([[0, 0, 0, 0]], dtype=np.int32)
+    feats_np = np.array([[1.0, 1.02]], dtype=np.float32)
+    feats = mx.array(feats_np, dtype=mx.float32)
+
+    torso = np.array(run_sam3d_slat_decoder_torso(coords, feats, tensors, config))
+
+    centered = feats_np - feats_np.mean(axis=-1, keepdims=True)
+    expected = centered / np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True) + 1e-5)
+    assert np.allclose(torso, expected, atol=1e-4)
+
+
 def test_sam3d_mesh_decoder_features_trace_records_subdivision_counts():
     config = Sam3dMeshDecoderConfig(
         resolution=4,

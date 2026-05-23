@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -40,6 +41,42 @@ class Sam3dGaussianFields:
     scale: np.ndarray
     rotation: np.ndarray
     metadata: dict[str, object]
+
+
+def sam3d_gaussian_config_from_representation_config(
+    *,
+    resolution: int,
+    representation_config: Mapping[str, object] | None,
+) -> Sam3dGaussianDecoderConfig:
+    """Build Gaussian field decoding config from the official decoder YAML block."""
+
+    defaults = Sam3dGaussianDecoderConfig(resolution=int(resolution))
+    if representation_config is None:
+        return defaults
+    lr_raw = representation_config.get("lr", defaults.lr)
+    if not isinstance(lr_raw, Mapping):
+        raise ValueError("SAM3D gaussian representation_config.lr must be a mapping")
+    lr = {name: float(defaults.lr[name]) for name in defaults.lr}
+    for name, value in lr_raw.items():
+        if name not in lr:
+            raise ValueError(f"unsupported SAM3D gaussian lr field: {name}")
+        lr[name] = float(value)
+    return Sam3dGaussianDecoderConfig(
+        resolution=int(resolution),
+        num_gaussians=int(representation_config.get("num_gaussians", defaults.num_gaussians)),
+        voxel_size=float(representation_config.get("voxel_size", defaults.voxel_size)),
+        perturb_offset=bool(representation_config.get("perturb_offset", defaults.perturb_offset)),
+        minimum_kernel_size=float(
+            representation_config.get(
+                "3d_filter_kernel_size",
+                representation_config.get("minimum_kernel_size", defaults.minimum_kernel_size),
+            )
+        ),
+        scaling_bias=float(representation_config.get("scaling_bias", defaults.scaling_bias)),
+        opacity_bias=float(representation_config.get("opacity_bias", defaults.opacity_bias)),
+        scaling_activation=str(representation_config.get("scaling_activation", defaults.scaling_activation)),
+        lr=lr,
+    )
 
 
 def decode_sam3d_gaussian_fields(

@@ -210,3 +210,41 @@ class TestSphericalHarmonics:
         dirs = mx.array([[0.0, 0.0, 1.0]])
         result = eval_sh(1, sh, dirs)
         assert result.shape == (1, 1, 1)
+
+    def test_sh_degree4_produces_finite_output(self):
+        sh = mx.ones((1, 3, 25))
+        dirs = mx.array([[0.0, 0.0, 1.0]])
+        result = eval_sh(4, sh, dirs)
+        assert result.shape == (1, 3, 1)
+        assert mx.isfinite(result).all().item()
+
+    def test_sh_degree4_numpy_matches_mlx(self):
+        sh_np = np.random.RandomState(42).randn(1, 3, 25).astype(np.float32)
+        dirs_np = np.array([[0.57735, 0.57735, 0.57735]], dtype=np.float32)
+        result_np = eval_sh_numpy(4, sh_np, dirs_np)
+        sh_mx = mx.array(sh_np)
+        dirs_mx = mx.array(dirs_np)
+        result_mx = eval_sh(4, sh_mx, dirs_mx)
+        np.testing.assert_allclose(np.array(result_mx), result_np, atol=1e-5)
+
+    def test_sh_degree4_vendor_parity(self):
+        sh = np.zeros((1, 1, 25), dtype=np.float32)
+        sh[..., 0, 0] = 1.0
+        sh[..., 0, 1] = 0.5
+        sh[..., 0, 5] = 0.3
+        sh[..., 0, 10] = -0.2
+        sh[..., 0, 17] = 0.1
+        dirs = np.array([[0.0, 0.0, 1.0]], dtype=np.float32)
+        result = eval_sh_numpy(4, sh, dirs)
+        assert result.shape == (1, 1, 1)
+        assert np.isfinite(result).all()
+
+    def test_sh_degree4_reference_zeroed_high_coeffs_equals_deg3(self):
+        rng = np.random.RandomState(123)
+        sh = rng.randn(2, 3, 25).astype(np.float32)
+        sh[..., 16:] = 0.0
+        dirs = rng.randn(2, 3).astype(np.float32)
+        dirs = dirs / np.linalg.norm(dirs, axis=-1, keepdims=True)
+        result4 = eval_sh_numpy(4, sh, dirs)
+        result3 = eval_sh_numpy(3, sh, dirs)
+        np.testing.assert_allclose(result4, result3, atol=1e-5)

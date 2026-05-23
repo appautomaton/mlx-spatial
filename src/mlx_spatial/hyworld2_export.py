@@ -10,6 +10,8 @@ import mlx.core as mx
 import numpy as np
 from PIL import Image
 
+from mlx_spatial.gs_rasterize import rasterize_gaussians
+
 
 def export_hyworld2_depth(
     output_dir: str | Path,
@@ -160,6 +162,7 @@ def export_hyworld2_gaussian_attributes(
         {"name": "gaussian-attributes", "path": attributes_path, "kind": "npz"}
     ]
     splat_stats: dict[str, object] | None = None
+    render_stats: dict[str, object] | None = None
     if raw_params is not None and image_tensor is not None:
         splats = build_hyworld2_gaussian_splats(
             raw_params=raw_params,
@@ -172,6 +175,18 @@ def export_hyworld2_gaussian_attributes(
         splat_stats = _write_gaussians_ply(ply_path, splats)
         records.append({"name": "gaussians", "path": ply_path, "kind": "ply"})
 
+        render_camera_params = _ensure_camera_params(
+            camera_params,
+            means=np.asarray(splats["means"], dtype=np.float32),
+        )
+        render_stats = _render_gaussians_frames(
+            splats,
+            render_camera_params,
+            root,
+        )
+        for entry in render_stats.get("renders", []):
+            records.append({"name": f"gs-render-{entry['frame']:03d}", "path": entry["path"], "kind": "png"})
+
     metadata = {
         "features_shape": list(arrays["features"].shape),
         "depth_shape": list(arrays["depth"].shape),
@@ -180,8 +195,10 @@ def export_hyworld2_gaussian_attributes(
         if "depth_mask_logits" in arrays
         else None,
         "gaussians_ply": splat_stats,
-        "rendering": {"status": "not requested", "requires_cuda_gsplat": False},
+        "rendering": {"status": "requested" if render_stats else "not requested", "requires_cuda_gsplat": False},
     }
+    if render_stats:
+        metadata["rendering"].update(render_stats)
     metadata_path = root / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     records.append({"name": "gaussian-metadata", "path": metadata_path, "kind": "json"})
@@ -501,6 +518,71 @@ def _quat_to_rotmat(quaternions: np.ndarray) -> np.ndarray:
         axis=-1,
     )
     return stacked.reshape((*quat.shape[:-1], 3, 3)).astype(np.float32)
+
+
+def _ensure_camera_params(
+    camera_params: mx.array | None,
+    *,
+    means: np.ndarray,
+) -> np.ndarray:
+    if camera_params is not None:
+        return _array(camera_params).astype(np.float32)
+    batch, frames, height, width = means.shape[:4]
+    aspect = float(width) / float(max(height, 1))
+    default_fov = np.float32(1.0471975511965976)
+    default_cam = np.zeros((batch, frames, 9), dtype=np.float32)
+    mean_depth = float(np.mean(means[..., 2]))
+    default_cam[..., :3] = np.array([0.0, 0.0, -max(abs(mean_depth), 0.5)], dtype=np.float32)
+    default_cam[..., 3:7] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    default_cam[..., 7] = default_fov
+    default_cam[..., 8] = 2.0 * np.arctan(np.tan(default_fov * 0.5) * aspect)
+    return default_cam
+
+
+def _render_gaussians_frames(
+    splats: dict[str, np.ndarray | str],
+    camera_params: np.ndarray,
+    output_root: Path,
+) -> dict[str, object]:
+    means = np.asarray(splats["means"], dtype=np.float32)
+    scales = np.asarray(splats["scales"], dtype=np.float32)
+    quats = np.asarray(splats["quats"], dtype=np.float32)
+    opacities = np.asarray(splats["opacities"], dtype=np.float32)
+    sh = np.asarray(splats["sh"], dtype=np.float32)
+    batch, frames, height, width = means.shape[:4]
+    image_size = (int(height), int(width))
+    renders_root = output_root / "renders"
+    renders_root.mkdir(parents=True, exist_ok=True)
+    render_paths: list[dict[str, object]] = []
+    for batch_index in range(batch):
+        for frame_index in range(frames):
+            flat_means = means[batch_index, frame_index].reshape((-1, 3))
+            flat_scales = scales[batch_index, frame_index].reshape((-1, 3))
+            flat_quats = quats[batch_index, frame_index].reshape((-1, 4))
+            flat_opacities = opacities[batch_index, frame_index].reshape((-1,))
+            flat_sh = sh[batch_index, frame_index].reshape((-1, *sh.shape[4:]))
+            cam_c2w, cam_intrinsics = camera_params_to_matrices(
+                camera_params[batch_index : batch_index + 1, frame_index : frame_index + 1],
+                image_size=image_size,
+            )
+            cam_view_matrix = np.linalg.inv(cam_c2w[0, 0]).astype(np.float32)
+            cam_intrinsics_flat = cam_intrinsics[0, 0].astype(np.float32)
+            result = rasterize_gaussians(
+                flat_means,
+                flat_quats,
+                flat_scales,
+                flat_opacities,
+                flat_sh,
+                {"view_matrix": cam_view_matrix, "intrinsics": cam_intrinsics_flat},
+                image_size,
+                use_metal=False,
+            )
+            rendered = np.asarray(result.rgba)
+            img = np.clip(rendered[..., :3] * 255.0, 0, 255).astype(np.uint8)
+            render_path = renders_root / f"render_b{batch_index:02d}_f{frame_index:03d}.png"
+            Image.fromarray(img, mode="RGB").save(render_path)
+            render_paths.append({"frame": int(batch_index * frames + frame_index), "path": str(render_path)})
+    return {"renders": render_paths, "frame_count": int(batch * frames), "backend": "mlx-spatial-gs-rasterize"}
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:

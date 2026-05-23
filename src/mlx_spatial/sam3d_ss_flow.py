@@ -223,7 +223,7 @@ def project_sam3d_ss_transformer_to_latents(
         start += token_count
     return {
         latent_name: _linear(
-            sam3d_layer_norm(split[latent_name]),
+            sam3d_layer_norm(split[latent_name], eps=1e-5),
             tensors[f"{prefix}{latent_name}.out_layer.weight"],
             tensors[f"{prefix}{latent_name}.out_layer.bias"],
         )

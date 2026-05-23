@@ -11,6 +11,7 @@ from mlx_spatial.sam3d_mesh import (
     extract_sam3d_mesh,
     extract_sam3d_mesh_from_features,
     extract_sam3d_flexicubes_surface_core,
+    fill_sam3d_mesh_holes,
     get_deformed_sam3d_grid_vertices,
     identify_sam3d_flexicubes_surface_cubes,
     identify_sam3d_flexicubes_surface_edges,
@@ -457,3 +458,95 @@ def test_extract_sam3d_mesh_from_features_propagates_empty_surface_blocker():
     assert result.ready is False
     assert result.blocker is not None
     assert result.blocker.stage == "mesh-decoder"
+
+
+def test_fill_sam3d_mesh_holes_fills_simple_clean_boundary_loop():
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.001, 0.0, 0.0],
+            [0.0, 0.001, 0.0],
+            [0.0, 0.0, 0.001],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64)
+
+    new_verts, new_faces, stats = fill_sam3d_mesh_holes(vertices, faces)
+
+    assert stats["boundary_edges_before"] == 3
+    assert stats["filled_loops"] == 1
+    assert stats["faces_added"] == 3
+    assert stats["vertices_added"] == 1
+    assert new_verts.shape[0] == vertices.shape[0] + 1
+    assert new_faces.shape[0] == faces.shape[0] + 3
+
+
+def test_fill_sam3d_mesh_holes_skips_large_loop():
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.1, 0.0, 0.0],
+            [0.0, 0.1, 0.0],
+            [0.0, 0.0, 0.1],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64)
+
+    new_verts, new_faces, stats = fill_sam3d_mesh_holes(vertices, faces, max_hole_area=1e-8)
+
+    assert stats["filled_loops"] == 0
+    assert stats["skipped_large"] == 1
+    np.testing.assert_array_equal(new_faces, faces)
+
+
+def test_fill_sam3d_mesh_holes_uses_camera_visibility_for_orientation():
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.002, 0.0, 0.0],
+            [0.0, 0.002, 0.0],
+            [0.0, 0.0, 0.002],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64)
+    camera_centers = np.array([[0.0, 0.0, 10.0]], dtype=np.float32)
+
+    _, new_faces, stats = fill_sam3d_mesh_holes(vertices, faces, camera_centers=camera_centers)
+
+    assert stats["filled_loops"] == 1
+    assert new_faces.shape[0] == faces.shape[0] + 3
+
+
+def test_fill_sam3d_mesh_holes_rejects_invalid_input():
+    bad_vertices = np.array([[0.0, 0.0]], dtype=np.float32)
+    bad_faces = np.array([[0, 1, 2]], dtype=np.int64)
+
+    try:
+        fill_sam3d_mesh_holes(bad_vertices, bad_faces)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for invalid vertex shape")
+
+
+def test_fill_sam3d_mesh_holes_no_boundary_returns_unchanged():
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3], [0, 2, 1]], dtype=np.int64)
+
+    new_verts, new_faces, stats = fill_sam3d_mesh_holes(vertices, faces)
+
+    assert stats["boundary_edges_before"] == 0
+    assert stats["filled_loops"] == 0
+    np.testing.assert_array_equal(new_verts, vertices)
+    np.testing.assert_array_equal(new_faces, faces)

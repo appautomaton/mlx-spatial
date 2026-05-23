@@ -312,7 +312,36 @@ def run_sam3d_slat_condition_stack(
 
 
 def _token_shape_metadata(label: str, tokens: mx.array) -> dict[str, object]:
-    return {"name": label, "shape": tuple(int(value) for value in tokens.shape)}
+    values = np.array(tokens, dtype=np.float32)
+    finite = np.isfinite(values)
+    finite_values = values[finite]
+    if finite_values.size:
+        stats = {
+            "finite_count": int(finite_values.size),
+            "nan_count": int(np.isnan(values).sum()),
+            "posinf_count": int(np.isposinf(values).sum()),
+            "neginf_count": int(np.isneginf(values).sum()),
+            "mean": float(finite_values.mean()),
+            "std": float(finite_values.std()),
+            "min": float(finite_values.min()),
+            "max": float(finite_values.max()),
+        }
+    else:
+        stats = {
+            "finite_count": 0,
+            "nan_count": int(np.isnan(values).sum()),
+            "posinf_count": int(np.isposinf(values).sum()),
+            "neginf_count": int(np.isneginf(values).sum()),
+            "mean": None,
+            "std": None,
+            "min": None,
+            "max": None,
+        }
+    return {
+        "name": label,
+        "shape": tuple(int(value) for value in tokens.shape),
+        "stats": stats,
+    }
 
 
 def _run_dino_block(
@@ -474,8 +503,8 @@ def _resize_nearest_bchw(values: mx.array, size: int) -> mx.array:
     height, width = int(values.shape[2]), int(values.shape[3])
     if height == size and width == size:
         return values
-    rows = np.clip(((np.arange(size) + 0.5) * height / size).astype(np.int64), 0, height - 1)
-    cols = np.clip(((np.arange(size) + 0.5) * width / size).astype(np.int64), 0, width - 1)
+    rows = np.clip((np.arange(size) * height / size).astype(np.int64), 0, height - 1)
+    cols = np.clip((np.arange(size) * width / size).astype(np.int64), 0, width - 1)
     arr = np.array(values, dtype=np.float32)
     return mx.array(arr[:, :, rows[:, None], cols[None, :]], dtype=values.dtype)
 

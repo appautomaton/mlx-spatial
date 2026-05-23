@@ -113,7 +113,7 @@ def run_sam3d_slat_decoder_torso(
             shift_window=(config.window_size // 2) * (index % 2),
         )
         mx.eval(hidden)
-    return sam3d_layer_norm(hidden)
+    return sam3d_layer_norm(hidden, eps=1e-5)
 
 
 def run_sam3d_slat_decoder_network(

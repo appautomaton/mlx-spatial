@@ -4,9 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlx-spatial"
-version = "0.1.0"
+version = "0.0.1"
 description = "MLX-first primitives for 3D and spatial model inference."
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "AppAutomaton" }]
+urls = { Repository = "https://github.com/appautomaton/mlx-spatial" }
 requires-python = ">=3.11"
 dependencies = [
     "fast-simplification>=0.1.13",
@@ -33,6 +36,32 @@ mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlx_spatial"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/.github",
+    "/LICENSE",
+    "/README.md",
+    "/docs",
+    "/pyproject.toml",
+    "/scripts",
+    "/src",
+    "/tests",
+    "/uv.lock",
+]
+exclude = [
+    "/.agent",
+    "/.claude",
+    "/.codex",
+    "/.pytest_cache",
+    "/.ruff_cache",
+    "/.venv",
+    "/dist",
+    "/inputs",
+    "/outputs",
+    "/vendors",
+    "/weights",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

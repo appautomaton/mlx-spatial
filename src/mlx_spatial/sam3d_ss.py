@@ -101,6 +101,11 @@ def run_sam3d_ss_decoder(
         downsample_factor=downsample_factor,
         metadata={
             "occupancy_shape": tuple(int(value) for value in occupancy.shape),
+            "occupancy_min": float(np.nanmin(occupancy)),
+            "occupancy_max": float(np.nanmax(occupancy)),
+            "occupancy_mean": float(np.nanmean(occupancy)),
+            "occupancy_std": float(np.nanstd(occupancy)),
+            "occupancy_positive_fraction": float(np.count_nonzero(occupancy > 0.0) / occupancy.size),
             "coords_original_count": int(coords_original.shape[0]),
             "coords_count": int(coords.shape[0]),
             "downsample_factor": int(downsample_factor),

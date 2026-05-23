@@ -840,7 +840,7 @@ class Trellis2InferencePipeline:
         glb_target_faces: int = TRELLIS2_GLB_DEFAULT_FACE_TARGET,
         xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
         xatlas_parallel_chunks: int = 0,
-        texture_bake_backend: str = "trilinear",
+        texture_bake_backend: str = "kdtree",
         retain_trace_payloads: bool = True,
     ) -> Trellis2TexturedGenerationResult:
         image = Path(image_path)

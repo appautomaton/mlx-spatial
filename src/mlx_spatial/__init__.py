@@ -1,18 +1,20 @@
 """MLX-first spatial primitives."""
 
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
-from .grid import regular_grid
+from .grid import regular_grid, create_uv_grid, fourier_embeddings, fourier_embeddings_np
 from .model_assets import DINOv3_VITL16_ASSETS, RMBG2_ASSETS, TRELLIS2_ASSETS, validate_model_assets
 from .ovoxel import (
     FlexibleDualGridMesh,
     MeshHoleFillStats,
     dense_coordinates,
     fill_flexible_dual_grid_mesh_holes,
+    fill_narrow_band_mesh_holes,
     flexi_dual_grid_fields_to_mesh,
     flexible_dual_grid_to_mesh_np,
     flatten_coordinates,
     in_bounds_mask,
     mesh_to_obj_payload,
+    remesh_narrow_band_dual_contouring,
     unflatten_indices,
 )
 from .sam3d import (
@@ -41,7 +43,7 @@ from .sam3d_assets import (
     resolve_sam3d_pipeline_path,
 )
 from .sam3d_flow import (
-    Sam3dShortcutParityReport,
+    Sam3dShortcutComparisonReport,
     compare_sam3d_shortcut_outputs,
 )
 from .sam3d_export import (
@@ -89,8 +91,10 @@ from .sam3d_render import (
     Sam3dMultiviewRenderResult,
     Sam3dRenderCamera,
     optimize_sam3d_layout_alignment,
+    optimize_sam3d_layout_render_and_compare,
     render_sam3d_gaussian_multiview,
     sam3d_gaussian_fields_to_raster_inputs,
+    sam3d_layout_render_and_compare_score,
     sam3d_orbit_cameras,
 )
 from .sam3d_preprocess import (
@@ -172,14 +176,16 @@ from .hyworld2_parity import (
     require_hyworld2_torch_parity_enabled,
     write_hyworld2_parity_bundle,
 )
+from .spatial_interp import (
+    sparse_nearest_interpolate,
+    sparse_trilinear_interpolate,
+)
 from .sparse_conv import (
     gather_sparse_features,
     kernel_offsets,
     scatter_sparse_features,
     sparse_conv_map,
     sparse_conv_map_vectorized,
-    sparse_nearest_interpolate,
-    sparse_trilinear_interpolate,
     weighted_sparse_conv,
     weighted_sparse_conv_chunked,
 )
@@ -320,6 +326,7 @@ from .trellis2_slat import (
     select_shape_slat_route,
     select_texture_slat_route,
 )
+from .mesh_to_fdg import mesh_to_flexible_dual_grid
 from .trellis2_inference import (
     TRELLIS2_INFERENCE_STAGES,
     Trellis2AttemptReport,
@@ -329,6 +336,13 @@ from .trellis2_inference import (
     Trellis2ShapeGenerationResult,
     Trellis2StageReport,
     Trellis2TexturedGenerationResult,
+)
+from .trellis2_texturing import (
+    TRELLIS2_TEXTURING_DEFAULT_SEED,
+    TRELLIS2_TEXTURING_DEFAULT_TEXTURE_SIZE,
+    Trellis2TexturingBlocker,
+    Trellis2TexturingPipeline,
+    Trellis2TexturingResult,
 )
 
 __all__ = [
@@ -345,6 +359,9 @@ __all__ = [
     "kernel_offsets",
     "load_checkpoint_tensors",
     "neighbor_offsets_26",
+    "create_uv_grid",
+    "fourier_embeddings",
+    "fourier_embeddings_np",
     "regular_grid",
     "scatter_sparse_features",
     "sparse_conv_map",
@@ -389,7 +406,7 @@ __all__ = [
     "Sam3dPipelinePath",
     "Sam3dPreprocessedInput",
     "Sam3dRenderCamera",
-    "Sam3dShortcutParityReport",
+    "Sam3dShortcutComparisonReport",
     "Rmbg2KeyInventory",
     "Rmbg2PortAssessment",
     "Rmbg2PortBlocker",
@@ -457,6 +474,11 @@ __all__ = [
     "Trellis2XAtlasUnwrapResult",
     "Trellis2XAtlasUnwrapStats",
     "TRELLIS2_INFERENCE_STAGES",
+    "TRELLIS2_TEXTURING_DEFAULT_SEED",
+    "TRELLIS2_TEXTURING_DEFAULT_TEXTURE_SIZE",
+    "Trellis2TexturingBlocker",
+    "Trellis2TexturingPipeline",
+    "Trellis2TexturingResult",
     "SLatFlowConfig",
     "ShapeSLatForwardProbe",
     "ShapeSLatRoute",
@@ -487,6 +509,7 @@ __all__ = [
     "dispatch_texture_slat_boundary",
     "ensure_trellis2_mac_export_dependencies",
     "fill_flexible_dual_grid_mesh_holes",
+    "fill_narrow_band_mesh_holes",
     "flexi_dual_grid_fields_to_mesh",
     "flexible_dual_grid_to_mesh_np",
     "inspect_dinov3_assets",
@@ -501,9 +524,11 @@ __all__ = [
     "load_trellis2_probe",
     "make_trellis2_face_atlas_uvs",
     "measure_trellis2_mesh_quality",
+    "mesh_to_flexible_dual_grid",
     "missing_trellis2_mac_export_dependencies",
     "mesh_to_obj_payload",
     "optimize_sam3d_layout_alignment",
+    "optimize_sam3d_layout_render_and_compare",
     "preprocess_trellis2_image",
     "postprocess_trellis2_mesh_for_glb",
     "prepare_dinov3_image_tensor",
@@ -521,12 +546,14 @@ __all__ = [
     "rasterize_gaussians",
     "rasterize_gaussians_cpu_reference",
     "remove_background_rmbg2_mlx",
+    "remesh_narrow_band_dual_contouring",
     "render_sam3d_gaussian_multiview",
     "run_rmbg2_mlx",
     "run_flexi_dual_grid_vae_encoder",
     "run_sam3d_moge_pointmap",
     "run_shape_decoder_to_fields",
     "sam3d_gaussian_fields_to_raster_inputs",
+    "sam3d_layout_render_and_compare_score",
     "sam3d_binary_row_size",
     "sam3d_basic_glb_payload",
     "sam3d_gaussian_dc_to_rgb",

@@ -46,7 +46,7 @@ class Sam3dFlowSchedule:
 
 
 @dataclass(frozen=True)
-class Sam3dShortcutParityReport:
+class Sam3dShortcutComparisonReport:
     """Reference comparison for shortcut/fewer-step SAM3D outputs."""
 
     passed: bool
@@ -99,7 +99,7 @@ def compare_sam3d_shortcut_outputs(
     *,
     atol: float = 1e-5,
     rtol: float = 1e-4,
-) -> Sam3dShortcutParityReport:
+) -> Sam3dShortcutComparisonReport:
     """Compare fewer-step shortcut outputs against a reference output bundle."""
 
     reference_keys = set(reference)
@@ -107,9 +107,9 @@ def compare_sam3d_shortcut_outputs(
     if reference_keys != candidate_keys:
         missing = sorted(reference_keys - candidate_keys)
         extra = sorted(candidate_keys - reference_keys)
-        raise ValueError(f"SAM3D shortcut parity keys differ: missing={missing}, extra={extra}")
+        raise ValueError(f"SAM3D shortcut comparison keys differ: missing={missing}, extra={extra}")
     if not reference_keys:
-        raise ValueError("SAM3D shortcut parity requires at least one tensor")
+        raise ValueError("SAM3D shortcut comparison requires at least one tensor")
 
     tensor_errors: dict[str, dict[str, object]] = {}
     max_abs_error = 0.0
@@ -119,7 +119,7 @@ def compare_sam3d_shortcut_outputs(
         ref = np.asarray(reference[key], dtype=np.float32)
         got = np.asarray(candidate[key], dtype=np.float32)
         if ref.shape != got.shape:
-            raise ValueError(f"SAM3D shortcut parity tensor {key} shape differs: {ref.shape} != {got.shape}")
+            raise ValueError(f"SAM3D shortcut comparison tensor {key} shape differs: {ref.shape} != {got.shape}")
         abs_error = np.abs(got - ref)
         rel_error = abs_error / np.maximum(np.abs(ref), float(atol))
         tensor_max_abs = float(abs_error.max(initial=0.0))
@@ -135,7 +135,7 @@ def compare_sam3d_shortcut_outputs(
         max_relative_error = max(max_relative_error, tensor_max_rel)
         passed = passed and tensor_passed
 
-    return Sam3dShortcutParityReport(
+    return Sam3dShortcutComparisonReport(
         passed=passed,
         tensor_count=len(reference_keys),
         max_abs_error=float(max_abs_error),

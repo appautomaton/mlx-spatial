@@ -122,11 +122,11 @@ def preprocess_sam3d_official_tensors(
             pointmap.astype(np.float32, copy=False),
             mask,
         )
-        cropped_pointmap = _crop_and_pad_array(normalized_pointmap, crop_box, fill_value=float("nan"))
+        cropped_pointmap = _crop_and_pad_array(normalized_pointmap, crop_box, fill_value=0.0)
         pointmap_square = _pad_to_square(cropped_pointmap, fill_value=float("nan"))
         processed_pointmap = _resize_pointmap(pointmap_square, output_size, order=0)
         full_pointmap = _resize_pointmap(
-            _pad_to_square(normalized_pointmap, fill_value=float("nan")),
+            _pad_to_square(normalized_pointmap, fill_value=0.0),
             output_size,
             order=0,
         )
@@ -201,7 +201,7 @@ def _normalize_pointmap_object_centric_ssi(
 
     shift = np.nanmedian(mask_points, axis=1).astype(np.float32)
     points_centered = pointmap_flat - shift[:, None]
-    max_dims = np.nanmax(np.abs(points_centered), axis=0)
+    max_dims = np.max(np.abs(points_centered), axis=0)
     scale_value = float(np.nanmedian(max_dims))
     if not np.isfinite(scale_value) or scale_value <= 0:
         scale_value = 1.0
@@ -224,16 +224,16 @@ def _pad_to_square(array: np.ndarray, *, fill_value: float) -> np.ndarray:
 
 
 def _resize_float_image(array: np.ndarray, size: int, *, resample: Image.Resampling) -> np.ndarray:
+    if resample == Image.Resampling.NEAREST:
+        values = array[..., None] if array.ndim == 2 else array
+        return _resize_nearest_hwc(values.astype(np.float32, copy=False), size)
     if array.ndim == 2:
-        pil = Image.fromarray(np.clip(array * 255.0, 0, 255).astype(np.uint8), mode="L")
-        resized = np.asarray(pil.resize((size, size), resample=resample), dtype=np.float32) / 255.0
-        return resized[..., None]
+        return _resize_float_channels(array[..., None], size, resample)
     channels = []
     for channel in range(array.shape[2]):
         channel_array = np.asarray(array[..., channel], dtype=np.float32)
         if np.nanmin(channel_array) >= 0.0 and np.nanmax(channel_array) <= 1.0:
-            pil = Image.fromarray(np.clip(channel_array * 255.0, 0, 255).astype(np.uint8), mode="L")
-            channels.append(np.asarray(pil.resize((size, size), resample=resample), dtype=np.float32) / 255.0)
+            channels.append(_resize_float_channel(channel_array, size, resample))
         else:
             try:
                 from scipy import ndimage
@@ -245,13 +245,44 @@ def _resize_float_image(array: np.ndarray, size: int, *, resample: Image.Resampl
     return np.stack(channels, axis=-1).astype(np.float32)
 
 
+def _resize_float_channels(array: np.ndarray, size: int, resample: Image.Resampling) -> np.ndarray:
+    return np.stack(
+        [
+            _resize_float_channel(np.asarray(array[..., channel], dtype=np.float32), size, resample)
+            for channel in range(array.shape[2])
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+
+def _resize_float_channel(channel_array: np.ndarray, size: int, resample: Image.Resampling) -> np.ndarray:
+    if resample == Image.Resampling.NEAREST:
+        return _resize_nearest_hwc(channel_array[..., None].astype(np.float32, copy=False), size)[..., 0]
+    pil = Image.fromarray(np.clip(channel_array, 0.0, 1.0).astype(np.float32, copy=False), mode="F")
+    return np.asarray(pil.resize((size, size), resample=resample), dtype=np.float32)
+
+
 def _resize_pointmap(array: np.ndarray, size: int, *, order: int) -> np.ndarray:
+    if order == 0:
+        return _resize_nearest_hwc(array, size)
     try:
         from scipy import ndimage
     except ModuleNotFoundError as error:
         raise ValueError("scipy is required for float pointmap resizing") from error
     zoom = (size / array.shape[0], size / array.shape[1], 1.0)
     return ndimage.zoom(array.astype(np.float32, copy=False), zoom, order=order).astype(np.float32)
+
+
+def _resize_nearest_hwc(array: np.ndarray, size: int) -> np.ndarray:
+    values = array.astype(np.float32, copy=False)
+    if values.ndim != 3:
+        raise ValueError(f"nearest resize expects HWC input, got {values.shape}")
+    height, width = values.shape[:2]
+    rows = np.floor(np.arange(size, dtype=np.float32) * (height / float(size))).astype(np.int64)
+    cols = np.floor(np.arange(size, dtype=np.float32) * (width / float(size))).astype(np.int64)
+    rows = np.clip(rows, 0, height - 1)
+    cols = np.clip(cols, 0, width - 1)
+    return values[rows[:, None], cols[None, :], :].astype(np.float32, copy=False)
 
 
 def _chw(array: np.ndarray | None) -> np.ndarray | None:

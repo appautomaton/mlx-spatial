@@ -14,7 +14,7 @@ from .checkpoint import inspect_checkpoint, load_checkpoint_tensors
 from .sam3d_assets import Sam3dAssetBlocker
 
 
-SAM3D_MOGE_DEFAULT_ROOT = "weights/moge-vitl-mlx"
+SAM3D_MOGE_DEFAULT_ROOT = "weights/sam-3d-objects-mlx/moge"
 SAM3D_MOGE_PATCH_SIZE = 14
 SAM3D_MOGE_EMBED_DIM = 1024
 SAM3D_MOGE_DEPTH = 24
@@ -336,10 +336,12 @@ def _prepare_moge_image_tensor(
 
 def _resize_hwc_float(values: np.ndarray, size: tuple[int, int], resample: Image.Resampling) -> np.ndarray:
     height, width = (int(value) for value in size)
-    clipped = np.clip(values, 0.0, 1.0)
-    image = Image.fromarray(np.round(clipped * 255.0).astype(np.uint8), mode="RGB")
-    resized = image.resize((width, height), resample=resample)
-    return np.asarray(resized, dtype=np.float32) / 255.0
+    clipped = np.clip(values.astype(np.float32, copy=False), 0.0, 1.0)
+    channels = []
+    for channel in range(clipped.shape[2]):
+        image = Image.fromarray(clipped[..., channel], mode="F")
+        channels.append(np.asarray(image.resize((width, height), resample=resample), dtype=np.float32))
+    return np.stack(channels, axis=-1)
 
 
 def _run_moge_dinov2(

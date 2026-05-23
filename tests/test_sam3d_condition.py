@@ -4,6 +4,7 @@ import numpy as np
 from mlx_spatial.sam3d_condition import (
     Sam3dDinoConfig,
     Sam3dPointPatchConfig,
+    _resize_nearest_bchw,
     fuse_sam3d_condition_tokens,
     run_sam3d_dino_vitl14_reg,
     run_sam3d_point_patch_embed,
@@ -100,6 +101,14 @@ def test_run_sam3d_point_patch_embed_accepts_hwc_and_invalid_points():
 
     assert tuple(tokens.shape) == (1, 4, 16)
     assert np.isfinite(np.array(tokens)).all()
+
+
+def test_resize_nearest_bchw_matches_torch_floor_indices():
+    values = mx.array(np.arange(3, dtype=np.float32).reshape(1, 1, 3, 1))
+
+    resized = _resize_nearest_bchw(values, 5)
+
+    assert np.array_equal(np.array(resized[0, 0, :, 0]), np.array([0, 0, 1, 1, 2], dtype=np.float32))
 
 
 def test_run_sam3d_dino_vitl14_reg_omits_registers_after_final_norm():

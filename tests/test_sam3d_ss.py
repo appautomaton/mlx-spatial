@@ -94,3 +94,6 @@ def test_run_sam3d_ss_decoder_fixture_returns_occupancy_and_coords(tmp_path):
     assert output.coords_original.shape == (8, 4)
     assert output.coords.shape == (8, 4)
     assert output.downsample_factor == 1
+    assert output.metadata["occupancy_min"] == 1.0
+    assert output.metadata["occupancy_max"] == 1.0
+    assert output.metadata["occupancy_positive_fraction"] == 1.0

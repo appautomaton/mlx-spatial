@@ -295,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=TRELLIS2_XATLAS_DEFAULT_FACE_GUARD,
         help="maximum faces allowed into xatlas unwrap; use 'auto' for adaptive headroom",
     )
-    generate_textured_parser.add_argument("--texture-bake-backend", choices=TRELLIS2_TEXTURE_BAKE_BACKENDS, default="trilinear")
+    generate_textured_parser.add_argument("--texture-bake-backend", choices=TRELLIS2_TEXTURE_BAKE_BACKENDS, default="kdtree")
     generate_textured_parser.add_argument(
         "--xatlas-parallel-chunks",
         type=int,

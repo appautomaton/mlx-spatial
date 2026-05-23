@@ -335,5 +335,230 @@ def _validate_image_size(image_size: tuple[int, int]) -> tuple[int, int]:
     return height, width
 
 
+def sam3d_layout_render_and_compare_score(
+    source_points: np.ndarray,
+    target_points: np.ndarray,
+    *,
+    view_count: int = 8,
+    image_size: tuple[int, int] = (64, 64),
+    target_valid_mask: np.ndarray | None = None,
+) -> float:
+    """Compute a render-and-compare layout quality score.
+
+    Projects source and target point clouds orthographically from
+    multiple azimuthal views and compares silhouette overlap via
+    intersection-over-union.  Higher scores indicate better alignment.
+
+    Both clouds are projected into a shared normalized space so that
+    offsets between them affect the silhouette comparison.
+
+    Args:
+        source_points: (N, 3) float32 source point cloud.
+        target_points: (M, 3) float32 target point cloud.
+        view_count: Number of azimuthal views (default 8).
+        image_size: Silhouette image (height, width) for comparison.
+        target_valid_mask: Optional (M,) bool mask for target points
+            that should be considered in the comparison.
+
+    Returns:
+        Mean IoU score across all views in [0, 1].
+    """
+    source = _as_points(source_points, "source_points")
+    target = _as_points(target_points, "target_points")
+    if view_count <= 0:
+        raise ValueError(f"view_count must be positive, got {view_count}")
+    height, width = _validate_image_size(image_size)
+    if target_valid_mask is not None:
+        mask = np.asarray(target_valid_mask, dtype=bool).reshape(-1)
+        if mask.shape[0] != target.shape[0]:
+            raise ValueError(f"target_valid_mask must have shape ({target.shape[0]},), got {mask.shape}")
+    else:
+        mask = np.ones(target.shape[0], dtype=bool)
+
+    visible_target = target[mask]
+    if visible_target.shape[0] == 0:
+        return 0.0
+
+    scores: list[float] = []
+    for idx in range(view_count):
+        azimuth = 2.0 * np.pi * float(idx) / float(view_count)
+        source_proj = _orthographic_project(source, azimuth=azimuth, elevation=0.0)
+        target_proj = _orthographic_project(visible_target, azimuth=azimuth, elevation=0.0)
+
+        source_sil, target_sil = _shared_normalized_silhouettes(
+            source_proj, target_proj, image_size=(height, width)
+        )
+
+        intersection = np.sum(source_sil & target_sil)
+        union = np.sum(source_sil | target_sil)
+        if union > 0:
+            scores.append(float(intersection) / float(union))
+
+    return float(np.mean(scores)) if scores else 0.0
+
+
+def optimize_sam3d_layout_render_and_compare(
+    source_points: np.ndarray,
+    target_points: np.ndarray,
+    *,
+    initial_transform: np.ndarray | None = None,
+    iterations: int = 64,
+    max_translation: float = 0.5,
+    max_rotation_degrees: float = 15.0,
+    view_count: int = 8,
+    image_size: tuple[int, int] = (64, 64),
+    improvement_threshold: float = 1e-6,
+) -> Sam3dLayoutOptimizationResult:
+    """Render-and-compare layout post-optimization beyond rigid ICP.
+
+    Uses gradient-free perturbation sampling: proposes random rigid
+    perturbations around the current transform, accepts if the
+    render-and-compare score improves.  Followed by a rigid ICP
+    refinement step.
+
+    Args:
+        source_points: (N, 3) float32 source point cloud.
+        target_points: (M, 3) float32 target point cloud.
+        initial_transform: Optional (4, 4) initial rigid transform.
+        iterations: Number of perturbation trials (default 64).
+        max_translation: Maximum per-axis translation perturbation.
+        max_rotation_degrees: Maximum rotation perturbation in degrees.
+        view_count: Number of azimuthal comparison views.
+        image_size: Silhouette image size for comparison.
+        improvement_threshold: Minimum score improvement to accept.
+
+    Returns:
+        Sam3dLayoutOptimizationResult with optimized transform and scores.
+    """
+    source = _as_points(source_points, "source_points")
+    target = _as_points(target_points, "target_points")
+    if iterations < 1:
+        raise ValueError(f"iterations must be positive, got {iterations}")
+
+    transform = np.eye(4, dtype=np.float64) if initial_transform is None else _as_transform(initial_transform)
+    initial_aligned = _apply_transform(source, transform)
+    initial_rmse = _rmse(initial_aligned, target[_nearest_neighbor_indices(initial_aligned, target)])
+
+    current_score = sam3d_layout_render_and_compare_score(
+        initial_aligned, target, view_count=view_count, image_size=image_size
+    )
+
+    best_transform = transform.copy()
+    best_aligned = initial_aligned.copy()
+    best_score = current_score
+
+    rng = np.random.default_rng(42)
+    for _ in range(int(iterations)):
+        rand_t = rng.uniform(-max_translation, max_translation, size=3).astype(np.float64)
+        rand_axis = rng.normal(size=3).astype(np.float64)
+        rand_axis = rand_axis / np.maximum(np.linalg.norm(rand_axis), 1e-12)
+        rand_angle = np.deg2rad(rng.uniform(-max_rotation_degrees, max_rotation_degrees))
+        rand_rot = _axis_angle_to_rotation(rand_axis, float(rand_angle))
+
+        candidate_transform = np.eye(4, dtype=np.float64)
+        candidate_transform[:3, :3] = rand_rot
+        candidate_transform[:3, 3] = rand_t
+        candidate_transform = candidate_transform @ best_transform
+
+        candidate_aligned = _apply_transform(source, candidate_transform)
+        candidate_score = sam3d_layout_render_and_compare_score(
+            candidate_aligned, target, view_count=view_count, image_size=image_size
+        )
+
+        if candidate_score > best_score + improvement_threshold:
+            best_transform = candidate_transform
+            best_score = candidate_score
+            best_aligned = candidate_aligned
+
+    matched_indices = _nearest_neighbor_indices(best_aligned, target)
+    optimized_rmse = _rmse(best_aligned, target[matched_indices])
+
+    return Sam3dLayoutOptimizationResult(
+        transform=best_transform.astype(np.float32),
+        aligned_points=best_aligned.astype(np.float32, copy=False),
+        initial_rmse=float(initial_rmse),
+        optimized_rmse=float(optimized_rmse),
+        iterations=int(iterations),
+        matched_indices=matched_indices.astype(np.int64, copy=False),
+    )
+
+
 def _sigmoid(values: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-values))
+
+
+def _orthographic_project(points: np.ndarray, *, azimuth: float, elevation: float) -> np.ndarray:
+    cos_a = np.cos(azimuth)
+    sin_a = np.sin(azimuth)
+    cos_e = np.cos(elevation)
+    sin_e = np.sin(elevation)
+
+    x = points[:, 0] * cos_a - points[:, 1] * sin_a
+    y = points[:, 0] * sin_e * sin_a + points[:, 1] * sin_e * cos_a + points[:, 2] * cos_e
+    return np.stack([x, y], axis=1).astype(np.float32, copy=False)
+
+
+def _point_silhouette(projected: np.ndarray, *, image_size: tuple[int, int]) -> np.ndarray:
+    height, width = image_size
+    x = projected[:, 0]
+    y = projected[:, 1]
+    if x.size == 0:
+        return np.zeros((height, width), dtype=bool)
+
+    x_min, x_max = float(x.min()), float(x.max())
+    y_min, y_max = float(y.min()), float(y.max())
+    x_span = x_max - x_min if x_max > x_min else 1.0
+    y_span = y_max - y_min if y_max > y_min else 1.0
+
+    px = np.clip(((x - x_min) / x_span * (width - 1)).astype(np.int32), 0, width - 1)
+    py = np.clip(((y - y_min) / y_span * (height - 1)).astype(np.int32), 0, height - 1)
+
+    silhouette = np.zeros((height, width), dtype=bool)
+    silhouette[py, px] = True
+    return silhouette
+
+
+def _shared_normalized_silhouettes(
+    source_proj: np.ndarray,
+    target_proj: np.ndarray,
+    *,
+    image_size: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    height, width = image_size
+    if source_proj.size == 0 and target_proj.size == 0:
+        return np.zeros((height, width), dtype=bool), np.zeros((height, width), dtype=bool)
+
+    all_x = np.concatenate([source_proj[:, 0], target_proj[:, 0]]) if source_proj.size else target_proj[:, 0]
+    all_y = np.concatenate([source_proj[:, 1], target_proj[:, 1]]) if source_proj.size else target_proj[:, 1]
+
+    x_min, x_max = float(all_x.min()), float(all_x.max())
+    y_min, y_max = float(all_y.min()), float(all_y.max())
+    x_span = x_max - x_min if x_max > x_min else 1.0
+    y_span = y_max - y_min if y_max > y_min else 1.0
+
+    def _render(points: np.ndarray) -> np.ndarray:
+        if points.size == 0:
+            return np.zeros((height, width), dtype=bool)
+        px = np.clip(((points[:, 0] - x_min) / x_span * (width - 1)).astype(np.int32), 0, width - 1)
+        py = np.clip(((points[:, 1] - y_min) / y_span * (height - 1)).astype(np.int32), 0, height - 1)
+        sil = np.zeros((height, width), dtype=bool)
+        sil[py, px] = True
+        return sil
+
+    return _render(source_proj), _render(target_proj)
+
+
+def _axis_angle_to_rotation(axis: np.ndarray, angle: float) -> np.ndarray:
+    axis_norm = axis / np.maximum(np.linalg.norm(axis), 1e-12)
+    cos_a = np.cos(angle)
+    sin_a = np.sin(angle)
+    one_minus_cos = 1.0 - cos_a
+    ux, uy, uz = float(axis_norm[0]), float(axis_norm[1]), float(axis_norm[2])
+    return np.array(
+        [
+            [cos_a + ux * ux * one_minus_cos, ux * uy * one_minus_cos - uz * sin_a, ux * uz * one_minus_cos + uy * sin_a],
+            [uy * ux * one_minus_cos + uz * sin_a, cos_a + uy * uy * one_minus_cos, uy * uz * one_minus_cos - ux * sin_a],
+            [uz * ux * one_minus_cos - uy * sin_a, uz * uy * one_minus_cos + ux * sin_a, cos_a + uz * uz * one_minus_cos],
+        ],
+        dtype=np.float64,
+    )

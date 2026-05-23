@@ -3,8 +3,10 @@ import numpy as np
 from mlx_spatial.sam3d_export import SAM3D_SH_C0, postprocess_sam3d_mesh_for_glb
 from mlx_spatial.sam3d_render import (
     optimize_sam3d_layout_alignment,
+    optimize_sam3d_layout_render_and_compare,
     render_sam3d_gaussian_multiview,
     sam3d_gaussian_fields_to_raster_inputs,
+    sam3d_layout_render_and_compare_score,
     sam3d_orbit_cameras,
 )
 
@@ -106,3 +108,66 @@ def test_holes_postprocess_fills_clean_mesh_holes():
     assert result.stats.hole_fill.filled_loops == 1
     assert result.stats.hole_fill.faces_added == 3
     assert result.faces.shape[0] > faces.shape[0]
+
+
+def test_render_and_compare_score_io_u_on_aligned_vs_misaligned_point_clouds():
+    target = np.array(
+        [
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    source_aligned = target + np.float32(1e-4)
+
+    score_aligned = sam3d_layout_render_and_compare_score(
+        source_aligned, target, view_count=4, image_size=(64, 64)
+    )
+    score_offset = sam3d_layout_render_and_compare_score(
+        source_aligned + np.array([0.2, 0.15, 0.0], dtype=np.float32),
+        target,
+        view_count=4,
+        image_size=(64, 64),
+    )
+
+    assert 0.0 <= score_aligned <= 1.0
+    assert 0.0 <= score_offset <= 1.0
+    assert score_aligned >= score_offset
+
+
+def test_render_and_compare_score_returns_zero_for_no_valid_target():
+    source = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
+    target = np.array([[0.5, 0.5, 0.5]], dtype=np.float32)
+
+    score = sam3d_layout_render_and_compare_score(
+        source, target, target_valid_mask=np.array([False])
+    )
+
+    assert score == 0.0
+
+
+def test_optimize_sam3d_layout_render_and_compare_produces_valid_result():
+    target = np.array(
+        [
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    source = target + np.array([0.3, -0.2, 0.15], dtype=np.float32)
+
+    result = optimize_sam3d_layout_render_and_compare(
+        source, target, iterations=32, max_translation=0.8, max_rotation_degrees=20.0, view_count=4
+    )
+
+    assert result.transform.shape == (4, 4)
+    assert result.aligned_points.shape == source.shape
+    assert result.iterations == 32
+    assert np.all(np.isfinite(result.transform))
+    assert np.all(np.isfinite(result.aligned_points))

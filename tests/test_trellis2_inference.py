@@ -792,7 +792,7 @@ def _patch_textured_glb_exact_slat_fixtures(
         texture_size,
         xatlas_face_guard="auto",
         xatlas_parallel_chunks=0,
-        texture_bake_backend="trilinear",
+        texture_bake_backend="kdtree",
         projection_source_mesh=None,
     ):
         calls["bake_mesh"] = mesh
@@ -834,7 +834,7 @@ def _patch_textured_glb_exact_slat_fixtures(
             metallic_roughness=np.full((4, 4, 3), 128, dtype=np.uint8),
             coverage_ratio=0.5,
             raw_coverage_ratio=0.25,
-            backend="xatlas-trilinear",
+            backend=f"xatlas-{texture_bake_backend}",
             unwrap_backend="xatlas-global",
             unwrap_seconds=0.123,
             unwrap_chunks=1,
@@ -936,7 +936,7 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
     assert bake_mr_output.shape == (4, 4, 3)
     assert "coverage=0.5000" in bake_uv_output.detail
     assert "raw_coverage=0.2500" in bake_uv_output.detail
-    assert "xatlas-trilinear" in bake_uv_output.detail
+    assert "xatlas-kdtree" in bake_uv_output.detail
     assert "unwrap_backend=xatlas-global" in bake_uv_output.detail
     assert "unwrap_chunks=1" in bake_uv_output.detail
     assert "xatlas_face_guard=125000" in bake_uv_output.detail
@@ -967,7 +967,7 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
     assert calls["bake_texture_size"] == 1024
     assert calls["bake_xatlas_face_guard"] == "auto"
     assert calls["bake_xatlas_parallel_chunks"] == 0
-    assert calls["bake_texture_bake_backend"] == "trilinear"
+    assert calls["bake_texture_bake_backend"] == "kdtree"
     assert calls["bake_projection_source_mesh"] is calls["bake_mesh"]
     assert calls["glb_output_path"] == "outputs/trellis2/demo.glb"
     assert result.trace.blocker is None

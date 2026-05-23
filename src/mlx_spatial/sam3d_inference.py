@@ -57,7 +57,7 @@ from .sam3d_export import (
     write_sam3d_gaussians_ply,
     write_sam3d_textured_glb,
 )
-from .sam3d_gaussian import Sam3dGaussianDecoderConfig, decode_sam3d_gaussian_fields
+from .sam3d_gaussian import decode_sam3d_gaussian_fields, sam3d_gaussian_config_from_representation_config
 from .sam3d_mesh import extract_sam3d_mesh_from_features, run_sam3d_mesh_decoder_features
 
 
@@ -75,6 +75,19 @@ SAM3D_INFERENCE_STAGES = (
     "mesh-decoder",
     "glb-export",
 )
+SAM3D_DEFAULT_STAGE1_STEPS = 25
+SAM3D_DEFAULT_STAGE2_STEPS = 25
+SAM3D_DEFAULT_SS_CFG_STRENGTH = 7.0
+SAM3D_DEFAULT_SS_RESCALE_T = 3.0
+SAM3D_DEFAULT_SS_CFG_INTERVAL = (0.0, 500.0)
+SAM3D_DEFAULT_SLAT_CFG_STRENGTH = 5.0
+SAM3D_DEFAULT_SLAT_RESCALE_T = 3.0
+SAM3D_DEFAULT_SLAT_CFG_INTERVAL = (0.0, 500.0)
+SAM3D_SS_DENSE_OCCUPANCY_FRACTION = 0.05
+SAM3D_SS_SATURATED_OCCUPANCY_FRACTION = 0.10
+SAM3D_SS_MIN_AXIS_RANGE_VOXELS = 3
+SAM3D_GAUSSIAN_MIN_AXIS_RANGE = 0.05
+SAM3D_GAUSSIAN_HIGH_OPACITY_FRACTION = 0.75
 
 
 @dataclass(frozen=True)
@@ -137,8 +150,14 @@ class Sam3dInferencePipeline:
         moge_root: str | Path = SAM3D_MOGE_DEFAULT_ROOT,
         pointmap_path: str | Path | None = None,
         seed: int = 42,
-        stage1_steps: int = 2,
-        stage2_steps: int = 12,
+        stage1_steps: int = SAM3D_DEFAULT_STAGE1_STEPS,
+        stage2_steps: int = SAM3D_DEFAULT_STAGE2_STEPS,
+        ss_cfg_strength: float = SAM3D_DEFAULT_SS_CFG_STRENGTH,
+        ss_rescale_t: float = SAM3D_DEFAULT_SS_RESCALE_T,
+        ss_cfg_interval: tuple[float, float] = SAM3D_DEFAULT_SS_CFG_INTERVAL,
+        slat_cfg_strength: float | None = None,
+        slat_rescale_t: float | None = None,
+        slat_cfg_interval: tuple[float, float] = SAM3D_DEFAULT_SLAT_CFG_INTERVAL,
         memory_profile: str = "balanced",
         glb_postprocess: str = "cleaned",
         glb_target_faces: int = SAM3D_GLB_DEFAULT_TARGET_FACES,
@@ -155,10 +174,29 @@ class Sam3dInferencePipeline:
 
         output = _validate_sam3d_output_path(output_path)
         glb_output = _validate_sam3d_glb_output_path(glb_output_path) if glb_output_path else None
+        effective_mask_path = Path(mask_path)
         completed: list[str] = []
         outputs: list[Sam3dOutputArtifact] = []
         if stage1_steps <= 0 or stage2_steps <= 0:
             raise ValueError("stage1_steps and stage2_steps must be positive")
+        if ss_cfg_strength < 0:
+            raise ValueError(f"ss_cfg_strength must be non-negative, got {ss_cfg_strength}")
+        if ss_rescale_t < 0:
+            raise ValueError(f"ss_rescale_t must be non-negative, got {ss_rescale_t}")
+        if len(ss_cfg_interval) != 2:
+            raise ValueError(f"ss_cfg_interval must contain exactly two values, got {ss_cfg_interval}")
+        ss_cfg_interval = (float(ss_cfg_interval[0]), float(ss_cfg_interval[1]))
+        if ss_cfg_interval[0] > ss_cfg_interval[1]:
+            raise ValueError(f"ss_cfg_interval must be ordered low-to-high, got {ss_cfg_interval}")
+        if slat_cfg_strength is not None and slat_cfg_strength < 0:
+            raise ValueError(f"slat_cfg_strength must be non-negative, got {slat_cfg_strength}")
+        if slat_rescale_t is not None and slat_rescale_t < 0:
+            raise ValueError(f"slat_rescale_t must be non-negative, got {slat_rescale_t}")
+        if len(slat_cfg_interval) != 2:
+            raise ValueError(f"slat_cfg_interval must contain exactly two values, got {slat_cfg_interval}")
+        slat_cfg_interval = (float(slat_cfg_interval[0]), float(slat_cfg_interval[1]))
+        if slat_cfg_interval[0] > slat_cfg_interval[1]:
+            raise ValueError(f"slat_cfg_interval must be ordered low-to-high, got {slat_cfg_interval}")
         if memory_profile not in {"safe", "balanced", "large"}:
             raise ValueError(f"unsupported SAM3D memory profile: {memory_profile}")
         if glb_postprocess not in {"cleaned", "basic"}:
@@ -193,6 +231,12 @@ class Sam3dInferencePipeline:
             "pointmap_source": "external" if pointmap_path is not None else "moge",
             "stage1_steps": int(stage1_steps),
             "stage2_steps": int(stage2_steps),
+            "ss_cfg_strength": float(ss_cfg_strength),
+            "ss_cfg_interval": tuple(float(value) for value in ss_cfg_interval),
+            "ss_rescale_t": float(ss_rescale_t),
+            "slat_cfg_strength_requested": float(slat_cfg_strength) if slat_cfg_strength is not None else None,
+            "slat_cfg_interval": tuple(float(value) for value in slat_cfg_interval),
+            "slat_rescale_t_requested": float(slat_rescale_t) if slat_rescale_t is not None else None,
             "memory_profile": memory_profile,
             "requested_outputs": {
                 "gaussians_ply": str(output),
@@ -228,7 +272,7 @@ class Sam3dInferencePipeline:
         if inspection.blocker is not None:
             return self._blocked(
                 image_path,
-                mask_path,
+                effective_mask_path,
                 output,
                 glb_output,
                 completed,
@@ -254,18 +298,19 @@ class Sam3dInferencePipeline:
         }
 
         try:
-            preprocessed = preprocess_sam3d_image_mask(image_path, mask_path)
+            preprocessed = preprocess_sam3d_image_mask(image_path, effective_mask_path)
         except (FileNotFoundError, ValueError) as error:
             blocker = Sam3dAssetBlocker(
                 stage="image-mask-preprocessing",
                 operation="load SAM3D RGB image and binary object mask",
                 reason=str(error),
-                metadata={"image": str(image_path), "mask": str(mask_path)},
+                metadata={"image": str(image_path), "mask": str(effective_mask_path)},
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         completed.append("image-mask-preprocessing")
         metadata["input"] = _preprocess_metadata(preprocessed)
+        _record_sam3d_quality_issues(metadata)
 
         if pointmap_path is not None:
             try:
@@ -280,7 +325,7 @@ class Sam3dInferencePipeline:
                     reason=str(error),
                     metadata={"pointmap_path": str(pointmap_path)},
                 )
-                return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+                return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
             completed.append("external-pointmap")
             metadata["external_pointmap"] = external_pointmap.metadata
             metadata["moge"] = {
@@ -301,7 +346,7 @@ class Sam3dInferencePipeline:
             if moge_result.blocker is not None:
                 return self._blocked(
                     image_path,
-                    mask_path,
+                    effective_mask_path,
                     output,
                     glb_output,
                     completed,
@@ -332,9 +377,9 @@ class Sam3dInferencePipeline:
                 stage="official-preprocessing",
                 operation="run official SAM3D crop/pad/resize pointmap preprocessing",
                 reason=str(error),
-                metadata={"image": str(image_path), "mask": str(mask_path)},
+                metadata={"image": str(image_path), "mask": str(effective_mask_path)},
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
         completed.append("official-preprocessing")
         metadata["official_preprocessing"] = _official_preprocess_metadata(official)
         if pointmap_path is None:
@@ -366,16 +411,16 @@ class Sam3dInferencePipeline:
                     "stage1_steps": int(stage1_steps),
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         try:
             ss_generator_tensors = load_sam3d_ss_generator_tensors(ss_generator_path)
             ss_memory = _stage1_memory_config(memory_profile)
             ss_flow_config = infer_sam3d_ss_flow_config(
                 ss_generator_tensors,
-                cfg_strength=7.0,
-                cfg_interval=(0.0, 500.0),
-                rescale_t=3.0,
+                cfg_strength=float(ss_cfg_strength),
+                cfg_interval=ss_cfg_interval,
+                rescale_t=float(ss_rescale_t),
                 attention_chunk_size=ss_memory["attention_chunk"],
             )
             ss_flow = run_sam3d_ss_shortcut_flow(
@@ -409,10 +454,15 @@ class Sam3dInferencePipeline:
             metadata["sparse_structure"] = {
                 "flow": ss_flow.metadata,
                 "decoder": ss_decoded.metadata,
+                "occupancy_quality": _sam3d_ss_occupancy_quality(ss_decoded.metadata),
+                "coords_axis_stats": _sam3d_coord_axis_stats(ss_decoded.coords),
+                "coords_original_axis_stats": _sam3d_coord_axis_stats(ss_decoded.coords_original),
+                "geometry_quality": _sam3d_ss_geometry_quality(ss_decoded.coords),
                 "coords_shape": tuple(int(value) for value in ss_decoded.coords.shape),
                 "coords_original_shape": tuple(int(value) for value in ss_decoded.coords_original.shape),
                 "pose": pose.metadata,
             }
+            _record_sam3d_quality_issues(metadata)
             del ss_condition, ss_condition_tensors, ss_generator_tensors, ss_decoder_tensors, ss_flow
             _release_mlx_stage_memory(metadata, "after-sparse-structure")
         except (KeyError, ValueError, OSError, TypeError) as error:
@@ -426,7 +476,7 @@ class Sam3dInferencePipeline:
                     "memory_profile": memory_profile,
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         try:
             slat_generator_path = _checkpoint_path_for_role(inspection, "slat_generator")
@@ -445,11 +495,27 @@ class Sam3dInferencePipeline:
             metadata["slat_condition"]["materialized_token_shape"] = tuple(int(value) for value in slat_condition.tokens.shape)
             slat_generator_tensors = load_sam3d_slat_generator_tensors(slat_generator_path)
             slat_memory = _stage2_memory_config(memory_profile)
+            resolved_slat_cfg_strength = (
+                float(slat_cfg_strength)
+                if slat_cfg_strength is not None
+                else float(inspection.config.raw.get("slat_cfg_strength", SAM3D_DEFAULT_SLAT_CFG_STRENGTH))
+                if inspection.config
+                else SAM3D_DEFAULT_SLAT_CFG_STRENGTH
+            )
+            resolved_slat_rescale_t = (
+                float(slat_rescale_t)
+                if slat_rescale_t is not None
+                else float(inspection.config.raw.get("slat_rescale_t", SAM3D_DEFAULT_SLAT_RESCALE_T))
+                if inspection.config
+                else SAM3D_DEFAULT_SLAT_RESCALE_T
+            )
+            metadata["slat_cfg_strength"] = float(resolved_slat_cfg_strength)
+            metadata["slat_rescale_t"] = float(resolved_slat_rescale_t)
             slat_config = infer_sam3d_slat_flow_config(
                 slat_generator_tensors,
-                cfg_strength=float(inspection.config.raw.get("slat_cfg_strength", 1.0)) if inspection.config else 1.0,
-                cfg_interval=(0.0, 500.0),
-                rescale_t=float(inspection.config.raw.get("slat_rescale_t", 1.0)) if inspection.config else 1.0,
+                cfg_strength=resolved_slat_cfg_strength,
+                cfg_interval=slat_cfg_interval,
+                rescale_t=resolved_slat_rescale_t,
                 attention_chunk_size=slat_memory["attention_chunk"],
             )
             slat_mean = _pipeline_float_tuple(inspection.config.raw.get("slat_mean")) if inspection.config else None
@@ -470,6 +536,7 @@ class Sam3dInferencePipeline:
                 "coords_shape": tuple(int(value) for value in slat.coords.shape),
                 "feature_shape": tuple(int(value) for value in slat.feats.shape),
                 "token_count": int(slat.coords.shape[0]),
+                "feature_stats": _sam3d_array_stats(np.array(slat.feats, dtype=np.float32)),
             }
             del slat_condition, slat_condition_tensors, slat_generator_tensors, ss_decoded, official
             _release_mlx_stage_memory(metadata, "after-structured-latent")
@@ -485,7 +552,7 @@ class Sam3dInferencePipeline:
                     "coords_shape": tuple(int(value) for value in ss_decoded.coords.shape),
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         try:
             gs_decoder_config = read_sam3d_slat_decoder_config(_config_path_for_role(inspection, "slat_decoder_gs"))
@@ -496,10 +563,15 @@ class Sam3dInferencePipeline:
                 gs_decoder_tensors,
                 gs_decoder_config,
             )
+            gaussian_config = sam3d_gaussian_config_from_representation_config(
+                resolution=gs_decoder_config.resolution,
+                representation_config=gs_decoder_config.representation_config,
+            )
+            raw_gaussian_np = np.array(raw_gaussian, dtype=np.float32)
             gaussian_fields = decode_sam3d_gaussian_fields(
                 slat.coords,
-                np.array(raw_gaussian, dtype=np.float32),
-                config=Sam3dGaussianDecoderConfig(resolution=gs_decoder_config.resolution),
+                raw_gaussian_np,
+                config=gaussian_config,
             )
             ply_stats = write_sam3d_gaussians_ply(
                 output,
@@ -514,7 +586,12 @@ class Sam3dInferencePipeline:
             outputs.append(Sam3dOutputArtifact(name="gaussians.ply", path=output, kind="gaussian-ply"))
             metadata["gaussian_decoder"] = {
                 "network_output_shape": tuple(int(value) for value in raw_gaussian.shape),
+                "network_output_stats": _sam3d_array_stats(raw_gaussian_np),
+                "network_channel_stats": _sam3d_gaussian_network_channel_stats(raw_gaussian_np, gaussian_config.num_gaussians),
                 "fields": gaussian_fields.metadata,
+                "xyz_stats": _sam3d_xyz_axis_stats(gaussian_fields.xyz),
+                "geometry_quality": _sam3d_gaussian_geometry_quality(gaussian_fields.xyz),
+                "opacity_quality": _sam3d_gaussian_opacity_quality(gaussian_fields.opacity),
             }
             metadata["ply_export"] = {
                 "path": str(ply_stats.path),
@@ -523,6 +600,7 @@ class Sam3dInferencePipeline:
                 "format": ply_stats.format,
                 "fields": ply_stats.fields,
             }
+            _record_sam3d_quality_issues(metadata)
             del gs_decoder_tensors, raw_gaussian
             _release_mlx_stage_memory(metadata, "after-ply-export")
         except (KeyError, ValueError, OSError, TypeError) as error:
@@ -535,7 +613,7 @@ class Sam3dInferencePipeline:
                     "slat_feature_shape": tuple(int(value) for value in slat.feats.shape),
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         if glb_output is None:
             del slat, gaussian_fields
@@ -543,7 +621,7 @@ class Sam3dInferencePipeline:
             trace = Sam3dInferenceTrace(
                 root=self.root,
                 image_path=Path(image_path),
-                mask_path=Path(mask_path),
+                mask_path=effective_mask_path,
                 output_path=output,
                 glb_output_path=None,
                 completed_stages=tuple(completed),
@@ -594,7 +672,7 @@ class Sam3dInferencePipeline:
                 "memory_profile": mesh_memory,
             }
             if mesh.blocker is not None:
-                return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, mesh.blocker, metadata)
+                return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, mesh.blocker, metadata)
             if not mesh.ready or mesh.vertices is None or mesh.faces is None:
                 blocker = Sam3dAssetBlocker(
                     stage="mesh-decoder",
@@ -602,7 +680,7 @@ class Sam3dInferencePipeline:
                     reason="mesh decoder completed without a ready mesh result",
                     metadata=metadata["mesh_decoder"],
                 )
-                return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+                return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
             completed.append("mesh-decoder")
             del mesh_decoder_tensors, mesh_features, slat
             _release_mlx_stage_memory(metadata, "after-mesh-decoder")
@@ -618,7 +696,7 @@ class Sam3dInferencePipeline:
                     "memory_profile": memory_profile,
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         try:
             if glb_postprocess == "cleaned":
@@ -709,12 +787,12 @@ class Sam3dInferencePipeline:
                     "glb_postprocess": metadata.get("glb_postprocess"),
                 },
             )
-            return self._blocked(image_path, mask_path, output, glb_output, completed, outputs, blocker, metadata)
+            return self._blocked(image_path, effective_mask_path, output, glb_output, completed, outputs, blocker, metadata)
 
         trace = Sam3dInferenceTrace(
             root=self.root,
             image_path=Path(image_path),
-            mask_path=Path(mask_path),
+            mask_path=effective_mask_path,
             output_path=output,
             glb_output_path=glb_output,
             completed_stages=tuple(completed),
@@ -752,7 +830,7 @@ class Sam3dInferencePipeline:
 def _validate_sam3d_output_path(path: str | Path, outputs_root: str | Path = "outputs") -> Path:
     output = Path(path)
     if output.suffix.lower() != ".ply":
-        raise ValueError("SAM3D native parity output must be a .ply gaussian splat file")
+        raise ValueError("SAM3D output must be a .ply gaussian splat file")
     resolved_output = output.resolve()
     resolved_root = Path(outputs_root).resolve()
     try:
@@ -811,9 +889,9 @@ def load_sam3d_external_pointmap(
         "dtype": str(pointmap.dtype),
         "finite_count": int(np.isfinite(pointmap).sum()),
         "nan_count": int(np.isnan(pointmap).sum()),
-        "source_numeric_parity": "not_claimed",
-        "source_clipping_parity": "deferred",
-        "source_intrinsics_parity": "deferred",
+        "source_numeric_match": "not_claimed",
+        "source_clipping_match": "deferred",
+        "source_intrinsics_match": "deferred",
     }
     return Sam3dExternalPointmap(pointmap=pointmap, metadata=metadata)
 
@@ -849,6 +927,72 @@ def _preprocess_metadata(preprocessed: Sam3dPreprocessedInput) -> dict[str, obje
         "foreground_pixels": preprocessed.foreground_pixels,
         "rgba_shape": tuple(int(value) for value in preprocessed.rgba.shape),
     }
+
+
+def sam3d_quality_issue_records(metadata: dict[str, object]) -> tuple[dict[str, object], ...]:
+    issues: list[dict[str, object]] = []
+    sparse = metadata.get("sparse_structure")
+    if isinstance(sparse, dict):
+        quality = sparse.get("occupancy_quality")
+        if isinstance(quality, dict) and quality.get("status") != "nominal":
+            issues.append(
+                {
+                    "kind": "sparse_structure",
+                    "status": quality.get("status"),
+                    "reason": "sparse-structure occupancy is outside the nominal range",
+                    "positive_fraction": quality.get("positive_fraction"),
+                    "dense_threshold": quality.get("dense_threshold"),
+                    "saturated_threshold": quality.get("saturated_threshold"),
+                }
+            )
+        geometry_quality = sparse.get("geometry_quality")
+        if isinstance(geometry_quality, dict) and geometry_quality.get("status") != "nominal":
+            issues.append(
+                {
+                    "kind": "sparse_structure",
+                    "status": geometry_quality.get("status"),
+                    "reason": "sparse-structure coordinates are collapsed along at least one axis",
+                    "axis_range": geometry_quality.get("axis_range"),
+                    "min_axis_range": geometry_quality.get("min_axis_range"),
+                    "min_axis_range_threshold": geometry_quality.get("min_axis_range_threshold"),
+                    "positive_fraction": quality.get("positive_fraction") if isinstance(quality, dict) else None,
+                }
+            )
+    gaussian = metadata.get("gaussian_decoder")
+    if isinstance(gaussian, dict):
+        geometry_quality = gaussian.get("geometry_quality")
+        if isinstance(geometry_quality, dict) and geometry_quality.get("status") != "nominal":
+            issues.append(
+                {
+                    "kind": "gaussian_geometry",
+                    "status": geometry_quality.get("status"),
+                    "reason": "gaussian xyz coordinates are collapsed along at least one axis",
+                    "axis_range": geometry_quality.get("axis_range"),
+                    "min_axis_range": geometry_quality.get("min_axis_range"),
+                    "min_axis_range_threshold": geometry_quality.get("min_axis_range_threshold"),
+                }
+            )
+        quality = gaussian.get("opacity_quality")
+        if isinstance(quality, dict) and quality.get("status") != "nominal":
+            issues.append(
+                {
+                    "kind": "gaussian_opacity",
+                    "status": quality.get("status"),
+                    "reason": "gaussian opacity distribution is outside the nominal range",
+                    "alpha_gt_0_5_fraction": quality.get("alpha_gt_0_5_fraction"),
+                    "high_opacity_threshold": quality.get("high_opacity_threshold"),
+                }
+            )
+    return tuple(issues)
+
+
+def _record_sam3d_quality_issues(metadata: dict[str, object]) -> tuple[dict[str, object], ...]:
+    issues = sam3d_quality_issue_records(metadata)
+    if issues:
+        metadata["quality_issues"] = issues
+    else:
+        metadata.pop("quality_issues", None)
+    return issues
 
 
 def _checkpoint_path_for_role(inspection, role: str) -> Path:
@@ -946,17 +1090,25 @@ def _moge_inspection_metadata(inspection) -> dict[str, object] | None:
 
 
 def _official_preprocess_metadata(output: Sam3dOfficialPreprocessOutput) -> dict[str, object]:
+    mask = output.mask[0] > 0.5
+    rgb_mask = output.rgb_image_mask[0] > 0.5
     return {
         "image_shape": tuple(int(value) for value in output.image.shape),
         "mask_shape": tuple(int(value) for value in output.mask.shape),
+        "mask_foreground_fraction": float(mask.mean()),
         "rgb_image_shape": tuple(int(value) for value in output.rgb_image.shape),
         "rgb_image_mask_shape": tuple(int(value) for value in output.rgb_image_mask.shape),
+        "rgb_image_mask_foreground_fraction": float(rgb_mask.mean()),
         "pointmap_shape": tuple(int(value) for value in output.pointmap.shape)
         if output.pointmap is not None
         else None,
+        "pointmap_finite_fraction": _chw_finite_fraction(output.pointmap),
+        "pointmap_finite_in_mask_fraction": _chw_finite_fraction(output.pointmap, mask=mask),
         "rgb_pointmap_shape": tuple(int(value) for value in output.rgb_pointmap.shape)
         if output.rgb_pointmap is not None
         else None,
+        "rgb_pointmap_finite_fraction": _chw_finite_fraction(output.rgb_pointmap),
+        "rgb_pointmap_finite_in_mask_fraction": _chw_finite_fraction(output.rgb_pointmap, mask=rgb_mask),
         "pointmap_scale": tuple(float(value) for value in output.pointmap_scale)
         if output.pointmap_scale is not None
         else None,
@@ -965,4 +1117,151 @@ def _official_preprocess_metadata(output: Sam3dOfficialPreprocessOutput) -> dict
         else None,
         "crop_box": output.crop_box,
         "output_size": output.output_size,
+    }
+
+
+def _chw_finite_fraction(values: np.ndarray | None, *, mask: np.ndarray | None = None) -> float | None:
+    if values is None:
+        return None
+    finite = np.isfinite(np.asarray(values, dtype=np.float32)).all(axis=0)
+    if mask is not None:
+        selected = finite[np.asarray(mask, dtype=bool)]
+        return float(selected.mean()) if selected.size else None
+    return float(finite.mean())
+
+
+def _sam3d_ss_occupancy_quality(metadata: dict[str, object]) -> dict[str, object]:
+    fraction = float(metadata.get("occupancy_positive_fraction", 0.0))
+    if fraction >= SAM3D_SS_SATURATED_OCCUPANCY_FRACTION:
+        status = "saturated"
+    elif fraction >= SAM3D_SS_DENSE_OCCUPANCY_FRACTION:
+        status = "dense"
+    else:
+        status = "nominal"
+    return {
+        "status": status,
+        "positive_fraction": fraction,
+        "dense_threshold": SAM3D_SS_DENSE_OCCUPANCY_FRACTION,
+        "saturated_threshold": SAM3D_SS_SATURATED_OCCUPANCY_FRACTION,
+    }
+
+
+def _sam3d_coord_axis_stats(coords: np.ndarray) -> dict[str, object]:
+    values = np.asarray(coords, dtype=np.int32)
+    if values.ndim != 2 or values.shape[1] != 4 or values.shape[0] == 0:
+        return {
+            "count": int(values.shape[0]) if values.ndim == 2 else 0,
+            "min": None,
+            "max": None,
+            "axis_range": None,
+            "min_axis_range": None,
+        }
+    spatial = values[:, 1:]
+    axis_min = spatial.min(axis=0)
+    axis_max = spatial.max(axis=0)
+    axis_range = axis_max - axis_min
+    return {
+        "count": int(spatial.shape[0]),
+        "min": tuple(int(value) for value in axis_min),
+        "max": tuple(int(value) for value in axis_max),
+        "axis_range": tuple(int(value) for value in axis_range),
+        "min_axis_range": int(axis_range.min()),
+    }
+
+
+def _sam3d_ss_geometry_quality(coords: np.ndarray) -> dict[str, object]:
+    stats = _sam3d_coord_axis_stats(coords)
+    min_axis_range = stats["min_axis_range"]
+    collapsed = min_axis_range is not None and int(min_axis_range) < SAM3D_SS_MIN_AXIS_RANGE_VOXELS
+    return {
+        "status": "flat-geometry" if collapsed else "nominal",
+        "axis_range": stats["axis_range"],
+        "min_axis_range": min_axis_range,
+        "min_axis_range_threshold": SAM3D_SS_MIN_AXIS_RANGE_VOXELS,
+    }
+
+
+def _sam3d_xyz_axis_stats(xyz: np.ndarray) -> dict[str, object]:
+    values = np.asarray(xyz, dtype=np.float32)
+    finite = np.isfinite(values).all(axis=-1) if values.ndim == 2 and values.shape[1] == 3 else np.zeros((0,), dtype=bool)
+    finite_values = values[finite] if values.ndim == 2 and values.shape[1] == 3 else np.zeros((0, 3), dtype=np.float32)
+    if finite_values.shape[0] == 0:
+        return {
+            "count": 0,
+            "min": None,
+            "max": None,
+            "axis_range": None,
+            "min_axis_range": None,
+        }
+    axis_min = finite_values.min(axis=0)
+    axis_max = finite_values.max(axis=0)
+    axis_range = axis_max - axis_min
+    return {
+        "count": int(finite_values.shape[0]),
+        "min": tuple(float(value) for value in axis_min),
+        "max": tuple(float(value) for value in axis_max),
+        "axis_range": tuple(float(value) for value in axis_range),
+        "min_axis_range": float(axis_range.min()),
+    }
+
+
+def _sam3d_gaussian_geometry_quality(xyz: np.ndarray) -> dict[str, object]:
+    stats = _sam3d_xyz_axis_stats(xyz)
+    min_axis_range = stats["min_axis_range"]
+    collapsed = min_axis_range is not None and float(min_axis_range) < SAM3D_GAUSSIAN_MIN_AXIS_RANGE
+    return {
+        "status": "flat-geometry" if collapsed else "nominal",
+        "axis_range": stats["axis_range"],
+        "min_axis_range": min_axis_range,
+        "min_axis_range_threshold": SAM3D_GAUSSIAN_MIN_AXIS_RANGE,
+    }
+
+
+def _sam3d_array_stats(values: np.ndarray) -> dict[str, object]:
+    array = np.asarray(values, dtype=np.float32)
+    finite = np.isfinite(array)
+    finite_values = array[finite]
+    return {
+        "shape": tuple(int(value) for value in array.shape),
+        "finite_count": int(finite_values.size),
+        "nan_count": int(np.count_nonzero(np.isnan(array))),
+        "posinf_count": int(np.count_nonzero(np.isposinf(array))),
+        "neginf_count": int(np.count_nonzero(np.isneginf(array))),
+        "min": float(np.min(finite_values)) if finite_values.size else None,
+        "max": float(np.max(finite_values)) if finite_values.size else None,
+        "mean": float(np.mean(finite_values)) if finite_values.size else None,
+        "std": float(np.std(finite_values)) if finite_values.size else None,
+    }
+
+
+def _sam3d_gaussian_network_channel_stats(raw_features: np.ndarray, num_gaussians: int) -> dict[str, object]:
+    values = np.asarray(raw_features, dtype=np.float32)
+    gaussian_count = int(num_gaussians)
+    widths = {
+        "_xyz": gaussian_count * 3,
+        "_features_dc": gaussian_count * 3,
+        "_scaling": gaussian_count * 3,
+        "_rotation": gaussian_count * 4,
+        "_opacity": gaussian_count,
+    }
+    stats: dict[str, object] = {}
+    start = 0
+    for name, width in widths.items():
+        stop = start + width
+        stats[name] = _sam3d_array_stats(values[:, start:stop])
+        start = stop
+    return stats
+
+
+def _sam3d_gaussian_opacity_quality(opacity: np.ndarray) -> dict[str, object]:
+    values = np.asarray(opacity, dtype=np.float32).reshape(-1)
+    alpha = 1.0 / (1.0 + np.exp(-values))
+    high_fraction = float(np.count_nonzero(alpha > 0.5) / alpha.size) if alpha.size else 0.0
+    return {
+        "status": "high-opacity" if high_fraction >= SAM3D_GAUSSIAN_HIGH_OPACITY_FRACTION else "nominal",
+        "alpha_gt_0_5_fraction": high_fraction,
+        "alpha_mean": float(np.mean(alpha)) if alpha.size else 0.0,
+        "alpha_min": float(np.min(alpha)) if alpha.size else 0.0,
+        "alpha_max": float(np.max(alpha)) if alpha.size else 0.0,
+        "high_opacity_threshold": SAM3D_GAUSSIAN_HIGH_OPACITY_FRACTION,
     }

@@ -436,6 +436,29 @@ def test_texture_bake_produces_deterministic_uvs_and_nonconstant_images():
     assert np.count_nonzero(first.metallic_roughness[:, :, 2]) > 0
 
 
+def test_texture_bake_keeps_base_color_in_upstream_texture_space():
+    mesh = _fixture_mesh()
+    coords = mx.array(
+        [
+            [0, 1, 1, 2],
+            [0, 2, 1, 2],
+            [0, 1, 2, 2],
+            [0, 2, 2, 2],
+        ],
+        dtype=mx.int32,
+    )
+    attrs = mx.array(
+        np.tile(np.array([[0.25, 0.5, 0.75, 0.0, 1.0, 1.0]], dtype=np.float32), (4, 1)),
+        dtype=mx.float32,
+    )
+
+    baked = bake_trellis2_texture_fields(mesh, coords, attrs, decode_resolution=4, texture_size=16, k_neighbors=2)
+
+    assert 63 <= int(baked.base_color_rgba[:, :, 0].min()) <= int(baked.base_color_rgba[:, :, 0].max()) <= 65
+    assert 127 <= int(baked.base_color_rgba[:, :, 1].min()) <= int(baked.base_color_rgba[:, :, 1].max()) <= 129
+    assert 190 <= int(baked.base_color_rgba[:, :, 2].min()) <= int(baked.base_color_rgba[:, :, 2].max()) <= 192
+
+
 def _small_dense_texture_grid():
     rows = []
     attrs = []

@@ -5,6 +5,7 @@ from mlx_spatial.sam3d_ss_flow import (
     SAM3D_SS_LATENT_ORDER,
     SAM3D_SS_SHARED_POSE_NAME,
     Sam3dSSFlowConfig,
+    _run_ss_mot_block,
     _run_ss_mot_self_attention,
     infer_sam3d_ss_flow_config,
     project_sam3d_ss_latents_to_transformer,
@@ -31,6 +32,24 @@ def test_sam3d_ss_latent_mapping_merges_and_splits_pose_modalities():
     assert set(restored) == set(SAM3D_SS_LATENT_ORDER)
     assert tuple(restored["shape"].shape) == (1, 2, 2)
     assert tuple(restored["translation_scale"].shape) == (1, 1, 1)
+
+
+def test_sam3d_ss_final_projection_uses_torch_functional_layer_norm_epsilon():
+    tensors = _tiny_latent_mapping_tensors(model_channels=2)
+    shape_hidden = np.array([[[1.0, 1.02], [0.0, 0.0]]], dtype=np.float32)
+    hidden = {
+        "shape": mx.array(shape_hidden, dtype=mx.float32),
+        SAM3D_SS_SHARED_POSE_NAME: mx.zeros((1, 4, 2), dtype=mx.float32),
+    }
+
+    restored = project_sam3d_ss_transformer_to_latents(hidden, tensors)
+
+    centered = shape_hidden[:, :1, :] - shape_hidden[:, :1, :].mean(axis=-1, keepdims=True)
+    expected = centered / np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True) + 1e-5)
+    old_eps_expected = centered / np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True) + 1e-6)
+    actual = np.array(restored["shape"][0, 0])
+    assert np.max(np.abs(actual - expected[0, 0])) < 1e-3
+    assert np.max(np.abs(actual - expected[0, 0])) < np.max(np.abs(actual - old_eps_expected[0, 0]))
 
 
 def test_sam3d_ss_mot_self_attention_keeps_shape_protected_from_pose_tokens():
@@ -81,6 +100,38 @@ def test_sam3d_ss_mot_self_attention_matches_reference_shape_and_pose_outputs():
         np.array(actual[SAM3D_SS_SHARED_POSE_NAME]),
         expected_pose[:, :, 0, :],
         atol=1e-3,
+    )
+
+
+def test_sam3d_ss_mot_block_matches_reference_forward_order():
+    tensors = _tiny_mot_block_tensors()
+    config = Sam3dSSFlowConfig(model_channels=2, num_heads=1, num_blocks=1, attention_chunk_size=None)
+    hidden = {
+        "shape": mx.array([[[1.0, -0.5], [0.25, 0.75]]], dtype=mx.float32),
+        SAM3D_SS_SHARED_POSE_NAME: mx.array([[[-0.25, 1.0]]], dtype=mx.float32),
+    }
+    condition_tokens = mx.array([[[0.25, -0.75], [1.0, 0.5]]], dtype=mx.float32)
+    modulation = mx.array([[0.5, -1.0]], dtype=mx.float32)
+
+    actual = _run_ss_mot_block(
+        hidden,
+        condition_tokens,
+        modulation,
+        tensors,
+        prefix="block.",
+        config=config,
+    )
+    expected = _reference_mot_block(
+        {name: np.array(value, dtype=np.float32) for name, value in hidden.items()},
+        np.array(condition_tokens, dtype=np.float32),
+        np.array(modulation, dtype=np.float32),
+    )
+
+    assert np.allclose(np.array(actual["shape"]), expected["shape"], atol=2e-3)
+    assert np.allclose(
+        np.array(actual[SAM3D_SS_SHARED_POSE_NAME]),
+        expected[SAM3D_SS_SHARED_POSE_NAME],
+        atol=2e-3,
     )
 
 
@@ -154,6 +205,61 @@ def _tiny_attention_tensors() -> dict[str, mx.array]:
     return tensors
 
 
+def _tiny_mot_block_tensors() -> dict[str, mx.array]:
+    tensors = _tiny_attention_tensors()
+
+    # The modulation MLP maps SiLU(modulation) directly to
+    # shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp.
+    tensors["block.adaLN_modulation.1.weight"] = mx.array(
+        np.array(
+            [
+                [0.10, -0.20],
+                [0.05, 0.15],
+                [0.02, 0.03],
+                [-0.04, 0.05],
+                [0.90, 0.10],
+                [0.20, 0.80],
+                [0.01, -0.02],
+                [0.03, 0.04],
+                [-0.10, 0.05],
+                [0.04, -0.08],
+                [0.70, 0.20],
+                [0.10, 0.60],
+            ],
+            dtype=np.float32,
+        )
+    )
+    tensors["block.adaLN_modulation.1.bias"] = mx.array(
+        np.array(
+            [0.01, -0.02, 0.03, 0.01, 0.50, -0.25, -0.03, 0.02, 0.02, -0.01, -0.40, 0.30],
+            dtype=np.float32,
+        )
+    )
+
+    for name in ("shape", SAM3D_SS_SHARED_POSE_NAME):
+        tensors[f"block.norm2.{name}.weight"] = mx.array(np.array([1.25, 0.75], dtype=np.float32))
+        tensors[f"block.norm2.{name}.bias"] = mx.array(np.array([0.10, -0.20], dtype=np.float32))
+        tensors[f"block.cross_attn.{name}.to_q.weight"] = mx.eye(2, dtype=mx.float32)
+        tensors[f"block.cross_attn.{name}.to_q.bias"] = mx.zeros((2,), dtype=mx.float32)
+        tensors[f"block.cross_attn.{name}.to_kv.weight"] = mx.array(
+            np.concatenate([np.eye(2, dtype=np.float32), np.eye(2, dtype=np.float32)], axis=0)
+        )
+        tensors[f"block.cross_attn.{name}.to_kv.bias"] = mx.zeros((4,), dtype=mx.float32)
+        tensors[f"block.cross_attn.{name}.to_out.weight"] = mx.array(
+            np.array([[0.75, -0.25], [0.50, 1.25]], dtype=np.float32)
+        )
+        tensors[f"block.cross_attn.{name}.to_out.bias"] = mx.array(np.array([0.05, -0.10], dtype=np.float32))
+        tensors[f"block.mlp.{name}.mlp.0.weight"] = mx.array(
+            np.array([[0.40, -0.30], [0.10, 0.20], [-0.25, 0.35]], dtype=np.float32)
+        )
+        tensors[f"block.mlp.{name}.mlp.0.bias"] = mx.array(np.array([0.02, -0.04, 0.06], dtype=np.float32))
+        tensors[f"block.mlp.{name}.mlp.2.weight"] = mx.array(
+            np.array([[0.30, -0.10, 0.20], [-0.15, 0.25, 0.10]], dtype=np.float32)
+        )
+        tensors[f"block.mlp.{name}.mlp.2.bias"] = mx.array(np.array([0.01, -0.03], dtype=np.float32))
+    return tensors
+
+
 def _tiny_flow_tensors(model_channels: int) -> dict[str, mx.array]:
     tensors = _tiny_latent_mapping_tensors(model_channels)
     prefix = "reverse_fn.backbone."
@@ -179,3 +285,78 @@ def _reference_attention(query: np.ndarray, key: np.ndarray, value: np.ndarray) 
     weights = np.exp(scores)
     weights = weights / weights.sum(axis=-1, keepdims=True)
     return np.einsum("bhlm,bmhd->blhd", weights, value)
+
+
+def _reference_layer_norm(values: np.ndarray, weight: np.ndarray | None = None, bias: np.ndarray | None = None) -> np.ndarray:
+    centered = values - values.mean(axis=-1, keepdims=True)
+    out = centered / np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True) + 1e-6)
+    if weight is not None:
+        out = out * weight
+    if bias is not None:
+        out = out + bias
+    return out.astype(np.float32)
+
+
+def _reference_mot_block(
+    hidden: dict[str, np.ndarray],
+    condition_tokens: np.ndarray,
+    modulation: np.ndarray,
+) -> dict[str, np.ndarray]:
+    silu = modulation / (1.0 + np.exp(-modulation))
+    weight = np.array(
+        [
+            [0.10, -0.20],
+            [0.05, 0.15],
+            [0.02, 0.03],
+            [-0.04, 0.05],
+            [0.90, 0.10],
+            [0.20, 0.80],
+            [0.01, -0.02],
+            [0.03, 0.04],
+            [-0.10, 0.05],
+            [0.04, -0.08],
+            [0.70, 0.20],
+            [0.10, 0.60],
+        ],
+        dtype=np.float32,
+    )
+    bias = np.array([0.01, -0.02, 0.03, 0.01, 0.50, -0.25, -0.03, 0.02, 0.02, -0.01, -0.40, 0.30], dtype=np.float32)
+    shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = np.split(silu @ weight.T + bias, 6, axis=1)
+
+    normed = {
+        name: _reference_layer_norm(values) * (1.0 + scale_msa[:, None, :]) + shift_msa[:, None, :]
+        for name, values in hidden.items()
+    }
+    shape = normed["shape"][:, :, None, :]
+    pose = normed[SAM3D_SS_SHARED_POSE_NAME][:, :, None, :]
+    self_attended = {
+        "shape": _reference_attention(_reference_rms_norm(shape), _reference_rms_norm(shape), shape)[:, :, 0, :],
+        SAM3D_SS_SHARED_POSE_NAME: _reference_attention(
+            _reference_rms_norm(pose),
+            np.concatenate((_reference_rms_norm(pose), _reference_rms_norm(shape)), axis=1),
+            np.concatenate((pose, shape), axis=1),
+        )[:, :, 0, :],
+    }
+    out = {name: hidden[name] + self_attended[name] * gate_msa[:, None, :] for name in hidden}
+
+    norm2_weight = np.array([1.25, 0.75], dtype=np.float32)
+    norm2_bias = np.array([0.10, -0.20], dtype=np.float32)
+    cross_weight = np.array([[0.75, -0.25], [0.50, 1.25]], dtype=np.float32)
+    cross_bias = np.array([0.05, -0.10], dtype=np.float32)
+    context = condition_tokens[:, :, None, :]
+    for name in list(out):
+        q = _reference_layer_norm(out[name], norm2_weight, norm2_bias)[:, :, None, :]
+        crossed = _reference_attention(q, context, context)[:, :, 0, :]
+        out[name] = out[name] + crossed @ cross_weight.T + cross_bias
+
+    mlp0_weight = np.array([[0.40, -0.30], [0.10, 0.20], [-0.25, 0.35]], dtype=np.float32)
+    mlp0_bias = np.array([0.02, -0.04, 0.06], dtype=np.float32)
+    mlp2_weight = np.array([[0.30, -0.10, 0.20], [-0.15, 0.25, 0.10]], dtype=np.float32)
+    mlp2_bias = np.array([0.01, -0.03], dtype=np.float32)
+    for name in list(out):
+        h = _reference_layer_norm(out[name]) * (1.0 + scale_mlp[:, None, :]) + shift_mlp[:, None, :]
+        h = h @ mlp0_weight.T + mlp0_bias
+        h = 0.5 * h * (1.0 + np.tanh(0.7978845608028654 * (h + 0.044715 * h * h * h)))
+        h = h @ mlp2_weight.T + mlp2_bias
+        out[name] = out[name] + h * gate_mlp[:, None, :]
+    return {name: values.astype(np.float32) for name, values in out.items()}

@@ -139,21 +139,25 @@ def test_degree_zero_sh_features_convert_to_rgb():
     assert center[0] > 0.0
 
 
-def test_higher_degree_sh_requires_pre_evaluated_rgb():
+def test_higher_degree_sh_evaluates_via_eval_sh():
     means, quats, scales, opacities, _ = _base_inputs()
     sh_coeffs = np.zeros((1, 4, 3), dtype=np.float32)
+    sh_coeffs[:, 0, :] = 0.5
 
-    with pytest.raises(NotImplementedError, match="pre-evaluate colors"):
-        rasterize_gaussians_cpu_reference(
-            means,
-            quats,
-            scales,
-            opacities,
-            sh_coeffs,
-            _camera(),
-            (9, 9),
-            sh_degree=1,
-        )
+    result = rasterize_gaussians_cpu_reference(
+        means,
+        quats,
+        scales,
+        opacities,
+        sh_coeffs,
+        _camera(),
+        (9, 9),
+        sh_degree=1,
+    )
+    center = np.asarray(result.rgba)[4, 4]
+    assert center[0] == pytest.approx(center[1])
+    assert center[1] == pytest.approx(center[2])
+    assert center[0] > 0.0
 
 
 def test_anisotropic_scale_and_quaternion_rotate_screen_footprint():

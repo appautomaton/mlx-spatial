@@ -31,15 +31,15 @@ _C3 = [
     -0.5900436355331605,
 ]
 _C4 = [
-    2.5035574406792172,
-    -1.7701308583598902,
-    0.9461746972030186,
-    -0.6690465341828717,
-    0.10578552846601598,
-    -0.6690465341828717,
-    0.9461746972030186,
-    -1.7701308583598902,
-    2.5035574406792172,
+    2.5033429417967046,
+    -1.7701307697799304,
+    0.9461746957575601,
+    -0.6690465435572892,
+    0.10578554691520431,
+    -0.6690465435572892,
+    0.47308734787878004,
+    -1.7701307697799304,
+    0.6258357354491761,
 ]
 
 
@@ -56,28 +56,43 @@ def eval_sh(deg: int, sh: mx.array, dirs: mx.array) -> mx.array:
         ``(..., C)`` evaluated color values.
     """
     assert deg <= 4, f"SH degree must be 0-4, got {deg}"
-    x = dirs[..., 0:1]
-    y = dirs[..., 1:2]
-    z = dirs[..., 2:3]
+    x = dirs[..., None, 0:1]
+    y = dirs[..., None, 1:2]
+    z = dirs[..., None, 2:3]
     result = _C0 * sh[..., 0:1]
 
     if deg >= 1:
-        result = result + _C1 * (-y * sh[..., 1:2] + z * sh[..., 2:3]
-                                  + x * sh[..., 3:4] + (-x * sh[..., 4:5] if sh.shape[-1] > 4 else mx.zeros_like(x)))
+        result = result + _C1 * (-y * sh[..., 1:2] + z * sh[..., 2:3] - x * sh[..., 3:4])
     if deg >= 2:
-        result = result + (_C2[0] * x * y * sh[..., 5:6]
-                           + _C2[1] * y * z * sh[..., 6:7]
-                           + _C2[2] * (2.0 * z * z - x * x - y * y) * sh[..., 7:8]
-                           + _C2[3] * x * z * sh[..., 8:9]
-                           + _C2[4] * (x * x - y * y) * sh[..., 9:10])
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C2[0] * xy * sh[..., 4:5]
+                           + _C2[1] * yz * sh[..., 5:6]
+                           + _C2[2] * (2.0 * zz - xx - yy) * sh[..., 6:7]
+                           + _C2[3] * xz * sh[..., 7:8]
+                           + _C2[4] * (xx - yy) * sh[..., 8:9])
     if deg >= 3:
-        result = result + (_C3[0] * y * (3.0 * x * x - y * y) * sh[..., 10:11]
-                           + _C3[1] * x * y * z * sh[..., 11:12]
-                           + _C3[2] * y * (4.0 * z * z - x * x - y * y) * sh[..., 12:13]
-                           + _C3[3] * z * (2.0 * z * z - 3.0 * (x * x + y * y) if sh.shape[-1] > 13 else z) * sh[..., 13:14]
-                           + _C3[4] * x * (4.0 * z * z - x * x - y * y) * sh[..., 14:15]
-                           + _C3[5] * x * (x * x - 3.0 * y * y) * sh[..., 15:16]
-                           + _C3[6] * (3.0 * y * y - x * x) * sh[..., 16:17] if sh.shape[-1] > 16 else mx.zeros_like(x))
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C3[0] * y * (3.0 * xx - yy) * sh[..., 9:10]
+                           + _C3[1] * xy * z * sh[..., 10:11]
+                           + _C3[2] * y * (4.0 * zz - xx - yy) * sh[..., 11:12]
+                           + _C3[3] * z * (2.0 * zz - 3.0 * (xx + yy)) * sh[..., 12:13]
+                           + _C3[4] * x * (4.0 * zz - xx - yy) * sh[..., 13:14]
+                           + _C3[5] * z * (xx - yy) * sh[..., 14:15]
+                           + _C3[6] * x * (xx - 3.0 * yy) * sh[..., 15:16])
+    if deg >= 4:
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C4[0] * xy * (xx - yy) * sh[..., 16:17]
+                           + _C4[1] * yz * (3.0 * xx - yy) * sh[..., 17:18]
+                           + _C4[2] * xy * (7.0 * zz - 1.0) * sh[..., 18:19]
+                           + _C4[3] * yz * (7.0 * zz - 3.0) * sh[..., 19:20]
+                           + _C4[4] * (zz * (35.0 * zz - 30.0) + 3.0) * sh[..., 20:21]
+                           + _C4[5] * xz * (7.0 * zz - 3.0) * sh[..., 21:22]
+                           + _C4[6] * (xx - yy) * (7.0 * zz - 1.0) * sh[..., 22:23]
+                           + _C4[7] * xz * (xx - 3.0 * yy) * sh[..., 23:24]
+                           + _C4[8] * (xx * (xx - 3.0 * yy) - yy * (3.0 * xx - yy)) * sh[..., 24:25])
     return result
 
 
@@ -87,16 +102,41 @@ def eval_sh_numpy(deg: int, sh: np.ndarray, dirs: np.ndarray) -> np.ndarray:
     Same as ``eval_sh`` but operates on numpy arrays.
     """
     result = _C0 * sh[..., 0:1]
-    x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
+    x, y, z = dirs[..., None, 0:1], dirs[..., None, 1:2], dirs[..., None, 2:3]
 
     if deg >= 1 and sh.shape[-1] >= 4:
         result = result + _C1 * (-y * sh[..., 1:2] + z * sh[..., 2:3]
-                                  + x * sh[..., 3:4])
+                                  - x * sh[..., 3:4])
     if deg >= 2 and sh.shape[-1] >= 9:
-        xy, yz, xx_yy, xz, xxyy = x * y, y * z, x * x - y * y, x * z, x * x + y * y
-        result = result + _C2[0] * xy * sh[..., 5:6] + _C2[1] * yz * sh[..., 6:7]
-        result = result + _C2[2] * (2.0 * z * z - xxyy) * sh[..., 7:8]
-        result = result + _C2[3] * xz * sh[..., 8:9] + _C2[4] * xx_yy * sh[..., 9:10]
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C2[0] * xy * sh[..., 4:5]
+                           + _C2[1] * yz * sh[..., 5:6]
+                           + _C2[2] * (2.0 * zz - xx - yy) * sh[..., 6:7]
+                           + _C2[3] * xz * sh[..., 7:8]
+                           + _C2[4] * (xx - yy) * sh[..., 8:9])
+    if deg >= 3 and sh.shape[-1] >= 16:
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C3[0] * y * (3.0 * xx - yy) * sh[..., 9:10]
+                           + _C3[1] * xy * z * sh[..., 10:11]
+                           + _C3[2] * y * (4.0 * zz - xx - yy) * sh[..., 11:12]
+                           + _C3[3] * z * (2.0 * zz - 3.0 * (xx + yy)) * sh[..., 12:13]
+                           + _C3[4] * x * (4.0 * zz - xx - yy) * sh[..., 13:14]
+                           + _C3[5] * z * (xx - yy) * sh[..., 14:15]
+                           + _C3[6] * x * (xx - 3.0 * yy) * sh[..., 15:16])
+    if deg >= 4 and sh.shape[-1] >= 25:
+        xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
+        result = result + (_C4[0] * xy * (xx - yy) * sh[..., 16:17]
+                           + _C4[1] * yz * (3.0 * xx - yy) * sh[..., 17:18]
+                           + _C4[2] * xy * (7.0 * zz - 1.0) * sh[..., 18:19]
+                           + _C4[3] * yz * (7.0 * zz - 3.0) * sh[..., 19:20]
+                           + _C4[4] * (zz * (35.0 * zz - 30.0) + 3.0) * sh[..., 20:21]
+                           + _C4[5] * xz * (7.0 * zz - 3.0) * sh[..., 21:22]
+                           + _C4[6] * (xx - yy) * (7.0 * zz - 1.0) * sh[..., 22:23]
+                           + _C4[7] * xz * (xx - 3.0 * yy) * sh[..., 23:24]
+                           + _C4[8] * (xx * (xx - 3.0 * yy) - yy * (3.0 * xx - yy)) * sh[..., 24:25])
     return result
 
 

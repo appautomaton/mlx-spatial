@@ -545,9 +545,14 @@ def _colors_from_sh_features(
     if sh_features_are_rgb is False and sh_degree == 0:
         return (values[:, 0, :] * _SH_C0 + 0.5).astype(np.float32, copy=False)
     if sh_degree > 0:
-        raise NotImplementedError(
-            "higher-degree SH rasterization is pending; pre-evaluate colors and pass sh_features_are_rgb=True"
-        )
+        from mlx_spatial.hyworld2_sh import eval_sh_numpy
+        camera_position = np.linalg.inv(view_matrix)[:3, 3].astype(np.float32)
+        viewdirs = means.astype(np.float32) - camera_position
+        viewdirs = viewdirs / np.maximum(np.linalg.norm(viewdirs, axis=-1, keepdims=True), 1e-8)
+        sh_transposed = np.moveaxis(values, -1, -2)
+        colors = eval_sh_numpy(sh_degree, sh_transposed, viewdirs)
+        colors = np.squeeze(colors, axis=-1)
+        return colors.astype(np.float32, copy=False)
     raise ValueError(f"degree-0 sh_features must have shape (N, 1, 3), got {values.shape}")
 
 

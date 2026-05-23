@@ -2,6 +2,9 @@ import numpy as np
 from PIL import Image
 
 from mlx_spatial.sam3d_preprocess import (
+    _normalize_pointmap_object_centric_ssi,
+    _resize_float_image,
+    _resize_pointmap,
     load_sam3d_mask,
     preprocess_sam3d_image_mask,
     preprocess_sam3d_official_tensors,
@@ -73,6 +76,89 @@ def test_preprocess_sam3d_official_tensors_crops_pads_and_resizes_pointmap():
     assert result.pointmap_shift.shape == (3,)
     assert float(result.mask.sum()) > 0.0
     assert np.isfinite(result.pointmap[:, result.mask[0] > 0]).all()
+
+
+def test_preprocess_sam3d_full_pointmap_padding_matches_official_zero_fill():
+    rgba = np.zeros((2, 4, 4), dtype=np.uint8)
+    rgba[..., :3] = 128
+    rgba[:, 1:3, 3] = 255
+    pointmap = np.ones((2, 4, 3), dtype=np.float32)
+
+    result = preprocess_sam3d_official_tensors(rgba, pointmap=pointmap, output_size=4, crop_box_size_factor=1.0)
+
+    assert result.rgb_pointmap is not None
+    assert np.isfinite(result.rgb_pointmap).all()
+    assert np.any(np.isclose(result.rgb_pointmap, 0.0))
+
+
+def test_preprocess_sam3d_cropped_pointmap_out_of_image_fill_matches_official_zero():
+    rgba = np.zeros((4, 4, 4), dtype=np.uint8)
+    rgba[..., :3] = 128
+    rgba[:3, :3, 3] = 255
+
+    yy, xx = np.mgrid[:4, :4]
+    pointmap = np.stack(
+        [xx.astype(np.float32), yy.astype(np.float32), (xx + yy).astype(np.float32)],
+        axis=-1,
+    )
+
+    result = preprocess_sam3d_official_tensors(
+        rgba,
+        pointmap=pointmap,
+        output_size=6,
+        crop_box_size_factor=3.0,
+    )
+
+    assert result.crop_box == (-2, -2, 4, 4)
+    assert result.pointmap is not None
+    assert np.isfinite(result.pointmap[:, 0, 0]).all()
+    assert np.allclose(result.pointmap[:, 0, 0], 0.0)
+
+
+def test_object_centric_scene_scale_ignores_partially_nan_points_like_torch():
+    pointmap = np.array(
+        [
+            [[0.0, 0.0, 1.0], [100.0, np.nan, np.nan]],
+            [[2.0, 0.0, 1.0], [4.0, 0.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    mask = np.array([[True, False], [True, True]])
+
+    _normalized, scale, shift = _normalize_pointmap_object_centric_ssi(pointmap, mask)
+
+    np.testing.assert_allclose(shift, np.array([2.0, 0.0, 1.0], dtype=np.float32))
+    np.testing.assert_allclose(scale, np.array([2.0, 2.0, 2.0], dtype=np.float32))
+
+
+def test_resize_pointmap_nearest_uses_torch_floor_mapping():
+    pointmap = np.arange(6, dtype=np.float32).reshape(1, 6, 1)
+
+    resized = _resize_pointmap(pointmap, 4, order=0)
+
+    assert resized[0, :, 0].tolist() == [0.0, 1.0, 3.0, 4.0]
+
+
+def test_resize_float_image_nearest_uses_torch_floor_mapping_for_masks():
+    mask = np.arange(6, dtype=np.float32).reshape(1, 6, 1)
+
+    resized = _resize_float_image(mask, 4, resample=Image.Resampling.NEAREST)
+
+    assert resized[0, :, 0].tolist() == [0.0, 1.0, 3.0, 4.0]
+
+
+def test_resize_float_image_preserves_float_precision_without_uint8_quantization():
+    image = np.array(
+        [
+            [[0.001, 0.111, 0.222], [0.333, 0.444, 0.555]],
+            [[0.666, 0.777, 0.888], [0.999, 0.123, 0.234]],
+        ],
+        dtype=np.float32,
+    )
+
+    resized = _resize_float_image(image, 2, resample=Image.Resampling.BILINEAR)
+
+    np.testing.assert_allclose(resized, image, rtol=0, atol=1e-7)
 
 
 def test_preprocess_sam3d_official_tensors_rejects_empty_mask():

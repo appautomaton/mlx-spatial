@@ -26,12 +26,20 @@ from .sam3d_export import (
     SAM3D_GLB_DEFAULT_TARGET_FACES,
     SAM3D_XATLAS_FACE_GUARD,
 )
-from .sam3d_inference import Sam3dInferencePipeline
+from .sam3d_inference import (
+    SAM3D_DEFAULT_SS_CFG_INTERVAL,
+    SAM3D_DEFAULT_SS_CFG_STRENGTH,
+    SAM3D_DEFAULT_SS_RESCALE_T,
+    SAM3D_DEFAULT_SLAT_CFG_INTERVAL,
+    SAM3D_DEFAULT_STAGE1_STEPS,
+    SAM3D_DEFAULT_STAGE2_STEPS,
+    Sam3dInferencePipeline,
+)
 from .sam3d_moge import SAM3D_MOGE_DEFAULT_ROOT
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Inspect and run SAM 3D Objects MLX parity tooling")
+    parser = argparse.ArgumentParser(description="Inspect and run SAM 3D Objects MLX tooling")
     parser.add_argument("--root", default=SAM3D_OBJECTS_DEFAULT_ROOT)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -57,7 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     convert_parser.add_argument("--root", dest="command_root")
     convert_parser.add_argument("--output-root", default=SAM3D_OBJECTS_MLX_DEFAULT_ROOT)
     convert_parser.add_argument("--moge-root")
-    convert_parser.add_argument("--moge-output-root", default="weights/moge-vitl-mlx")
+    convert_parser.add_argument("--moge-output-root", default=SAM3D_MOGE_DEFAULT_ROOT)
     convert_parser.add_argument("--max-archive-gb", type=float, default=16.0)
     convert_parser.add_argument("--max-tensor-gb", type=float, default=16.0)
     convert_parser.add_argument("--overwrite", action="store_true")
@@ -71,8 +79,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("--output", required=True)
     reconstruct_parser.add_argument("--glb-output")
     reconstruct_parser.add_argument("--seed", type=int, default=42)
-    reconstruct_parser.add_argument("--stage1-steps", type=int, default=2)
-    reconstruct_parser.add_argument("--stage2-steps", type=int, default=12)
+    reconstruct_parser.add_argument("--stage1-steps", type=int, default=SAM3D_DEFAULT_STAGE1_STEPS)
+    reconstruct_parser.add_argument("--stage2-steps", type=int, default=SAM3D_DEFAULT_STAGE2_STEPS)
+    reconstruct_parser.add_argument("--ss-cfg-strength", type=float, default=SAM3D_DEFAULT_SS_CFG_STRENGTH)
+    reconstruct_parser.add_argument("--ss-rescale-t", type=float, default=SAM3D_DEFAULT_SS_RESCALE_T)
+    reconstruct_parser.add_argument(
+        "--ss-cfg-interval",
+        type=float,
+        nargs=2,
+        metavar=("START", "END"),
+        default=SAM3D_DEFAULT_SS_CFG_INTERVAL,
+    )
+    reconstruct_parser.add_argument("--slat-cfg-strength", type=float)
+    reconstruct_parser.add_argument("--slat-rescale-t", type=float)
+    reconstruct_parser.add_argument(
+        "--slat-cfg-interval",
+        type=float,
+        nargs=2,
+        metavar=("START", "END"),
+        default=SAM3D_DEFAULT_SLAT_CFG_INTERVAL,
+    )
     reconstruct_parser.add_argument("--memory-profile", choices=("safe", "balanced", "large"), default="balanced")
     reconstruct_parser.add_argument("--glb-postprocess", choices=("cleaned", "basic"), default="cleaned")
     reconstruct_parser.add_argument("--glb-target-faces", type=int, default=SAM3D_GLB_DEFAULT_TARGET_FACES)
@@ -193,6 +219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seed=args.seed,
                 stage1_steps=args.stage1_steps,
                 stage2_steps=args.stage2_steps,
+                ss_cfg_strength=args.ss_cfg_strength,
+                ss_rescale_t=args.ss_rescale_t,
+                ss_cfg_interval=tuple(args.ss_cfg_interval),
+                slat_cfg_strength=args.slat_cfg_strength,
+                slat_rescale_t=args.slat_rescale_t,
+                slat_cfg_interval=tuple(args.slat_cfg_interval),
                 memory_profile=args.memory_profile,
                 glb_postprocess=args.glb_postprocess,
                 glb_target_faces=0 if args.no_glb_simplify else args.glb_target_faces,

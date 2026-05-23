@@ -8,7 +8,14 @@ from PIL import Image
 from safetensors.mlx import save_file
 
 from mlx_spatial.sam3d import main
-from mlx_spatial.sam3d_inference import load_sam3d_external_pointmap
+from mlx_spatial.sam3d_inference import (
+    SAM3D_DEFAULT_SLAT_CFG_STRENGTH,
+    SAM3D_DEFAULT_SLAT_RESCALE_T,
+    _preprocess_metadata,
+    load_sam3d_external_pointmap,
+    sam3d_quality_issue_records,
+)
+from mlx_spatial.sam3d_preprocess import preprocess_sam3d_image_mask
 from mlx_spatial.sam3d_condition import Sam3dConditionStackOutput
 from mlx_spatial.sam3d_decoder import Sam3dMeshDecoderConfig, Sam3dSLatDecoderConfig
 from mlx_spatial.sam3d_mesh import Sam3dMeshDecoderFeatureResult
@@ -97,8 +104,18 @@ def test_sam3d_pointmap_loader_accepts_npy_and_npz(tmp_path):
     assert loaded_npy.metadata["original_dtype"] == "float32"
     assert loaded_npy.metadata["finite_count"] == 12
     assert loaded_npy.metadata["nan_count"] == 0
-    assert loaded_npy.metadata["source_numeric_parity"] == "not_claimed"
-    assert loaded_npy.metadata["source_clipping_parity"] == "deferred"
+    assert loaded_npy.metadata["source_numeric_match"] == "not_claimed"
+    assert loaded_npy.metadata["source_clipping_match"] == "deferred"
+
+
+def test_sam3d_preprocess_metadata_ignores_sample_sidecar(tmp_path):
+    image, mask = _write_image_and_mask(tmp_path)
+    (tmp_path / "sample.json").write_text('{"masks": []}', encoding="utf-8")
+
+    metadata = _preprocess_metadata(preprocess_sam3d_image_mask(image, mask))
+
+    assert metadata["mask_path"] == str(mask)
+    assert "sample_mask" not in metadata
 
 
 def test_sam3d_external_pointmap_validation_rejects_invalid_inputs(tmp_path):
@@ -319,6 +336,14 @@ def test_sam3d_cli_reconstruct_advances_past_moge_with_pointmap(tmp_path, capsys
     assert trace["metadata"]["moge"]["pointmap"]["shape"] == [2, 2, 3]
     assert trace["metadata"]["moge"]["pointmap"]["metadata"]["fixture"] is True
     assert trace["metadata"]["official_preprocessing"]["pointmap_shape"] == [3, 518, 518]
+    assert trace["metadata"]["stage1_steps"] == 25
+    assert trace["metadata"]["stage2_steps"] == 25
+    assert trace["metadata"]["ss_cfg_strength"] == 7.0
+    assert trace["metadata"]["ss_rescale_t"] == 3.0
+    assert trace["metadata"]["ss_cfg_interval"] == [0.0, 500.0]
+    assert trace["metadata"]["slat_cfg_strength_requested"] is None
+    assert trace["metadata"]["slat_rescale_t_requested"] is None
+    assert trace["metadata"]["slat_cfg_interval"] == [0.0, 500.0]
     assert not (tmp_path / output).exists()
 
 
@@ -370,8 +395,8 @@ def test_sam3d_external_pointmap_cli_bypasses_moge_and_records_trace(tmp_path, c
     assert trace["metadata"]["external_pointmap"]["file_format"] == "npz"
     assert trace["metadata"]["external_pointmap"]["original_shape"] == [2, 2, 3]
     assert trace["metadata"]["external_pointmap"]["finite_count"] == 12
-    assert trace["metadata"]["external_pointmap"]["source_numeric_parity"] == "not_claimed"
-    assert trace["metadata"]["external_pointmap"]["source_clipping_parity"] == "deferred"
+    assert trace["metadata"]["external_pointmap"]["source_numeric_match"] == "not_claimed"
+    assert trace["metadata"]["external_pointmap"]["source_clipping_match"] == "deferred"
     assert trace["metadata"]["official_preprocessing"]["pointmap_shape"] == [3, 518, 518]
     assert not (tmp_path / output).exists()
 
@@ -423,7 +448,7 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     glb_output = "outputs/sam3d/mesh.glb"
     trace_output = "outputs/sam3d/trace.json"
     pointmap = _fixture_pointmap()
-    slat_coords = np.array([[0, 0, 0, 0], [0, 1, 1, 1]], dtype=np.int32)
+    slat_coords = np.array([[0, 0, 0, 0], [0, 4, 4, 4]], dtype=np.int32)
     slat_feats = mx.ones((2, 1), dtype=mx.float32)
     mesh_coords, mesh_feats = _interior_mesh_features(origin=3)
     calls: dict[str, object] = {}
@@ -457,7 +482,13 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     )
     monkeypatch.setattr(sam3d_inference, "load_sam3d_condition_tensors", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sam3d_inference, "load_sam3d_ss_generator_tensors", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(sam3d_inference, "infer_sam3d_ss_flow_config", lambda *_args, **_kwargs: SimpleNamespace())
+    def fake_infer_ss_flow_config(*_args, **kwargs):
+        calls["ss_flow_cfg_strength"] = kwargs["cfg_strength"]
+        calls["ss_flow_rescale_t"] = kwargs["rescale_t"]
+        calls["ss_flow_cfg_interval"] = kwargs["cfg_interval"]
+        return SimpleNamespace()
+
+    monkeypatch.setattr(sam3d_inference, "infer_sam3d_ss_flow_config", fake_infer_ss_flow_config)
     monkeypatch.setattr(
         sam3d_inference,
         "run_sam3d_ss_shortcut_flow",
@@ -487,7 +518,13 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     )
     monkeypatch.setattr(sam3d_inference, "decode_sam3d_scale_shift_invariant_pose", lambda *_args, **_kwargs: SimpleNamespace(metadata={"fixture": True}))
     monkeypatch.setattr(sam3d_inference, "load_sam3d_slat_generator_tensors", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(sam3d_inference, "infer_sam3d_slat_flow_config", lambda *_args, **_kwargs: SimpleNamespace())
+    def fake_infer_slat_flow_config(*_args, **kwargs):
+        calls["slat_flow_cfg_strength"] = kwargs["cfg_strength"]
+        calls["slat_flow_rescale_t"] = kwargs["rescale_t"]
+        calls["slat_flow_cfg_interval"] = kwargs["cfg_interval"]
+        return SimpleNamespace()
+
+    monkeypatch.setattr(sam3d_inference, "infer_sam3d_slat_flow_config", fake_infer_slat_flow_config)
     monkeypatch.setattr(
         sam3d_inference,
         "run_sam3d_slat_flow",
@@ -624,6 +661,20 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
             "4",
             "--glb-texel-chunk-size",
             "8",
+            "--ss-cfg-strength",
+            "2.0",
+            "--ss-rescale-t",
+            "1.0",
+            "--ss-cfg-interval",
+            "0",
+            "250",
+            "--slat-cfg-strength",
+            "3.0",
+            "--slat-rescale-t",
+            "1.5",
+            "--slat-cfg-interval",
+            "0",
+            "300",
             "--trace-output",
             trace_output,
         ]
@@ -639,6 +690,14 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     assert [artifact["name"] for artifact in trace["outputs"]] == ["gaussians.ply", "mesh.glb"]
     assert trace["metadata"]["structured_latent"]["coords_shape"] == [2, 4]
     assert trace["metadata"]["structured_latent"]["feature_shape"] == [2, 1]
+    assert trace["metadata"]["structured_latent"]["feature_stats"]["shape"] == [2, 1]
+    assert trace["metadata"]["structured_latent"]["feature_stats"]["finite_count"] == 2
+    assert trace["metadata"]["ss_cfg_strength"] == 2.0
+    assert trace["metadata"]["ss_rescale_t"] == 1.0
+    assert trace["metadata"]["ss_cfg_interval"] == [0.0, 250.0]
+    assert trace["metadata"]["slat_cfg_strength"] == 3.0
+    assert trace["metadata"]["slat_rescale_t"] == 1.5
+    assert trace["metadata"]["slat_cfg_interval"] == [0.0, 300.0]
     assert trace["metadata"]["mesh_decoder"]["extraction"]["vertex_count"] > 0
     assert trace["metadata"]["mesh_decoder"]["raw_mesh"]["face_count"] > 0
     assert trace["metadata"]["glb_postprocess"]["mode"] == "cleaned"
@@ -651,6 +710,9 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     assert trace["metadata"]["glb_export"]["has_texture"] is True
     assert trace["metadata"]["glb_export"]["texture"]["backend"] == "gaussian-kdtree"
     assert trace["metadata"]["glb_export"]["texture"]["base_color_shape"] == [16, 16, 4]
+    assert trace["metadata"]["gaussian_decoder"]["opacity_quality"]["status"] == "nominal"
+    assert trace["metadata"]["gaussian_decoder"]["network_output_stats"]["shape"] == [2, 448]
+    assert trace["metadata"]["gaussian_decoder"]["network_channel_stats"]["_opacity"]["shape"] == [2, 32]
     assert trace["metadata"]["glb_export"]["postprocess"]["mode"] == "cleaned"
     assert trace["metadata"]["glb_export"]["postprocess"]["components_after"] >= 1
     assert trace["metadata"]["glb_export"]["artifact_role"].startswith("textured preview mesh GLB")
@@ -666,6 +728,12 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     assert calls["texture_k_neighbors"] == 4
     assert calls["texture_chunk_size"] == 8
     assert calls["texture_xatlas_face_guard"] == 400000
+    assert calls["ss_flow_cfg_strength"] == 2.0
+    assert calls["ss_flow_rescale_t"] == 1.0
+    assert calls["ss_flow_cfg_interval"] == (0.0, 250.0)
+    assert calls["slat_flow_cfg_strength"] == 3.0
+    assert calls["slat_flow_rescale_t"] == 1.5
+    assert calls["slat_flow_cfg_interval"] == (0.0, 300.0)
     assert calls["textured_glb_uv_shape"][1] == 2
 
     calls.clear()
@@ -695,6 +763,10 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     basic_trace = json.loads((tmp_path / basic_trace_output).read_text(encoding="utf-8"))
     assert basic_trace["metadata"]["glb_export"]["postprocess"]["mode"] == "basic"
     assert basic_trace["metadata"]["glb_export"]["postprocess"]["applied"] is False
+    assert basic_trace["metadata"]["slat_cfg_strength"] == SAM3D_DEFAULT_SLAT_CFG_STRENGTH
+    assert basic_trace["metadata"]["slat_rescale_t"] == SAM3D_DEFAULT_SLAT_RESCALE_T
+    assert calls["slat_flow_cfg_strength"] == SAM3D_DEFAULT_SLAT_CFG_STRENGTH
+    assert calls["slat_flow_rescale_t"] == SAM3D_DEFAULT_SLAT_RESCALE_T
     np.testing.assert_allclose(calls["glb_vertices"], calls["expected_vertices"])
     np.testing.assert_array_equal(calls["glb_faces"], calls["expected_faces"])
 
@@ -708,6 +780,74 @@ def test_sam3d_cli_reconstruct_rejects_non_outputs_path(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "blocker_stage=argument-validation" in output
     assert "reason=SAM3D output path must stay under outputs" in output
+
+
+def test_sam3d_cli_reconstruct_ignores_sample_json_sidecar(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    weights = tmp_path / "weights"
+    _write_sam3d_fixture(weights)
+    image, mask = _write_image_and_mask(tmp_path)
+    (tmp_path / "sample.json").write_text(
+        json.dumps({"masks": [{"id": "other", "path": "other.png", "primary": True}]}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "reconstruct",
+                str(weights),
+                str(image),
+                "--mask",
+                str(mask),
+                "--output",
+                "outputs/sam3d/gaussians.ply",
+                "--trace-output",
+                "outputs/sam3d/trace.json",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr().out
+    assert "blocker_stage=moge-pointmap" in output
+
+    trace = json.loads((tmp_path / "outputs/sam3d/trace.json").read_text(encoding="utf-8"))
+    assert trace["blocker"]["stage"] == "moge-pointmap"
+    assert trace["mask_path"] == str(mask)
+    assert trace["metadata"]["input"]["mask_path"] == str(mask)
+    assert "sample_mask" not in trace["metadata"]["input"]
+    assert "quality_issues" not in trace["metadata"]
+
+
+def test_sam3d_quality_issues_detect_flat_sparse_and_gaussian_geometry():
+    issues = sam3d_quality_issue_records(
+        {
+            "sparse_structure": {
+                "occupancy_quality": {"status": "nominal", "positive_fraction": 0.02},
+                "geometry_quality": {
+                    "status": "flat-geometry",
+                    "axis_range": (63, 63, 0),
+                    "min_axis_range": 0,
+                    "min_axis_range_threshold": 3,
+                },
+            },
+            "gaussian_decoder": {
+                "geometry_quality": {
+                    "status": "flat-geometry",
+                    "axis_range": (1.0, 1.0, 0.01),
+                    "min_axis_range": 0.01,
+                    "min_axis_range_threshold": 0.05,
+                },
+                "opacity_quality": {"status": "nominal"},
+            },
+        }
+    )
+
+    assert [issue["kind"] for issue in issues] == ["sparse_structure", "gaussian_geometry"]
+    assert issues[0]["status"] == "flat-geometry"
+    assert issues[0]["axis_range"] == (63, 63, 0)
+    assert issues[1]["status"] == "flat-geometry"
+    assert issues[1]["axis_range"] == (1.0, 1.0, 0.01)
 
 
 def test_sam3d_cli_reconstruct_rejects_gaussian_texture_without_cleaned_postprocess(tmp_path, monkeypatch, capsys):

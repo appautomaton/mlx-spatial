@@ -1184,6 +1184,228 @@ def _flexicubes_linear_interp(edge_weights: np.ndarray, edge_values: np.ndarray)
     return (values_np * interp_weights).sum(axis=1) / denominator
 
 
+def fill_sam3d_mesh_holes(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    *,
+    max_hole_edges: int = 256,
+    max_hole_area: float | None = None,
+    camera_centers: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    """Fill clean boundary loops in a SAM3D mesh.
+
+    Detects boundary edges, identifies simple closed loops, and fills
+    each with a center vertex via fan triangulation.  When camera
+    centers are provided, uses multi-view visibility to determine
+    which side of the boundary faces outward so the fill normal is
+    consistent with the exterior surface.
+
+    Args:
+        vertices: (N, 3) float32 vertex positions.
+        faces: (M, 3) int64 face indices.
+        max_hole_edges: Maximum perimeter edge count for a loop to fill.
+        max_hole_area: Optional maximum area for a hole to fill. If None,
+            all loops under max_hole_edges are considered.
+        camera_centers: Optional (C, 3) float32 camera positions for
+            multi-view visibility-guided normal orientation.
+
+    Returns:
+        Tuple of (filled_vertices, filled_faces, stats_dict) where
+        stats_dict contains keys: boundary_edges_before, clean_loops,
+        filled_loops, skipped_large, skipped_complex, vertices_added,
+        faces_added.
+    """
+    verts = np.asarray(vertices, dtype=np.float32)
+    tris = np.asarray(faces, dtype=np.int64)
+    if verts.ndim != 2 or verts.shape[1] != 3:
+        raise ValueError(f"vertices must have shape (N, 3), got {verts.shape}")
+    if tris.ndim != 2 or tris.shape[1] != 3:
+        raise ValueError(f"faces must have shape (M, 3), got {tris.shape}")
+    if verts.shape[0] == 0 or tris.shape[0] == 0:
+        raise ValueError("mesh must contain vertices and faces")
+    if np.any(tris < 0) or np.any(tris >= verts.shape[0]):
+        raise ValueError("faces contain vertex indices outside the vertex array")
+    if max_hole_edges < 3:
+        raise ValueError(f"max_hole_edges must be at least 3, got {max_hole_edges}")
+
+    boundary_edges, boundary_adjacency, skipped_complex = _find_mesh_boundary_edges(tris)
+    loops = _extract_clean_boundary_loops(boundary_edges, boundary_adjacency)
+    directed_boundary = {(int(s), int(e)) for s, e in boundary_edges}
+
+    cameras = None if camera_centers is None else np.asarray(camera_centers, dtype=np.float32)
+    if cameras is not None and (cameras.ndim != 2 or cameras.shape[1] != 3):
+        raise ValueError(f"camera_centers must have shape (C, 3), got {cameras.shape}")
+
+    new_vertices: list[np.ndarray] = []
+    new_faces: list[tuple[int, int, int]] = []
+    skipped_large = 0
+
+    for loop in loops:
+        if len(loop) > max_hole_edges:
+            skipped_large += 1
+            continue
+
+        loop_verts = verts[np.array(loop, dtype=np.int64)]
+        if max_hole_area is not None:
+            area = _polygon_area(loop_verts)
+            if area > max_hole_area:
+                skipped_large += 1
+                continue
+
+        center_index = verts.shape[0] + len(new_vertices)
+        new_vertices.append(loop_verts.mean(axis=0).astype(np.float32, copy=False))
+
+        reverse_boundary = (loop[0], loop[1]) not in directed_boundary
+        if cameras is not None:
+            reverse_boundary = _fill_orientation_from_cameras(verts, loop, cameras)
+
+        for i, start in enumerate(loop):
+            end = loop[(i + 1) % len(loop)]
+            if reverse_boundary:
+                new_faces.append((center_index, int(end), int(start)))
+            else:
+                new_faces.append((center_index, int(start), int(end)))
+
+    filled_verts = verts
+    filled_faces = tris
+    if new_vertices:
+        filled_verts = np.concatenate([verts, np.array(new_vertices, dtype=np.float32)], axis=0)
+        filled_faces = np.concatenate([tris, np.array(new_faces, dtype=np.int64)], axis=0)
+
+    stats: dict[str, object] = {
+        "boundary_edges_before": int(boundary_edges.shape[0]),
+        "clean_loops": len(loops),
+        "filled_loops": len(new_vertices),
+        "skipped_large": skipped_large,
+        "skipped_complex": skipped_complex,
+        "vertices_added": len(new_vertices),
+        "faces_added": len(new_faces),
+    }
+    return filled_verts, filled_faces, stats
+
+
+def _find_mesh_boundary_edges(faces: np.ndarray) -> tuple[np.ndarray, dict[int, list[int]], int]:
+    directed = np.empty((faces.shape[0] * 3, 2), dtype=np.int64)
+    directed[0::3] = faces[:, [0, 1]]
+    directed[1::3] = faces[:, [1, 2]]
+    directed[2::3] = faces[:, [2, 0]]
+
+    keys = np.sort(directed, axis=1)
+    key_view = np.ascontiguousarray(keys).view([("a", keys.dtype), ("b", keys.dtype)]).reshape(-1)
+    _, first_indices, counts = np.unique(key_view, return_index=True, return_counts=True)
+    boundary = directed[first_indices[counts == 1]]
+
+    adjacency: dict[int, list[int]] = {}
+    for s, e in boundary:
+        adjacency.setdefault(int(s), []).append(int(e))
+        adjacency.setdefault(int(e), []).append(int(s))
+
+    if boundary.shape[0] == 0:
+        return boundary, adjacency, 0
+
+    visited_edges: set[tuple[int, int]] = set()
+    complex_components = 0
+    for s, e in boundary:
+        edge = (int(min(s, e)), int(max(s, e)))
+        if edge in visited_edges:
+            continue
+        stack = [int(s)]
+        comp_verts: set[int] = set()
+        comp_edges: set[tuple[int, int]] = set()
+        while stack:
+            v = stack.pop()
+            if v in comp_verts:
+                continue
+            comp_verts.add(v)
+            for nbr in adjacency.get(v, []):
+                ce = (min(v, nbr), max(v, nbr))
+                comp_edges.add(ce)
+                if ce not in visited_edges:
+                    visited_edges.add(ce)
+                    stack.append(nbr)
+        if any(len(adjacency.get(v, [])) != 2 for v in comp_verts) or len(comp_edges) != len(comp_verts):
+            complex_components += 1
+
+    return boundary, adjacency, complex_components
+
+
+def _extract_clean_boundary_loops(
+    boundary_edges: np.ndarray, adjacency: dict[int, list[int]]
+) -> list[list[int]]:
+    loops: list[list[int]] = []
+    visited_edges: set[tuple[int, int]] = set()
+
+    for raw_start, raw_end in boundary_edges:
+        first_edge = (int(min(raw_start, raw_end)), int(max(raw_start, raw_end)))
+        if first_edge in visited_edges:
+            continue
+
+        start = int(raw_start)
+        previous = -1
+        current = start
+        loop: list[int] = []
+        comp_edges: set[tuple[int, int]] = set()
+        clean = True
+        while True:
+            if len(adjacency.get(current, [])) != 2 or current in loop:
+                clean = current == start and len(loop) >= 3
+                break
+            loop.append(current)
+            candidates = [n for n in adjacency[current] if n != previous]
+            if not candidates:
+                clean = False
+                break
+            nxt = candidates[0]
+            ce = (min(current, nxt), max(current, nxt))
+            comp_edges.add(ce)
+            previous, current = current, nxt
+            if current == start:
+                clean = len(loop) >= 3
+                break
+
+        for ce in comp_edges:
+            visited_edges.add(ce)
+        if clean and all(len(adjacency.get(v, [])) == 2 for v in loop):
+            loops.append(loop)
+
+    return loops
+
+
+def _polygon_area(polygon: np.ndarray) -> float:
+    if polygon.shape[0] < 3:
+        return 0.0
+    center = polygon.mean(axis=0)
+    total_area = 0.0
+    for i in range(polygon.shape[0]):
+        j = (i + 1) % polygon.shape[0]
+        total_area += float(np.linalg.norm(np.cross(polygon[i] - center, polygon[j] - center)) * 0.5)
+    return total_area
+
+
+def _fill_orientation_from_cameras(
+    vertices: np.ndarray, loop: list[int], cameras: np.ndarray
+) -> bool:
+    loop_verts = vertices[np.array(loop, dtype=np.int64)]
+    center = loop_verts.mean(axis=0)
+    normal = np.zeros(3, dtype=np.float64)
+    for i in range(len(loop)):
+        j = (i + 1) % len(loop)
+        normal += np.cross(
+            loop_verts[i].astype(np.float64) - center.astype(np.float64),
+            loop_verts[j].astype(np.float64) - center.astype(np.float64),
+        )
+    normal = normal / np.maximum(np.linalg.norm(normal), 1e-12)
+    votes = 0
+    for cam in cameras:
+        view_dir = (cam.astype(np.float64) - center.astype(np.float64))
+        view_dir = view_dir / np.maximum(np.linalg.norm(view_dir), 1e-12)
+        if np.dot(normal, view_dir) > 0:
+            votes += 1
+        else:
+            votes -= 1
+    return votes < 0
+
+
 def _flexicubes_dual_edge_groups(case_ids: np.ndarray, gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     edge_group_parts = []
     edge_group_to_vd_parts = []

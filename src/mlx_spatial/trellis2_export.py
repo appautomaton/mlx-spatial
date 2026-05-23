@@ -1003,7 +1003,7 @@ def bake_trellis2_texture_fields(
     metallic, _ = fill_texture_holes(metallic, mask)
     roughness, _ = fill_texture_holes(roughness, mask)
     alpha, _ = fill_texture_holes(alpha, mask)
-    base_color = np.power(np.clip(base_color, 0.0, 1.0), 1.0 / 2.2)
+    base_color = np.clip(base_color, 0.0, 1.0)
 
     base_color_rgba = (np.concatenate([base_color, alpha], axis=-1) * 255.0 + 0.5).astype(np.uint8)
     metallic_roughness = np.zeros((texture_size, texture_size, 3), dtype=np.uint8)
@@ -1162,7 +1162,7 @@ def bake_trellis2_texture_fields_mac_native(
     metallic, _ = fill_texture_holes_ndimage(metallic, valid_mask)
     roughness, _ = fill_texture_holes_ndimage(roughness, valid_mask)
     alpha, _ = fill_texture_holes_ndimage(alpha, valid_mask)
-    base_color = np.power(np.clip(base_color, 0.0, 1.0), 1.0 / 2.2)
+    base_color = np.clip(base_color, 0.0, 1.0)
 
     base_color_rgba = (np.concatenate([base_color, alpha], axis=-1) * 255.0 + 0.5).astype(np.uint8)
     metallic_roughness = np.zeros((texture_size, texture_size, 3), dtype=np.uint8)
