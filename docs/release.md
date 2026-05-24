@@ -1,16 +1,16 @@
 # Release
 
-This is the local checklist for the `0.0.1` PyPI release. Publishing itself is a maintainer action.
+This is the local checklist for PyPI releases. Publishing itself is a maintainer action.
 
 ## Package Metadata
 
 Required state:
 
-- `pyproject.toml` version is `0.0.1`.
+- `pyproject.toml` version matches the intended release tag.
 - Project name is `mlx-spatial`.
 - License metadata points at top-level `LICENSE`.
 - Repository URL points at `https://github.com/appautomaton/mlx-spatial`.
-- Package CLIs are present for SAM3D, TRELLIS.2, and HY-World-2.0.
+- Package CLIs are present for SAM3D, TRELLIS.2, HY-World-2.0, and LiTo.
 - Hatch build config excludes local assets, vendors, caches, generated outputs, and agent state.
 
 ## Preflight
@@ -19,8 +19,8 @@ Required state:
 uv run pytest -q
 uv build
 python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-0.0.1.tar.gz \
-  dist/mlx_spatial-0.0.1-py3-none-any.whl
+  dist/mlx_spatial-*.tar.gz \
+  dist/mlx_spatial-*-py3-none-any.whl
 python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
@@ -30,7 +30,9 @@ Smoke checks:
 uv run mlx-spatial-sam3d --help
 uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
+uv run mlx-spatial-lito --help
 python scripts/sam3d/reconstruct.py --help
+python scripts/lito/generate.py --help
 ```
 
 When local gated weights are available, run one documented SAM3D reconstruction and inspect the trace:
@@ -83,7 +85,7 @@ Pushing a tag alone does not publish to PyPI.
 
 ## Last Local Verification
 
-Verified on 2026-05-22:
+Last full verification for the initial `0.0.1` release was on 2026-05-22:
 
 ```text
 uv run pytest -q
@@ -129,4 +131,25 @@ Install in a clean environment and run:
 ```bash
 python -c "import mlx_spatial; print(mlx_spatial.__name__)"
 mlx-spatial-sam3d --help
+```
+
+## 0.0.2 Readiness Notes
+
+The expected delta from `0.0.1` includes the LiTo CLI, checkpoint-backed LiTo image-to-3DGS inference path, binary LiTo PLY export, and the public AppAutomaton LiTo research-weight bundle.
+
+Local `0.0.2` release-candidate verification on 2026-05-24:
+
+```text
+uv run pytest -q
+763 passed, 5 skipped, 2 warnings
+
+env UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache uv build
+Successfully built dist/mlx_spatial-0.0.2.tar.gz
+Successfully built dist/mlx_spatial-0.0.2-py3-none-any.whl
+
+python scripts/packaging/check_release_artifacts.py dist/mlx_spatial-0.0.2.tar.gz dist/mlx_spatial-0.0.2-py3-none-any.whl
+checked 2 artifact(s)
+
+python scripts/packaging/check_release_artifacts.py --git-hygiene
+git hygiene check passed
 ```

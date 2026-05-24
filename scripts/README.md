@@ -125,15 +125,20 @@ more reliable multi-frame run.
 
 ## LiTo
 
-Run Apple LiTo source-contract image-to-3DGS smoke generation:
+Run checkpoint-backed Apple LiTo image-to-3DGS generation:
 
 ```bash
 python scripts/lito/generate.py inputs/lito/sample.png \
-  --output outputs/lito/sample.ply
+  --weights-root weights/lito-research-mlx \
+  --output outputs/lito/sample.ply \
+  --memory-profile safe \
+  --print-metrics
 ```
 
 The script uses the upstream-recorded LiTo defaults from `LITO_RECOMMENDED_*`
-and writes a PLY plus a safetensors sidecar when `--format ply` is selected.
+and writes a 3D Gaussian Splat PLY plus a safetensors sidecar when `--format ply`
+is selected. Use `--source-contract-smoke` only when testing the synthetic
+framework probe path.
 
 ## Packaging
 
@@ -141,8 +146,8 @@ Check release artifacts for blocked local paths:
 
 ```bash
 python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-0.0.1.tar.gz \
-  dist/mlx_spatial-0.0.1-py3-none-any.whl
+  dist/mlx_spatial-*.tar.gz \
+  dist/mlx_spatial-*-py3-none-any.whl
 ```
 
 Check generated/local files in git status:

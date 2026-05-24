@@ -2,22 +2,23 @@
 
 MLX-native 3D and spatial inference tooling for Apple Silicon.
 
-`mlx-spatial` is a practical runtime package for running a small set of modern
-3D reconstruction pipelines locally with MLX. The first release is intentionally
-focused: keep weights outside the package, validate the assets you downloaded,
-then run clear command-line paths that produce inspectable outputs.
+`mlx-spatial` is a practical runtime package for running modern 3D
+reconstruction and image-to-3D pipelines locally with MLX. The package is
+intentionally focused: keep weights outside the wheel, validate the assets you
+downloaded, then run clear command-line paths that produce inspectable outputs.
 
 This is not a training framework, and it does not bundle model weights.
 
 ## What Works Now
 
-The current package covers three model families:
+The current package covers four model families:
 
 | Pipeline | Input | Output | Weight setup |
 | --- | --- | --- | --- |
-| SAM 3D Objects | image + object mask | Gaussian PLY | AppAutomaton MLX bundle |
+| SAM 3D Objects | image + object mask | Gaussian PLY, optional GLB | AppAutomaton MLX bundle |
 | TRELLIS.2 | object-centric RGB/RGBA image | shape OBJ or textured GLB | downloaded safetensors directly |
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
+| LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | AppAutomaton research MLX bundle |
 
 Honest status:
 
@@ -27,6 +28,9 @@ Honest status:
   usable, but still an area we keep improving for texture and mesh quality.
 - HY-WorldMirror works for scene reconstruction with `camera,depth,normal,points`.
   The optional Gaussian head is not part of the release-ready path yet.
+- LiTo runs checkpoint-backed image-to-3DGS inference with the public
+  `appautomaton/lito-research-mlx` bundle. Outputs are Gaussian splat PLY files,
+  not meshes; use a 3DGS-aware viewer.
 
 ## Install
 
@@ -37,10 +41,12 @@ uv sync
 uv run pytest -q
 ```
 
-For package consumers after the PyPI release:
+For package consumers:
 
 ```bash
 uv add mlx-spatial
+# or
+pip install mlx-spatial
 ```
 
 Requirements:
@@ -52,12 +58,13 @@ Requirements:
 
 ## Command Line Tools
 
-The package installs three CLIs:
+The package installs four CLIs:
 
 ```bash
 uv run mlx-spatial-sam3d --help
 uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
+uv run mlx-spatial-lito --help
 ```
 
 The repository also includes readable script wrappers under `scripts/`. These
@@ -71,6 +78,7 @@ under ignored local folders:
 
 ```text
 weights/sam-3d-objects-mlx/
+weights/lito-research-mlx/
 weights/trellis2/
 weights/rmbg2/
 weights/dinov3-vitl16-pretrain-lvd1689m/
@@ -83,6 +91,14 @@ SAM3D uses the converted AppAutomaton runtime bundle:
 uv run hf download appautomaton/sam-3d-objects-mlx \
   --local-dir weights/sam-3d-objects-mlx
 uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
+```
+
+LiTo uses the converted AppAutomaton research bundle:
+
+```bash
+uv run hf download appautomaton/lito-research-mlx \
+  --local-dir weights/lito-research-mlx
+uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 
 TRELLIS.2 and HY-WorldMirror do not need SAM3D-style conversion. They load the
@@ -182,6 +198,29 @@ memory profile, and `camera,depth,normal,points` heads. For frame directories,
 use `--memory-profile balanced` when the `large` profile hits the attention
 guard.
 
+### LiTo Image to 3D Gaussian Splat
+
+Use an object-centric image with a useful alpha mask when possible:
+
+```bash
+python scripts/lito/generate.py inputs/lito/sample.png \
+  --weights-root weights/lito-research-mlx \
+  --output outputs/lito/sample.ply \
+  --memory-profile safe \
+  --print-metrics
+```
+
+Expected output:
+
+```text
+outputs/lito/sample.ply
+outputs/lito/sample.safetensors
+```
+
+LiTo writes a Gaussian Splat PLY, not a mesh. Blender's native PLY importer can
+read the container, but it does not render the 3DGS fields correctly. Use a
+Gaussian-splat-aware viewer such as KIRI's Blender 3DGS add-on.
+
 ## Repository Layout
 
 ```text
@@ -201,10 +240,11 @@ vendors/             ignored upstream checkouts
 - [docs/sam3d.md](docs/sam3d.md): SAM3D setup, inference, quality gates, PLY expectations, and coordinate notes.
 - [docs/trellis2.md](docs/trellis2.md): TRELLIS.2 asset layout, no-conversion note, scripts, and export caveats.
 - [docs/hyworld2.md](docs/hyworld2.md): HY-WorldMirror asset layout, scene inputs, memory profiles, and outputs.
+- [docs/lito.md](docs/lito.md): LiTo setup, research-weight bundle, image-to-3DGS CLI, memory profiles, and PLY viewing notes.
 - [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
 - [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
 - [docs/model-publishing.md](docs/model-publishing.md): AppAutomaton-first model bundles and model-card rules.
-- [docs/release.md](docs/release.md): `0.0.1` release checklist.
+- [docs/release.md](docs/release.md): release checklist.
 
 ## Release Hygiene
 
@@ -214,8 +254,8 @@ Before publishing, build and inspect the artifacts:
 uv run pytest -q
 uv build
 python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-0.0.1.tar.gz \
-  dist/mlx_spatial-0.0.1-py3-none-any.whl
+  dist/mlx_spatial-*.tar.gz \
+  dist/mlx_spatial-*-py3-none-any.whl
 python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 

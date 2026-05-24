@@ -65,17 +65,17 @@ HY-World parity tooling is a development aid. Do not make reference bundles or v
 
 Entry point: `mlx_spatial.lito:main`, exposed as `mlx-spatial-lito`.
 
-LiTo is currently a source-contract image-to-3DGS bring-up pipeline. It validates the MLX-compatible stage boundaries, CLI, metrics, memory limits, and Gaussian export surface while the full checkpoint-backed parity path is still future work. It produces Gaussian splat outputs such as PLY; mesh extraction is not part of the current runtime contract.
+LiTo is a checkpoint-backed image-to-3DGS pipeline for Apple Silicon. The default path validates converted safetensors, preprocesses the input image, runs local MLX image conditioning, DiT sampling, voxel/TRELLIS init-coordinate decode, Gaussian Perceiver decode, and exports a Gaussian Splat PLY. Synthetic source-contract smoke generation remains available behind an explicit CLI flag for framework probes. Mesh extraction is not part of the current runtime contract.
 
 Main modules:
 
 - `lito_assets.py`: Apple CDN checkpoint download command, local `.ckpt` to safetensors conversion, validation, and inspection.
-- `lito_condition.py`: image-conditioning source-contract adapter for the upstream `SpatialDinov2` boundary.
-- `lito_tokenizer.py`: point-cloud and ray feature tokenizer contract producing `8192 x 32` latent tokens.
+- `lito_condition.py`: source-contract image-conditioning adapter used by synthetic fixture tests.
+- `lito_tokenizer.py`: source-contract point-cloud and ray feature tokenizer producing `8192 x 32` latent tokens for fixture tests.
 - `lito_dit.py`: MLX flow-matching DiT contract, recommended step count, and LiTo memory-profile definitions.
 - `lito_render.py`: LF-conditioned Gaussian adapter around `gs_rasterize.py`; the default Risk F decision is adapter-only.
 - `lito_inference.py`: end-to-end orchestration, per-stage metrics, memory thresholds, and export surface.
-- `lito_real_backend.py`: checkpoint-backed backend boundary for the direct safetensors-to-MLX path. It has no Torch, CUDA, or vendor runtime dependency, records header-only architecture inventory for the real converted weights, selectively loads/remaps real DiT and Gaussian decoder tensors, runs the real Gaussian coordinate/Fourier point-query stem and shape/color output heads for caller-supplied init coordinates or decoder query latents, ports LiTo Gaussian `decode_gs` equations, normalizes LiTo Gaussian dictionaries, and writes checkpoint-backed gsplat-style PLY only after a valid real Gaussian dict returns.
+- `lito_real_backend.py`: checkpoint-backed backend boundary for the direct safetensors-to-MLX path. It has no Torch, CUDA, or vendor runtime dependency, records header-only architecture inventory for the real converted weights, loads/remaps patch-encoder, DiT, voxel, and Gaussian decoder tensors, runs DINO/RGBA conditioning, Heun/Euler DiT sampling, voxel/TRELLIS init-coordinate generation, all Gaussian Perceiver blocks, LiTo Gaussian `decode_gs` equations, and writes checkpoint-backed gsplat-style PLY only after a valid real Gaussian dict returns.
 
 LiTo reuses `gs_rasterize.py`, `metal/gs_rasterize.metal`, `hyworld2_sh.py`, and camera/export helpers where the contracts are model-neutral. CUDA is not a runtime option. Upstream CUDA, PyTorch, and gsplat paths are static architecture references only; optional Torch/MPS parity stays dev-only and non-blocking.
 

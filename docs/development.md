@@ -24,8 +24,8 @@ Package checks:
 ```bash
 uv build
 python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-0.0.1.tar.gz \
-  dist/mlx_spatial-0.0.1-py3-none-any.whl
+  dist/mlx_spatial-*.tar.gz \
+  dist/mlx_spatial-*-py3-none-any.whl
 python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 

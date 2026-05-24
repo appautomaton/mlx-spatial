@@ -10,7 +10,7 @@ LiTo support follows the same package shape as SAM3D, TRELLIS.2, and HY-World 2.
 
 ## License Summary
 
-Apple's model license is research-only and non-commercial. Local checkpoint conversion is used here only for that research integration path. Converted weights are not redistributed by this repository. Do not upload converted LiTo weights or model derivatives as part of this change.
+Apple's model license is research-only and non-commercial. Local checkpoint conversion is used here only for that research integration path. Converted weights are not redistributed by the `mlx-spatial` source repository. If converted weights are published in a separate model repository, the model card must preserve Apple's research-only license boundary, include Apple's model license, identify the files as an unofficial converted derivative, and disclose the storage/layout conversion.
 
 Apple's generated sample license is CC BY-NC-ND 4.0. Apple generated or modified sample fixtures are not redistributed here. Contributors should download sample inputs locally and keep generated or adapted samples out of git unless a separate redistributable source image is used.
 
@@ -18,12 +18,23 @@ The practical setup rule is:
 
 - download official checkpoints locally;
 - convert them locally to MLX-readable safetensors;
-- keep `weights/lito-raw/`, `weights/lito-mlx/`, `inputs/lito/`, and `outputs/lito/` untracked;
+- keep `weights/lito-raw/`, `weights/lito-research-mlx/`, `inputs/lito/`, and `outputs/lito/` untracked;
 - treat `vendors/ml-lito/` as a development reference only.
 
 ## Weight Acquisition
 
-Slice 0 found no official or `mlx-community` LiTo safetensors repository on Hugging Face. The active path is Apple CDN `.ckpt` download followed by local conversion.
+Slice 0 found no official or `mlx-community` LiTo safetensors repository on Hugging Face. The source-of-truth conversion path remains Apple CDN `.ckpt` download followed by local conversion. A converted AppAutomaton bundle is published for research use at:
+
+```text
+appautomaton/lito-research-mlx
+```
+
+Download the AppAutomaton bundle:
+
+```bash
+hf download appautomaton/lito-research-mlx \
+  --local-dir weights/lito-research-mlx
+```
 
 Print the current download commands:
 
@@ -41,19 +52,19 @@ curl -L https://ml-site.cdn-apple.com/models/lito/lito_dit_rgba.ckpt \
   -o weights/lito-raw/lito_dit_rgba.ckpt
 ```
 
-Convert the official checkpoints locally:
+Or convert the official checkpoints locally:
 
 ```bash
-uv run python -m mlx_spatial.lito_assets convert weights/lito-raw weights/lito-mlx
-uv run python -m mlx_spatial.lito_assets validate weights/lito-mlx
-uv run python -m mlx_spatial.lito_assets inspect weights/lito-mlx --limit 10
+uv run python -m mlx_spatial.lito_assets convert weights/lito-raw weights/lito-research-mlx
+uv run python -m mlx_spatial.lito_assets validate weights/lito-research-mlx
+uv run python -m mlx_spatial.lito_assets inspect weights/lito-research-mlx --limit 10
 ```
 
 Expected converted layout:
 
 ```text
-weights/lito-mlx/tokenizer/lito_new.safetensors
-weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors
+weights/lito-research-mlx/tokenizer/lito_new.safetensors
+weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors
 ```
 
 The checkpoint-backed boundary can inspect these safetensors headers without loading full tensors. Current real-weight inventory is:
@@ -80,8 +91,8 @@ Use your own RGB/RGBA object image, or download Apple demo images locally if the
 Validate and inspect assets:
 
 ```bash
-uv run mlx-spatial-lito validate weights/lito-mlx
-uv run mlx-spatial-lito inspect weights/lito-mlx --limit 10
+uv run mlx-spatial-lito validate weights/lito-research-mlx
+uv run mlx-spatial-lito inspect weights/lito-research-mlx --limit 10
 uv run mlx-spatial-lito download-command
 ```
 
@@ -89,7 +100,7 @@ Checkpoint-backed generation is the default. With local LiTo and TRELLIS weights
 
 ```bash
 uv run mlx-spatial-lito generate inputs/lito/sample.png \
-  --weights-root weights/lito-mlx \
+  --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
   --format ply \
   --memory-profile balanced \
@@ -102,7 +113,7 @@ A current quality-check run uses all occupied init cells from the sampled latent
 
 ```bash
 uv run mlx-spatial-lito generate inputs/trellis2/teacup.png \
-  --weights-root weights/lito-mlx \
+  --weights-root weights/lito-research-mlx \
   --output outputs/lito/teacup-quality-crop-uncapped.ply \
   --memory-profile safe \
   --max-init-coords-per-batch none \
@@ -117,7 +128,7 @@ A second real-object quality-check run is:
 
 ```bash
 uv run mlx-spatial-lito generate inputs/trellis2/beer-mug.png \
-  --weights-root weights/lito-mlx \
+  --weights-root weights/lito-research-mlx \
   --output outputs/lito/beer-mug-quality-uncapped.ply \
   --memory-profile safe \
   --max-init-coords-per-batch none \
@@ -134,7 +145,7 @@ Run the synthetic source-contract smoke path only when that is what you mean to 
 
 ```bash
 uv run mlx-spatial-lito generate inputs/lito/sample.png \
-  --weights-root weights/lito-mlx \
+  --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample-smoke.ply \
   --format ply \
   --memory-profile safe \
@@ -153,7 +164,7 @@ The repository script mirrors the SAM3D sample-script pattern and delegates to t
 
 ```bash
 python scripts/lito/generate.py inputs/lito/sample.png \
-  --weights-root weights/lito-mlx \
+  --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
   --memory-profile balanced \
   --print-metrics
@@ -254,7 +265,7 @@ from mlx_spatial.lito_inference import (
     LITO_RECOMMENDED_NUM_STEPS,
 )
 
-pipe = LitoInferencePipeline(weights_root="weights/lito-mlx", memory_profile="balanced")
+pipe = LitoInferencePipeline(weights_root="weights/lito-research-mlx", memory_profile="balanced")
 result = pipe.generate(
     "inputs/lito/sample.png",
     output_path="outputs/lito/sample.ply",
@@ -268,7 +279,7 @@ The direct backend raises `LitoBackendUnavailable` if required converted LiTo or
 
 ```python
 pipe = LitoInferencePipeline(
-    weights_root="weights/lito-mlx",
+    weights_root="weights/lito-research-mlx",
     memory_profile="safe",
     source_contract_smoke=True,
 )
