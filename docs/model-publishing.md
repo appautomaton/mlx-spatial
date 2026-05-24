@@ -24,6 +24,34 @@ appautomaton/sam-3d-objects-mlx
 
 It includes the converted SAM3D checkpoints plus the converted MoGe pointmap dependency under `moge/`. Defer any `mlx-community` duplicate until the AppAutomaton repo has a stable model card, audit artifact, and working consumer command.
 
+The tracked SAM3D model-card source lives under:
+
+```text
+model-cards/sam-3d-objects-mlx/
+```
+
+The published SAM3D repo must include the upstream SAM License copy as `LICENSE`, because the license requires a copy of the agreement when distributing SAM Materials or derivatives.
+
+For LiTo, use the research-scoped AppAutomaton repo name:
+
+```text
+appautomaton/lito-research-mlx
+```
+
+The local upload root is:
+
+```text
+weights/lito-research-mlx
+```
+
+The tracked model-card source lives under:
+
+```text
+model-cards/lito-research-mlx/
+```
+
+LiTo is research-only and non-commercial under Apple's model license. The model repository must include `LICENSE_MODEL`, identify the safetensors files as an unofficial converted derivative, and avoid language that implies Apple endorsement.
+
 ## What The Model Card Should Contain
 
 Include:
@@ -47,6 +75,13 @@ For SAM3D, use:
 - Source model: https://huggingface.co/facebook/sam-3d-objects
 - Source code: https://github.com/facebookresearch/sam-3d-objects
 - License: upstream SAM License as linked by the source model/code pages
+
+For LiTo, use:
+
+- Source project: https://apple.github.io/ml-lito/
+- Source code: https://github.com/apple/ml-lito
+- License: Apple Machine Learning Research Model License Agreement, `LICENSE_MODEL`
+- Local model-card source: `model-cards/lito-research-mlx/README.md`
 
 ## Audit Artifact
 
