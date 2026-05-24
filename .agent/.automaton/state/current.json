@@ -1,8 +1,8 @@
 {
-  "active_change": "2026-05-22-lito-mlx-inference-pipeline",
+  "active_change": "2026-05-24-mlx-testing-strategy",
   "stage": "verify",
-  "canonical_spec": ".agent/work/2026-05-22-lito-mlx-inference-pipeline/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-22-lito-mlx-inference-pipeline/PLAN.md",
-  "product_review": "approved_with_risks",
+  "canonical_spec": ".agent/work/2026-05-24-mlx-testing-strategy/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-24-mlx-testing-strategy/PLAN.md",
+  "product_review": null,
   "engineering_review": "approved_with_risks"
 }

@@ -67,6 +67,8 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not heavy'"
 markers = [
+    "heavy: opt-in tests that load real weights, require Metal, or use large tensors",
     "torch_parity: optional parity checks against the local PyTorch checkout",
 ]

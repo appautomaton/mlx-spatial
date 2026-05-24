@@ -1224,7 +1224,10 @@ def _sparse_convnext_block_forward(
     spatial_coordinates = coordinates[:, 1:]
     spatial_shape = _spatial_shape_from_coordinates(spatial_coordinates)
     conv_weight = tensors[f"{prefix}.conv.weight"].astype(mx.float32)
-    kernel_weights = mx.reshape(mx.transpose(conv_weight, (1, 2, 3, 4, 0)), (27, int(conv_weight.shape[-1]), int(conv_weight.shape[0])))
+    kernel_weights = mx.reshape(
+        mx.contiguous(mx.transpose(conv_weight, (1, 2, 3, 4, 0))),
+        (27, int(conv_weight.shape[-1]), int(conv_weight.shape[0])),
+    )
     map_rows = sparse_conv_map_vectorized(spatial_coordinates.astype(mx.int32), spatial_shape, kernel_size=(3, 3, 3))
     conv = weighted_sparse_conv_chunked(features.astype(mx.float32), map_rows, kernel_weights, target_count=int(features.shape[0]))
     conv = conv + tensors[f"{prefix}.conv.bias"].astype(mx.float32)
@@ -1311,7 +1314,10 @@ def _sparse_conv3d_forward(
     spatial_coordinates = coordinates[:, 1:]
     spatial_shape = _spatial_shape_from_coordinates(spatial_coordinates)
     conv_weight = tensors[f"{prefix}.weight"].astype(mx.float32)
-    kernel_weights = mx.reshape(mx.transpose(conv_weight, (1, 2, 3, 4, 0)), (27, int(conv_weight.shape[-1]), int(conv_weight.shape[0])))
+    kernel_weights = mx.reshape(
+        mx.contiguous(mx.transpose(conv_weight, (1, 2, 3, 4, 0))),
+        (27, int(conv_weight.shape[-1]), int(conv_weight.shape[0])),
+    )
     map_rows = sparse_conv_map_vectorized(spatial_coordinates.astype(mx.int32), spatial_shape, kernel_size=(3, 3, 3))
     conv = weighted_sparse_conv_chunked(features.astype(mx.float32), map_rows, kernel_weights, target_count=int(features.shape[0]))
     return conv + tensors[f"{prefix}.bias"].astype(mx.float32)

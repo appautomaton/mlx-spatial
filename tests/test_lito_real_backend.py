@@ -86,6 +86,7 @@ def test_inspect_lito_real_architecture_uses_safetensor_headers(tmp_path):
     assert inventory.voxel_decoder["init_query_shape"] == (2, 2, 2, 8)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -547,6 +548,7 @@ def test_run_lito_voxel_decoder_lowres_latent_runs_fake_weights():
     assert np.allclose(np.asarray(ss_latent)[:, :, 0, 0, 0], np.arange(8, dtype=np.float32)[None, :])
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -584,6 +586,7 @@ def test_real_gaussian_output_heads_run_from_loaded_checkpoint_weights():
     assert np.isfinite(decoded["rgb_sh"]).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -607,6 +610,7 @@ def test_real_dit_velocity_block0_runs_from_loaded_checkpoint_weights():
     assert np.isfinite(np.asarray(velocity)).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -631,6 +635,7 @@ def test_real_dit_sampler_block0_runs_from_loaded_checkpoint_weights():
     assert np.isfinite(np.asarray(sampled)).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -651,6 +656,7 @@ def test_real_gaussian_query_point_stem_runs_from_loaded_checkpoint_weights():
     assert np.isfinite(decoded["xyz_w"]).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -679,6 +685,7 @@ def test_real_gaussian_perceiver_block0_cross_only_runs_from_loaded_checkpoint_w
     assert np.isfinite(decoded["xyz_w"]).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -708,6 +715,7 @@ def test_real_gaussian_perceiver_block0_local_voxel_self_attention_runs_from_loa
     assert np.isfinite(decoded["xyz_w"]).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -737,6 +745,7 @@ def test_real_gaussian_perceiver_all_blocks_local_voxel_self_attention_runs_from
     assert np.isfinite(decoded["rgb_sh"]).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -757,6 +766,7 @@ def test_real_voxel_decoder_lowres_latent_runs_from_loaded_checkpoint_weights():
     assert np.isfinite(np.asarray(ss_latent)).all()
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (
         Path(__file__).resolve().parents[1]
@@ -779,6 +789,7 @@ def test_real_trellis_sparse_structure_decoder_logits_run_from_local_mlx_weights
     assert converted["init_coord"].shape[1] == 3
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (
         Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors"
@@ -811,6 +822,7 @@ def test_real_init_coord_generation_from_latents_runs_with_local_mlx_weights():
     assert result["init_coord"].shape[1] == 3
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -841,6 +853,7 @@ def test_load_lito_gaussian_decoder_weight_arrays_reads_real_safetensors_subset(
     assert arrays["gs_output_color_mlp.final_layer.linear.weight"].shape == (3136, 512)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -887,6 +900,7 @@ def test_load_lito_gaussian_decoder_weight_arrays_reads_real_cross_attention_sub
     assert arrays["perceiver.blocks.0.ca_mlp.w3.weight"].shape == (512, 2048)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -917,6 +931,7 @@ def test_load_lito_voxel_decoder_weight_arrays_reads_real_safetensors_subset():
     assert arrays["final_layer.linear.weight"].shape == (8, 512)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -943,6 +958,7 @@ def test_load_lito_dit_weight_arrays_reads_real_safetensors_subset():
     assert arrays["final_layer.adaLN_linear1.weight"].shape == (1152, 1152)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
@@ -969,6 +985,7 @@ def test_load_lito_patch_encoder_weight_arrays_reads_real_safetensors_subset():
     assert arrays["learnable_paddings"].shape == (5, 1024)
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",

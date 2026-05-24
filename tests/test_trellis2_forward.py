@@ -3,6 +3,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
+import pytest
 from PIL import Image
 from safetensors.mlx import save_file
 
@@ -745,6 +746,7 @@ def test_assess_dinov3_conditioning_reports_present_asset_config_blocker(tmp_pat
     assert "model_type" in blocker.reason
 
 
+@pytest.mark.heavy
 def test_assess_dinov3_conditioning_reports_precise_transformer_blocker(tmp_path):
     _write_trellis2_root(tmp_path / "trellis")
     config = discover_trellis2_conditioning_config(tmp_path / "trellis").config
@@ -762,7 +764,7 @@ def test_assess_dinov3_conditioning_reports_precise_transformer_blocker(tmp_path
 def test_assess_dinov3_conditioning_can_report_simulated_output(tmp_path):
     _write_trellis2_root(tmp_path / "trellis")
     config = discover_trellis2_conditioning_config(tmp_path / "trellis").config
-    conditioning = mx.zeros((1, 1024, 1024), dtype=mx.float32)
+    conditioning = mx.zeros((1, 4, 1024), dtype=mx.float32)
 
     output, blocker = assess_dinov3_conditioning(tmp_path / "trellis", config, conditioning=conditioning)
 
@@ -770,7 +772,7 @@ def test_assess_dinov3_conditioning_can_report_simulated_output(tmp_path):
     assert output == Trellis2StageOutput(
         stage="image-conditioning",
         name="cond",
-        shape=(1, 1024, 1024),
+        shape=(1, 4, 1024),
         dtype="float32",
         detail="simulated conditioning output for facebook/dinov3-vitl16-pretrain-lvd1689m",
     )
@@ -782,7 +784,7 @@ def test_sparse_structure_boundary_reports_conditioning_width_mismatch(tmp_path)
     output = Trellis2StageOutput(
         stage="image-conditioning",
         name="cond",
-        shape=(1, 1024, 768),
+        shape=(1, 4, 768),
         dtype="float32",
         detail="test conditioning",
     )
@@ -800,7 +802,7 @@ def test_sparse_structure_boundary_advances_to_decoder_config_blocker(tmp_path):
     output = Trellis2StageOutput(
         stage="image-conditioning",
         name="cond",
-        shape=(1, 1024, 1024),
+        shape=(1, 4, 1024),
         dtype="float32",
         detail="test conditioning",
     )
@@ -979,7 +981,7 @@ def test_attempt_forward_trace_with_simulated_conditioning_reaches_sparse_bounda
     _write_trellis2_root(tmp_path / "trellis")
     image = tmp_path / "alpha.png"
     _write_alpha_image(image)
-    conditioning = mx.zeros((1, 1024, 1024), dtype=mx.float32)
+    conditioning = mx.zeros((1, 4, 1024), dtype=mx.float32)
 
     report = mlx_spatial.Trellis2InferencePipeline(tmp_path / "trellis").attempt_forward_trace(
         image,
@@ -998,7 +1000,7 @@ def test_attempt_forward_trace_with_simulated_conditioning_reaches_sparse_bounda
     assert report.outputs[0] == Trellis2StageOutput(
         stage="image-conditioning",
         name="cond",
-        shape=(1, 1024, 1024),
+        shape=(1, 4, 1024),
         dtype="float32",
         detail="simulated conditioning output for facebook/dinov3-vitl16-pretrain-lvd1689m",
     )
@@ -1042,6 +1044,7 @@ def test_attempt_forward_trace_with_fake_dinov3_assets_reaches_sparse_boundary(t
     assert report.blocker.stage == "sparse-structure-decoding"
 
 
+@pytest.mark.heavy
 def test_attempt_forward_trace_with_executable_dinov3_assets_reaches_sparse_boundary(tmp_path):
     _write_trellis2_root(tmp_path / "trellis", conditioning_resolution=2)
     dino_root = tmp_path / "dinov3"

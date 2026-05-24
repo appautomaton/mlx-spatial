@@ -383,7 +383,7 @@ def _sparse_conv3d(
     kernel_size = tuple(int(value) for value in weight.shape[1:4])
     kernel_count = int(np.prod(kernel_size))
     kernel_weights = mx.reshape(
-        mx.transpose(weight, (1, 2, 3, 4, 0)),
+        mx.contiguous(mx.transpose(weight, (1, 2, 3, 4, 0))),
         (kernel_count, int(weight.shape[-1]), int(weight.shape[0])),
     )
     outputs = []

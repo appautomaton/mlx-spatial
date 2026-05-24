@@ -186,6 +186,7 @@ def test_anisotropic_scale_and_quaternion_rotate_screen_footprint():
     assert np.asarray(vertical.rgba)[11, 8, 3] > np.asarray(vertical.rgba)[8, 11, 3]
 
 
+@pytest.mark.heavy
 def test_metal_matches_cpu_reference_for_tiny_image():
     means = np.array(
         [
@@ -228,6 +229,7 @@ def test_metal_matches_cpu_reference_for_tiny_image():
     np.testing.assert_allclose(np.asarray(metal.depth), np.asarray(cpu.depth), rtol=0.01, atol=0.01)
 
 
+@pytest.mark.heavy
 def test_metal_matches_cpu_reference_for_anisotropic_rotated_gaussian():
     means = np.array([[0.0, 0.0, 2.0]], dtype=np.float32)
     angle = np.pi / 4.0
