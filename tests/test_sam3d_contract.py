@@ -1,12 +1,17 @@
 from pathlib import Path
 
 import mlx.core as mx
+import pytest
 from safetensors.mlx import save_file
 
 from mlx_spatial.sam3d_contract import (
     SAM3D_REQUIRED_CONTRACT_COMPONENTS,
     audit_sam3d_source_weight_contract,
 )
+
+
+SAM3D_MLX_ROOT = Path("weights/sam-3d-objects-mlx")
+SAM3D_MLX_PIPELINE = SAM3D_MLX_ROOT / "checkpoints" / "pipeline.yaml"
 
 
 def _write_contract_fixture(root: Path, *, unknown_target: bool = False, omit_prefix: str | None = None) -> None:
@@ -114,11 +119,10 @@ def _write_checkpoint(path: Path, prefixes: tuple[str, ...], *, omit_prefix: str
     save_file(tensors, path)
 
 
+@pytest.mark.heavy
+@pytest.mark.skipif(not SAM3D_MLX_PIPELINE.is_file(), reason="SAM3D MLX weights absent")
 def test_real_sam3d_mlx_contract_maps_source_targets_and_weight_prefixes():
-    root = Path("weights/sam-3d-objects-mlx")
-    assert (root / "checkpoints" / "pipeline.yaml").is_file()
-
-    audit = audit_sam3d_source_weight_contract(root)
+    audit = audit_sam3d_source_weight_contract(SAM3D_MLX_ROOT)
 
     assert audit.ready, [issue.reason for issue in audit.issues]
     components = {item.component: item for item in audit.component_mappings}

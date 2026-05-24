@@ -17,7 +17,7 @@
 - A global fixture (e.g., in `tests/conftest.py` `pytest_sessionstart` or similar auto-use fixture) calls `mlx.core.set_default_device(mlx.core.cpu)`.
 **Verification:** `uv run pytest --collect-only` does not error, and inspecting `mx.default_device()` inside a test confirms CPU.
 **Status:** complete
-**Evidence:** changed `pyproject.toml`, `tests/conftest.py`, and `tests/test_pytest_config.py`; `uv run pytest --collect-only -q` collected 744 default tests with 26 deselected, `uv run pytest tests/test_pytest_config.py -q` passed, and the MLX CPU probe reported `Device(cpu, 0)`.
+**Evidence:** changed `pyproject.toml`, `tests/conftest.py`, and `tests/test_pytest_config.py`; `uv run pytest --collect-only -q` collected 743 default tests with 27 deselected, `uv run pytest tests/test_pytest_config.py -q` passed, and the MLX CPU probe reported `Device(cpu, 0)`.
 **Risks / next:** CPU default exposed a sparse convolution kernel-layout issue, fixed by making transposed sparse-conv kernels contiguous in `src/mlx_spatial/sam3d_slat.py` and `src/mlx_spatial/trellis2_decode.py`.
 
 ### Slice 2: Tag Existing Heavy Tests
@@ -28,7 +28,7 @@
 - Running `uv run pytest -m heavy` collects and runs them.
 **Verification:** `uv run pytest tests/test_lito_real_backend.py` reports the majority of tests as "deselected", and completes almost instantly.
 **Status:** complete
-**Evidence:** marked real-weight LiTo/TRELLIS tests, explicit Metal tests, and model-scale fake DINO tests as `heavy`; `uv run pytest tests/test_lito_real_backend.py -q` passed with 31 selected fast tests and 17 deselected real-weight tests, and `uv run pytest -m heavy -q` passed with 24 passed, 2 skipped, and 744 deselected.
+**Evidence:** marked real-weight LiTo/SAM3D/TRELLIS tests, explicit Metal tests, and model-scale fake DINO tests as `heavy`; `uv run pytest tests/test_lito_real_backend.py -q` passed with 31 selected fast tests and 17 deselected real-weight tests, and `uv run pytest -m heavy -q` passed with 25 passed, 2 skipped, and 743 deselected.
 **Risks / next:** The original "majority deselected" wording was narrowed by audit to avoid hiding fake-weight LiTo backend coverage from the default suite.
 
 ### Slice 3: GitHub Actions CI Workflow
