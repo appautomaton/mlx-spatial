@@ -207,11 +207,11 @@ def test_generate_rejects_placeholder_weight_files_by_default(tmp_path):
         LitoInferencePipeline(root, memory_profile="safe")
 
 
-@pytest.mark.skipif(not (ROOT / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(), reason="LiTo weights absent")
+@pytest.mark.skipif(not (ROOT / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(), reason="LiTo weights absent")
 def test_generate_with_real_weight_headers_does_not_fall_back_to_smoke_on_backend_failure(tmp_path):
     image = _write_synthetic_image(tmp_path / "input.png")
     output = tmp_path / "result.ply"
-    pipeline = LitoInferencePipeline(ROOT / "weights/lito-mlx", memory_profile="safe")
+    pipeline = LitoInferencePipeline(ROOT / "weights/lito-research-mlx", memory_profile="safe")
 
     with pytest.raises((LitoBackendUnavailable, LitoRealGenerationNotImplemented)):
         pipeline.generate(

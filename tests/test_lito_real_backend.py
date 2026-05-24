@@ -87,12 +87,12 @@ def test_inspect_lito_real_architecture_uses_safetensor_headers(tmp_path):
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_inspect_lito_real_architecture_reports_expected_real_lito_shapes():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     inventory = backend.inspect_lito_real_architecture(root)
 
@@ -548,12 +548,12 @@ def test_run_lito_voxel_decoder_lowres_latent_runs_fake_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_gaussian_output_heads_run_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     names = tuple(
         f"{prefix}.{suffix}"
         for prefix in ("gs_output_shape_mlp", "gs_output_color_mlp")
@@ -585,12 +585,12 @@ def test_real_gaussian_output_heads_run_from_loaded_checkpoint_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_dit_velocity_block0_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_dit_weight_arrays(root)
     latent = np.zeros((1, 2, 32), dtype=np.float32)
     cond = np.zeros((1, 3, 2048), dtype=np.float32)
@@ -608,12 +608,12 @@ def test_real_dit_velocity_block0_runs_from_loaded_checkpoint_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_dit_sampler_block0_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_dit_weight_arrays(root)
     latent = np.zeros((1, 2, 32), dtype=np.float32)
     cond = np.zeros((1, 3, 2048), dtype=np.float32)
@@ -632,12 +632,12 @@ def test_real_dit_sampler_block0_runs_from_loaded_checkpoint_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_gaussian_query_point_stem_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_gaussian_decoder_weight_arrays(root)
     init_coord = np.zeros((1, 3), dtype=np.float32)
 
@@ -652,12 +652,12 @@ def test_real_gaussian_query_point_stem_runs_from_loaded_checkpoint_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_gaussian_perceiver_block0_cross_only_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_gaussian_decoder_weight_arrays(root)
     init_coord = np.zeros((2, 3), dtype=np.float32)
     latent_tokens = np.zeros((4, 32), dtype=np.float32)
@@ -680,12 +680,12 @@ def test_real_gaussian_perceiver_block0_cross_only_runs_from_loaded_checkpoint_w
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_gaussian_perceiver_block0_local_voxel_self_attention_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_gaussian_decoder_weight_arrays(root)
     init_coord = np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], dtype=np.float32)
     latent_tokens = np.zeros((4, 32), dtype=np.float32)
@@ -709,12 +709,12 @@ def test_real_gaussian_perceiver_block0_local_voxel_self_attention_runs_from_loa
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_gaussian_perceiver_all_blocks_local_voxel_self_attention_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_gaussian_decoder_weight_arrays(root)
     init_coord = np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], dtype=np.float32)
     latent_tokens = np.zeros((4, 32), dtype=np.float32)
@@ -738,12 +738,12 @@ def test_real_gaussian_perceiver_all_blocks_local_voxel_self_attention_runs_from
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_voxel_decoder_lowres_latent_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_voxel_decoder_weight_arrays(root)
     latent_tokens = np.zeros((1, 2, 32), dtype=np.float32)
 
@@ -781,7 +781,7 @@ def test_real_trellis_sparse_structure_decoder_logits_run_from_local_mlx_weights
 
 @pytest.mark.skipif(
     not (
-        Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors"
+        Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors"
     ).is_file()
     or not (
         Path(__file__).resolve().parents[1]
@@ -792,7 +792,7 @@ def test_real_trellis_sparse_structure_decoder_logits_run_from_local_mlx_weights
 def test_real_init_coord_generation_from_latents_runs_with_local_mlx_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
     repo = Path(__file__).resolve().parents[1]
-    lito_root = repo / "weights/lito-mlx"
+    lito_root = repo / "weights/lito-research-mlx"
     trellis_root = repo / "weights/trellis2/microsoft/TRELLIS-image-large"
     voxel_weights = backend.load_lito_voxel_decoder_weight_arrays(lito_root)
     latent_tokens = np.zeros((1, 2, 32), dtype=np.float32)
@@ -812,12 +812,12 @@ def test_real_init_coord_generation_from_latents_runs_with_local_mlx_weights():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_load_lito_gaussian_decoder_weight_arrays_reads_real_safetensors_subset():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     arrays = backend.load_lito_gaussian_decoder_weight_arrays(
         root,
@@ -842,12 +842,12 @@ def test_load_lito_gaussian_decoder_weight_arrays_reads_real_safetensors_subset(
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_load_lito_gaussian_decoder_weight_arrays_reads_real_cross_attention_subset():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     arrays = backend.load_lito_gaussian_decoder_weight_arrays(
         root,
@@ -888,12 +888,12 @@ def test_load_lito_gaussian_decoder_weight_arrays_reads_real_cross_attention_sub
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/tokenizer/lito_new.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_load_lito_voxel_decoder_weight_arrays_reads_real_safetensors_subset():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     arrays = backend.load_lito_voxel_decoder_weight_arrays(
         root,
@@ -918,12 +918,12 @@ def test_load_lito_voxel_decoder_weight_arrays_reads_real_safetensors_subset():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_load_lito_dit_weight_arrays_reads_real_safetensors_subset():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     arrays = backend.load_lito_dit_weight_arrays(
         root,
@@ -944,12 +944,12 @@ def test_load_lito_dit_weight_arrays_reads_real_safetensors_subset():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_load_lito_patch_encoder_weight_arrays_reads_real_safetensors_subset():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
 
     arrays = backend.load_lito_patch_encoder_weight_arrays(
         root,
@@ -970,12 +970,12 @@ def test_load_lito_patch_encoder_weight_arrays_reads_real_safetensors_subset():
 
 
 @pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "weights/lito-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
+    not (Path(__file__).resolve().parents[1] / "weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors").is_file(),
     reason="LiTo weights absent",
 )
 def test_real_patch_encoder_condition_tokens_block0_runs_from_loaded_checkpoint_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/lito-mlx"
+    root = Path(__file__).resolve().parents[1] / "weights/lito-research-mlx"
     weights = backend.load_lito_patch_encoder_weight_arrays(root)
     config = backend.LitoPatchEncoderConfig(input_size=28, attention_chunk_size=4)
     rgba = np.ones((28, 28, 4), dtype=np.float32)

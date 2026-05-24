@@ -18,7 +18,7 @@ from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
 LITO_REPO_ID = "apple/ml-lito"
 LITO_CDN_BASE_URL = "https://ml-site.cdn-apple.com/models/lito"
 LITO_RAW_DEFAULT_ROOT = "weights/lito-raw"
-LITO_DEFAULT_ROOT = "weights/lito-mlx"
+LITO_DEFAULT_ROOT = "weights/lito-research-mlx"
 LITO_COMPONENT_GROUPS = (
     "tokenizer",
     "image_conditioner",

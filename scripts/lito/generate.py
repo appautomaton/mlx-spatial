@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         "--weights-root",
         dest="root",
-        default="weights/lito-mlx",
+        default="weights/lito-research-mlx",
         help="converted LiTo safetensors root",
     )
     parser.add_argument("--output", type=Path, required=True, help="output 3DGS file")
