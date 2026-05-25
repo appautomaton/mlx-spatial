@@ -1,8 +1,7 @@
 {
-  "active_change": "2026-05-24-mlx-testing-strategy",
-  "stage": "verify",
-  "canonical_spec": ".agent/work/2026-05-24-mlx-testing-strategy/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-24-mlx-testing-strategy/PLAN.md",
-  "product_review": null,
-  "engineering_review": "approved_with_risks"
+  "active_change": "2026-05-24-docs-coherence-cleanup",
+  "stage": "verified",
+  "canonical_spec": ".agent/work/2026-05-24-docs-coherence-cleanup/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-24-docs-coherence-cleanup/PLAN.md",
+  "engineering_review": "approved"
 }

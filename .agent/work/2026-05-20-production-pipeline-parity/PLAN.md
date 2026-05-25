@@ -12,7 +12,7 @@
 - `hyworld2_sh.eval_sh(deg=4, ...)` produces correct output matching vendor reference
 - `hyworld2_export.py` renders GS images via `rasterize_gaussians()` instead of exporting raw params only
 - Metadata no longer states "no CUDA rasterization"
-**Verification:** `uv run pytest tests/test_gs_rasterize.py tests/test_hyworld2_sh.py -v` passes; existing HY-World suite (151 tests) still passes
+**Verification:** `uv run pytest tests/test_gs_rasterize.py tests/test_hyworld2_utils.py -v` passes; existing HY-World suite (155 tests) still passes. *Correction: SH tests live in test_hyworld2_utils.py, not test_hyworld2_sh.py.*
 **Execution:** subagent recommended
 **Touches:** `gs_rasterize.py`, `hyworld2_sh.py`, `hyworld2_export.py`, tests
 **Covers:** AC-01, AC-02, AC-03

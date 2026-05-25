@@ -88,3 +88,47 @@ SAM-SS-FLOW (existing) → SAM-MOT
 TR-TEX → TR-ENC
 TR-INTERP (standalone)
 ```
+
+## Closure Status (Phase 2 — Production Pipeline Parity)
+
+Closed 2026-05-20. All P0 gaps closed in Phase 1. Remaining P1/P2 gaps closed in Phase 2.
+
+### P1 — High Priority (closed)
+
+| Gap ID | Status | Evidence |
+|--------|--------|----------|
+| SAM-MOT | Already ported (removed) | `sam3d_ss_flow.py` — full MOT transformer with shape-protected self-attention, parity tests pass |
+| SAM-GS | Closed | `gs_rasterize.py` — Metal-native GS rasterizer, degree-0 SH; higher-degree SH integrated via `eval_sh_numpy()` (G1.1) |
+| SAM-RENDER | Closed | `sam3d_render.py` — multi-view rendering, rigid ICP, render-and-compare scoring (G3.1) |
+| TR-TEX | Closed | `trellis2_texturing.py` — `Trellis2TexturingPipeline` class, image+mesh→textured GLB, 18 tests (G2.2) |
+| TR-ENC | Closed (wired) | `mesh_to_fdg.py` — mesh→FDG conversion enables encoder path; encoder reused from `trellis2_decode.py` (G2.1) |
+| TR-INTERP | Closed | `spatial_interp.py` — `sparse_nearest_interpolate`, `sparse_trilinear_interpolate`, 27 tests (G2.3) |
+| HW-GS | Closed | `hyworld2_export.py` — GS attributes now rendered via `rasterize_gaussians()`, metadata updated (G1.3) |
+| SHARED-GS | Closed | `gs_rasterize.py` + `metal/gs_rasterize.metal` — Metal-native, M1-safe, CPU fallback, 9 tests |
+
+### P2 — Medium Priority (closed)
+
+| Gap ID | Status | Evidence |
+|--------|--------|----------|
+| SAM-LAYOUT | Closed | `sam3d_render.py` — `optimize_sam3d_layout_render_and_compare()`, perturbation-based pose refinement (G3.1) |
+| SAM-SHORTCUT | Already ported (removed) | `sam3d_ss_flow.py` — `run_sam3d_ss_shortcut_flow()` inference sampler |
+| SAM-HOLES | Closed | `sam3d_mesh.py` — `fill_sam3d_mesh_holes()`, boundary detection + fan triangulation + visibility (G3.2) |
+| TR-REGRID | Closed | `ovoxel.py` — `remesh_narrow_band_dual_contouring()`, CPU dual-contouring from FDG fields (G3.3) |
+| HW-GRID | Closed | `grid.py` — `create_uv_grid()`, `fourier_embeddings()`, `fourier_embeddings_np()` (G3.4) |
+| HW-FRUSTUM | Training-only (removed) | Frustum masking for training masks — not applicable at inference |
+
+### Numeric Parity Verified
+
+- `numeric_parity_verified=true` set for HY-World 2.0 backbone (Phase 1)
+- SH evaluation (degrees 0-4): `eval_sh_numpy` matches `eval_sh` term-by-term
+- Sparse interpolation: parity tests against dense-grid NumPy reference
+- GS rasterizer: Metal vs CPU parity within 1% tolerance
+
+### Open Risks (non-blocking)
+
+- GS rasterizer is correctness-first, not performance-complete (per-pixel loop, no tile binning)
+- mesh_to_flexible_dual_grid uses conservative intersected flag strategy (slightly thickened meshes at low grid sizes)
+- Dual-contouring remeshing is CPU-only; `cumesh.remeshing` GPU acceleration not replicated
+- No CI pipeline; quality gate is manual (`uv run pytest`)
+- Parity verification depends on local PyTorch reference outputs (dev-only)
+```
