@@ -9,15 +9,15 @@ metadata:
 
 Framing controller. Bounds and de-risks a request into a single `SPEC.md`.
 
-First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding. Read `STATUS.md` for open blockers.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding. Read `STATUS.md` for open blockers.
 
 ## Preamble
 
-auto-frame always produces the canonical artifact: `SPEC.md`. If you leave this skill without a valid SPEC.md written to disk, you have failed. This skill does not write code, does not create PLAN.md, and does not proceed to planning without a written spec.
+auto-frame produces the canonical artifact: `SPEC.md` when the request is frameable. If you complete framing without a valid SPEC.md written to disk, you have failed. If the request still needs objective discovery or multiple material decisions before a useful spec can exist, continue into `auto-office-hours`'s contract in the same session instead of writing a weak SPEC or making the user re-invoke another skill. This skill does not write code, does not create PLAN.md, and does not proceed to planning without a written spec.
 
-Context budget: `SPEC.md` is the reloadable contract, not the entire body of detail. Keep it compact enough to re-read, but do not narrow a coherent goal just to keep the file short. For larger coherent work, summarize the contract in SPEC.md and link detail files under `spec/*.md`, such as `constraints.md`, `gap-matrix.md`, `risks.md`, or `acceptance-detail.md`. The primary scope check is coherence: one outcome = one spec, even when it needs progressive disclosure.
+Loading discipline: hold the INTAKE (if present), the objective, constraints, and risks. Read project files — implementations, patterns, module boundaries, current state — when grounding the spec in reality. Avoid exhaustive tree walks.
 
-Read and explore project files when understanding the codebase helps produce an accurate spec — existing implementations, patterns, module boundaries, and current state all inform constraints, risks, and acceptance criteria. Avoid exhaustive tree walks; read what you need to ground the spec in reality.
+Artifact discipline: `SPEC.md` is the reloadable contract, not the entire body of detail. Keep it compact enough to re-read, but do not narrow a coherent goal just to keep the file short. For larger coherent work, summarize the contract in SPEC.md and link detail files under `spec/*.md`, such as `constraints.md`, `gap-matrix.md`, `risks.md`, or `acceptance-detail.md`. The primary scope check is coherence: one outcome = one spec, even when it needs progressive disclosure.
 
 ## Quality Gate
 
@@ -31,11 +31,11 @@ Before finalizing `SPEC.md`:
 
 ### Restate
 
-If `.agent/work/<active_change>/INTAKE.md` exists, read it before interviewing. If no intake exists but approved office-hours context is present in the conversation (work scale, work shape, broader intent, scope coverage, or rejected framings), read that instead. Adopt the scale, shape, broader intent, target user or stakeholder, scope coverage, and rejected framings to calibrate constraints and interview depth. Do not re-ask what office-hours already established. Do not reintroduce directions the user explicitly rejected — if INTAKE.md includes rejected framings, treat them as hard constraints on the spec.
+If `.agent/work/<active_change>/INTAKE.md` exists, read it before interviewing. `INTAKE.md` is preferred context, not a prerequisite for framing. If no intake exists but approved office-hours context is present in the conversation (work scale, work shape, broader intent, scope coverage, or rejected framings), read that instead. If the user skipped office-hours, frame directly from the current request and repo evidence. Do not send the user back to office-hours solely because `INTAKE.md` is missing. Adopt the scale, shape, broader intent, target user or stakeholder, scope coverage, and rejected framings to calibrate constraints and interview depth. Do not re-ask what office-hours already established. Do not reintroduce directions the user explicitly rejected — if INTAKE.md includes rejected framings, treat them as hard constraints on the spec.
 
-State the goal in one sentence. If you cannot, ask one clarifying question and stop.
+State the goal in one sentence. If you cannot, ask one clarifying question. If the answer still cannot produce a one-sentence goal, or if the request needs objective discovery or multiple material decisions before any useful SPEC can be written, continue into `auto-office-hours`'s diagnostic and intake flow in the same session. Recommend `auto-office-hours` only when continuation is blocked by context pressure, host limits, or a user choice to pause.
 
-If your SPEC would be narrower than the user's stated goal or office-hours broader intent, either widen the SPEC, explicitly record the narrowing as decomposition with deferred scope in `.agent/steering/ROADMAP.md` (using the format in `references/ROADMAP-CONTRACT.md`), or ask for confirmation. Silent narrowing is a framing failure. A spec that covers a large coherent outcome is better than splitting into roadmap phases that lose shared context. Let the plan carry complexity through ordered slices.
+If your SPEC would be narrower than the user's stated goal or office-hours broader intent, either widen the SPEC, explicitly record the narrowing as decomposition with deferred scope in `.agent/steering/ROADMAP.md` (using the format in `.agent/.automaton/references/ROADMAP-CONTRACT.md`), or ask for confirmation. Silent narrowing is a framing failure. A spec that covers a large coherent outcome is better than splitting into roadmap phases that lose shared context. Let the plan carry complexity through ordered slices.
 
 ### Coverage Check
 
@@ -70,11 +70,21 @@ If anything is ambiguous, ask questions that materially change the spec. Do not 
 If INTAKE.md includes needs-decision items or unresolved assumptions, address those first. Do not re-ask what office-hours already established, but do follow up on things office-hours didn't resolve.
 </INTERVIEW>
 
+### Continue To Office-Hours When Not Frameable
+
+Use this only when one focused framing question is not enough. Continue into `auto-office-hours` in the same session when:
+- The user cannot state the problem, stakeholder, desired outcome, or content audience/thesis.
+- The request mixes multiple independent outcomes and the first spec is not obvious.
+- Scope, approach, or verification has multiple unresolved decisions that would produce materially different SPECs.
+- The user is asking for a strategy conversation, decomposition, or direction choice rather than a bounded spec.
+
+When this happens, follow `auto-office-hours`'s contract: classify mode, scale, and shape; run the minimum diagnostic; present approaches; wait for approval before writing `INTAKE.md`. Do not write SPEC.md until an approach is approved and the frame-ready conditions are met.
+
 ### Write SPEC.md
 
 If a `SPEC.md` already exists for this change, read it and preserve all `## Review:` sections.
 
-<HARD-GATE>
+<GATE>
 
 Do NOT proceed past this step without writing `SPEC.md` to `.agent/work/<change>/SPEC.md`.
 
@@ -96,14 +106,14 @@ These fields are **conditional** — include only when the named trigger applies
 - Scope coverage decisions — trigger: intake or request includes multiple material asks, perspectives, deferrals, anti-goals, or needs-decision items
 - Blocking questions or assumptions — trigger: present and material; omit when "none" rather than writing the literal word "none"
 
-Apply the Artifact Signal Discipline rules from `references/ARTIFACT-LIFECYCLE.md` while writing: no mirror sections, index over transcript, append-replace not stack. If a `SPEC.md` already exists, refresh it and replace prior `## Review:` sections on re-run for the same change — do not stack reviews.
-</HARD-GATE>
+Apply the Artifact Signal Discipline rules from `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` while writing: no mirror sections, index over transcript, append-replace not stack. If a `SPEC.md` already exists, refresh it and replace prior `## Review:` sections on re-run for the same change — do not stack reviews.
+</GATE>
 
 ### Update State
 
 If `active_change` is `bootstrap` or does not match the current objective, derive a new slug: `YYYY-MM-DD-<kebab-case-objective>` using today's date (e.g., `2026-05-20-session-auth-jwt`). Update `active_change` before writing SPEC.md so the work folder uses the new slug.
 
-Run `sync-status.mjs` from this skill's installed directory → writes STATUS.md frontmatter from current.json, outputs `{synced, statusPath, active_change, stage}`.
+Run `node .agent/.automaton/scripts/sync-status.mjs` from the project root.
 Update `.agent/.automaton/state/current.json`:
 - `active_change` → `<change>` (when derived or changed)
 - `canonical_spec` → path to the SPEC.md you just wrote
@@ -111,15 +121,16 @@ Update `.agent/.automaton/state/current.json`:
 
 ## Output
 
-- **SPEC.md**: written to `.agent/work/<change>/SPEC.md` (mandatory)
-- `.agent/.automaton/state/current.json` updated with `canonical_spec`; `stage` stays `frame` unless the user approves direct plan handoff
-- Diagnostic handling: `error`-level diagnostics block advancement; `warning`-level diagnostics surface to the next stage
-- Recommended next skill: `auto-ceo-review`, `auto-plan`, or `auto-office-hours`. The user or host invokes the next skill; auto-frame does not require nested invocation.
+- Frameable path: **SPEC.md** written to `.agent/work/<change>/SPEC.md` and `.agent/.automaton/state/current.json` updated with `canonical_spec`; `stage` stays `frame` unless the user approves direct plan handoff
+- Not-frameable path: continue into `auto-office-hours`'s contract and do not report framing complete until an approved intake exists and SPEC.md can be written
+- Diagnostic handling: `error`-level diagnostics block the frame; `warning`-level diagnostics surface to the next stage
+- Handoff: after SPEC.md, recommend or continue into `auto-ceo-review`'s or `auto-plan`'s contract according to review needs. If the request is not frameable, continue into `auto-office-hours`'s contract when the same session can keep working; otherwise recommend it with the concrete blocker. The user or host invokes the next skill; auto-frame does not chain.
 
 ## Rules
 
-- **SPEC.md is mandatory.** No file, no completion. Conversational framing without a written artifact is not auto-frame.
-- Ask ≤ 3 questions (up to 5 for capability-sized goals without office-hours context). If you need more, the user is not ready to frame.
+- **SPEC.md is mandatory for frame completion.** No file, no framing completion. If the request is not frameable, continue into office-hours rather than pretending framing is done.
+- **INTAKE.md is optional.** Use it when present, but a clear current request can be framed without it.
+- Ask ≤ 3 framing questions (up to 5 for capability-sized goals without office-hours context). If you need more, the user is not ready to frame; continue into `auto-office-hours` when the same session can keep working.
 - Keep notes operational. No essays.
 - Preserve review sections on refresh.
 
@@ -135,7 +146,7 @@ Read `references/content-framing.md` for content-aware SPEC.md fields and anti-s
 
 ### Artifact Lifecycle
 
-Read `references/ARTIFACT-LIFECYCLE.md` when state pointers conflict or progressive disclosure layout is unclear. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)
+Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` when state pointers conflict or progressive disclosure layout is unclear. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)
 
 ### Edge Case: User tries to skip spec writing
 

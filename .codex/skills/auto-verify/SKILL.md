@@ -9,13 +9,13 @@ metadata:
 
 Verification gate. Independent audit of a completed plan; runs once, not per-slice.
 
-First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts.
 
 ## Preamble
 
-The antifraud layer. Re-reads the plan, runs proof commands, compares fresh results to acceptance criteria. Does not trust execute's self-assessment. Does not fix what it finds.
+Independent audit. Re-read the plan, run proof commands, and compare fresh results to acceptance criteria. It does not trust execute's self-assessment or fix what it finds.
 
-Context budget: one PLAN.md read + verification commands per criterion. Read source files when verifying correctness requires inspecting the actual changes, not just command output.
+Loading discipline: one PLAN.md read + verification commands per criterion. Read source files when verifying correctness requires inspecting the actual changes, not just command output.
 
 ## Quality Gate
 
@@ -29,21 +29,24 @@ Before writing the verification report:
 
 ### Load State
 
-Read `.agent/steering/STATUS.md`. Read the canonical `PLAN.md`.
+Read the canonical `PLAN.md`. Load only linked `slices/slice-NNN.md` files and referenced requirement IDs from `spec/*.md`; Linked detail file and traceability IDs are normative, and an unlinked supplemental file is not verification context. For prose slices, read `references/content-verification.md`.
 
-If slices link `slices/slice-NNN.md` detail files or reference requirement IDs in `spec/*.md`, load only those files. Linked detail file and traceability IDs are normative; do not verify from an unlinked supplemental file.
+### Mark Verify Stage
 
-If any slice involves prose, read `references/content-verification.md` (~54 lines: 8-check verification contract, anti-slop pattern scan, source/fact checks, report shape) and include its content checks.
+After `PLAN.md` resolves and before running commands, run `node .agent/.automaton/scripts/sync-status.mjs --stage verify` from the project root. Do not edit `current.json` by hand.
 
 ### Collect Acceptance Criteria
 
 Gather every acceptance criterion and verification command from every slice in PLAN.md. Build a checklist: slice name → criterion → command. This is a plan-level audit.
 
+<GATE>
+
+Do NOT modify source code, tests, or project artifacts during verification. Verify reads and runs commands; it does not fix.
+</GATE>
+
 ### Run Verification
 
-Execute verification commands for each criterion. Mark each: PASS, FAIL, or PARTIAL. If a criterion lacks a verification command in the plan, derive one from the acceptance criterion and document what you ran.
-
-For content slices, verify audience, thesis, voice, content anti-goals, channel, source policy, factual risk, format, and anti-slop scan with evidence.
+Execute verification commands for each criterion. Mark each PASS, FAIL, or PARTIAL. If a criterion lacks a command, derive one from the acceptance criterion and document what you ran. For content slices, verify audience, thesis, voice, content anti-goals, channel, source policy, factual risk, format, and anti-slop scan with evidence.
 
 ### Evaluate
 
@@ -51,68 +54,35 @@ Binary: the plan passes only when every criterion across all slices passes. One 
 
 ### Report
 
-```
-## Verification: [Change Name]
-
-### Slice N: [Name]
-- Criterion: [acceptance criterion]
-  Result: PASS / FAIL / PARTIAL
-  Evidence: [command output or observation]
-  Gap: [what is missing, or "none"]
-
-[Repeat for each criterion in each slice]
-
-PASS summary:
-**Overall:** PASS
-**Passed:** [M] of [M] criteria
-**Gaps:** none
-**Change status:** complete
-**New objective:** use `auto-office-hours` to shape the next objective when you are ready.
-
-FAIL summary:
-**Overall:** FAIL
-**Passed:** [N] of [M] criteria
-**Gaps:** [structured list]
-**Change status:** incomplete
-**Recommended next skill:** auto-execute
-```
+Build the full criterion checklist internally. Use `references/verification-template.md` for report shape. Summarize passing criteria by slice; expand failures, skipped checks, derived commands, PARTIAL results, or small 1-2 criterion plans.
 
 ### On Pass
 
-- Update `.agent/.automaton/state/current.json`: `stage` → `verify`
-- Run `sync-status.mjs` from this skill's installed directory.
-- If `.agent/steering/ROADMAP.md` exists, update the matching phase to `status: done` per `references/ROADMAP-CONTRACT.md`. Match by the phase's `change:` field against `active_change`; skip if empty or no match.
+- Run `node .agent/.automaton/scripts/sync-status.mjs --stage verified` from the project root.
+- If `.agent/steering/ROADMAP.md` exists, mark the matching `change:` phase `status: done` per `.agent/.automaton/references/ROADMAP-CONTRACT.md`; skip empty or non-matching phases. If no active/pending phases or deferred items remain, reset ROADMAP.md to the empty shape.
 - End the report with `Change status: complete` and a separate `New objective` line pointing to `auto-office-hours` for future work. Do not print a `Recommended next skill` line on PASS. Use `auto-resume` only for later re-entry or recovery.
 
 ### On Fail
 
-Do NOT update state. Annotate failed slices in `PLAN.md` with structured gap blocks:
-
-```
-> **VERIFY-GAP:** [criterion that failed]
-> **Evidence:** [what the command returned]
-> **Fix objective:** [what execute must address]
-```
-
-Recommend `auto-execute`; it reads these annotations on re-entry.
+Annotate failed slices in `PLAN.md` with structured gap blocks, then run `node .agent/.automaton/scripts/sync-status.mjs --stage execute` from the project root so re-entry resumes gap fixing.
+Each gap block needs `VERIFY-GAP`, evidence, and a fix objective. Recommend `auto-execute`; it reads these annotations on re-entry.
 
 ## Output
 
-- Verification report (inline)
-- `PLAN.md` annotated with `VERIFY-GAP` blocks (on failure)
-- `.agent/.automaton/state/current.json` updated to `stage: verify` (on pass only); state unchanged on fail
-- `.agent/steering/ROADMAP.md` phase marked done (on pass, if applicable)
-- Diagnostic handling: `error`-level diagnostics block the verification run; `warning`-level findings appear in the report
+- Inline verification report; `PLAN.md` annotated with `VERIFY-GAP` blocks on failure
+- State recorded through `sync-status.mjs`: `stage: verify` when verification starts, `stage: verified` on pass, or `stage: execute` on fail
+- `.agent/steering/ROADMAP.md` phase marked done on pass when applicable, or reset to empty shape when the roadmap is complete
+- Diagnostic handling: `error`-level diagnostics block the verification run; `warning`-level findings surface to the report
 - PASS closeout: report `Change status: complete` and `New objective: use auto-office-hours`; do not emit `Recommended next skill`
-- FAIL closeout: recommend `auto-execute`. The user or host invokes any next skill; auto-verify does not require nested invocation.
+- FAIL closeout: recommend `auto-execute`. The user or host invokes the next skill; auto-verify does not chain.
 
 ## Rules
 
 - Fresh evidence only. Do not rely on execution-session memory or prior verification results.
 - Binary evaluation. Partial evidence is FAIL for the plan.
-- Do not fix during verification. Report gaps and return to execute.
-- Verify the plan in full: all slices, all criteria.
-- If verification commands are missing from the plan, derive and run them. Document what you ran.
+- Do not fix during verification; report gaps and return to execute.
+- Verify the full plan: all slices, all criteria. Derive missing commands from acceptance criteria and document them.
+- Do not print a long pass transcript. Expand only failures, skipped checks, derived commands, or user-requested detail.
 
 ## Deep
 
@@ -126,4 +96,4 @@ Read `references/common-gaps.md` for frequently missed scenarios. (~51 lines: 6-
 
 ### Artifact Lifecycle
 
-Read `references/ARTIFACT-LIFECYCLE.md` when state pointer or handoff rules need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)
+Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` when state pointer or handoff rules need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)

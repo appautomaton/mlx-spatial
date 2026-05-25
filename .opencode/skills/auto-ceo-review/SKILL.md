@@ -9,13 +9,13 @@ metadata:
 
 Product-direction gate. Decides whether a spec is worth building before planning begins.
 
-First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
 
 ## Preamble
 
 Product bet review. Restates the objective as one crisp bet, identifies differentiation, calls out generic or mis-scoped direction. Does not design implementation or write code.
 
-Context budget: one SPEC.md read, one review paragraph, one verdict. Read project files when understanding the codebase helps ground the review — verify that spec claims reflect what actually exists before approving or rejecting.
+Loading discipline: one SPEC.md read, one review paragraph, one verdict. Read project files when understanding the codebase helps ground the review — verify that spec claims reflect what actually exists before approving or rejecting.
 
 ## Quality Gate
 
@@ -43,7 +43,7 @@ Assess differentiation, user value, generic or mis-scoped elements, and shippabi
 
 Use exactly one of the four approved values.
 
-<VERDICT>
+### Verdict Values
 
 Use strict vocabulary. No synonyms.
 
@@ -53,7 +53,6 @@ Use strict vocabulary. No synonyms.
 | `approved_with_risks` | Direction is sound but carries known risks. Document them in the review. | `auto-plan` |
 | `needs_clarification` | Direction cannot be evaluated. Return to framing. | `auto-frame` or `auto-office-hours` |
 | `descoped` | Direction is out of scope or low-leverage. Do not pursue. | `auto-office-hours` or stop |
-</VERDICT>
 
 ### Append Review
 
@@ -61,7 +60,7 @@ Add a `## Review: Product` section to `SPEC.md` using the exact template in `ref
 
 ### Update State
 
-Run `sync-status.mjs` from this skill's installed directory.
+Run `node .agent/.automaton/scripts/sync-status.mjs` from the project root.
 Update `.agent/.automaton/state/current.json`:
 - `product_review` → `<verdict>`
 
@@ -74,7 +73,7 @@ State the next skill based on the verdict.
 - `SPEC.md` with appended `## Review: Product` section
 - `.agent/.automaton/state/current.json` updated with `product_review`; `stage` is unchanged by this skill
 - Diagnostic handling: `error`-level diagnostics block the review; `warning`-level diagnostics surface to the next stage
-- Recommended next skill, mapped from verdict per the Review Verdict Routing table in `references/ARTIFACT-LIFECYCLE.md`: `approved` or `approved_with_risks` → `auto-plan`; `needs_clarification` → `auto-frame` or `auto-office-hours`; `descoped` → `auto-office-hours` or stop. The user or host invokes the next skill; auto-ceo-review does not require nested invocation.
+- Recommended next skill, mapped from verdict: `approved` or `approved_with_risks` → `auto-plan`; `needs_clarification` → `auto-frame` or `auto-office-hours`; `descoped` → `auto-office-hours` or stop. The user or host invokes the next skill; auto-ceo-review does not chain.
 
 ## Rules
 

@@ -9,13 +9,13 @@ metadata:
 
 Session recovery. Rebuilds context from durable artifacts, not memory or guessing.
 
-First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
 
 ## Preamble
 
-auto-resume rebuilds context from durable artifacts, not from the user's description or the agent's training data. It loads canonical artifacts in dependency order (spec first, then design, then plan) and reports what it found, what was blocked, and what comes next.
+auto-resume rebuilds context from durable artifacts, not from the user's description or the agent's training data. It does not modify artifacts, advance the stage, or start new work. It loads canonical artifacts in dependency order (spec first, then design, then plan) and reports what it found, what was blocked, and what comes next.
 
-Context budget: start with artifacts needed for the current stage. Read project files when understanding the codebase helps rebuild accurate context for the next action.
+Loading discipline: start with artifacts needed for the current stage. Read project files when understanding the codebase helps rebuild accurate context for the next action.
 
 ## Quality Gate
 
@@ -29,13 +29,11 @@ Before producing the recovery summary:
 
 ### Load State
 
-Read `.agent/steering/STATUS.md`. Read `references/ARTIFACT-LIFECYCLE.md` for recovery order, stale-pointer handling, and stage handoffs. If the recovered state suggests the active change is complete or no active work exists, read `.agent/steering/ROADMAP.md` when it exists to surface pending phases as context, not to auto-start them.
+Read `.agent/steering/STATUS.md`. Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` for recovery order, stale-pointer handling, and stage handoffs. If the recovered state suggests the active change is complete or no active work exists, read `.agent/steering/ROADMAP.md` when it exists to surface pending phases as context, not to auto-start them.
 
 If `.agent/` does not exist or `current.json` is missing, recommend `auto-onboard` and stop.
 
 ### Verify Artifact Integrity
-
-<ARTIFACT-CHECK>
 
 Check that canonical pointers in `current.json` resolve to actual files:
 - `canonical_spec` → does `SPEC.md` exist?
@@ -43,11 +41,8 @@ Check that canonical pointers in `current.json` resolve to actual files:
 - `canonical_plan` → does `PLAN.md` exist?
 
 If any pointer is stale (file missing or moved), report it plainly. Recommend `auto-onboard` if steering is missing, or `auto-frame` / `auto-plan` if the specific artifact is missing.
-</ARTIFACT-CHECK>
 
-### Load Artifacts in Dependency Order
-
-<STATE-RECOVERY>
+### Load Artifacts
 
 Load artifacts in this order. Stop at the current stage; do not load artifacts from future stages.
 
@@ -59,16 +54,13 @@ Stage: verify   → Change complete; load PLAN.md only if reporting what was ver
 Stage: resume   → Load SPEC.md, STATUS.md
 ```
 
-If `current.json` and `STATUS.md` disagree on active change or stage, report the mismatch. Prefer `current.json` for recovery, but surface the discrepancy.
-</STATE-RECOVERY>
+Treat `current.json` as the only source for active change, stage, and canonical artifact pointers. Treat `STATUS.md` as prose summary only; if it names stale artifacts or next steps, report that as stale prose and prefer `current.json`.
 
 ### Surface Review State
 
 If `current.json` contains `product_review` or `engineering_review`, read the corresponding `## Review:` sections from canonical artifacts and include them in the resume summary.
 
-### Summarize
-
-<CONTEXT-REPLAY>
+### Recovery Summary
 
 Produce a concise summary:
 
@@ -85,7 +77,6 @@ Produce a concise summary:
 ```
 
 Keep it under 200 tokens. The goal is orientation, not transcription.
-</CONTEXT-REPLAY>
 
 ### Recommend Next Skill
 
@@ -108,7 +99,7 @@ Based on the recovered state:
 - Review verdicts (if present)
 - `.agent/.automaton/state/current.json` is read-only for auto-resume; stale pointers are reported, not silently repaired
 - Diagnostic handling: missing or conflicting state surfaces as a `warning` in the summary; `error`-level diagnostics block the resume
-- Recommended next skill when recovered state is incomplete or blocked; none when the active change is verified complete. The user or host invokes any next skill; auto-resume does not require nested invocation.
+- Recommended next skill when recovered state is incomplete or blocked; none when the active change is verified complete. The user or host invokes the next skill; auto-resume does not chain.
 
 ## Rules
 
@@ -123,12 +114,12 @@ Based on the recovered state:
 
 ### Recovery Scenarios
 
-Read `references/recovery-scenarios.md` for common recovery situations. (~41 lines: 8 state→action pairs covering fresh session, no active change, stale pointers, current.json/STATUS.md mismatch, review verdict blocks, scaffold-level steering, multiple changes, stale status prose.)
+Read `references/recovery-scenarios.md` for common recovery situations. (~41 lines: 8 state→action pairs covering fresh session, no active change, stale pointers, stale STATUS.md prose, review verdict blocks, scaffold-level steering, multiple changes, and old artifact paths.)
 
 ### Artifact Dependency Order
 
 Read `references/artifact-order.md` for the full artifact dependency graph. (~48 lines: ASCII dependency graph from REPO-MAP through PLAN, loading rules by stage in table form, 3 anti-patterns.)
 
-### Context Budget
+### Context Loading Discipline
 
-Read `references/CONTEXT-BUDGET.md` for progressive loading and degradation tiers. (~76 lines: 4 principles, 6-step loading order, 4 degradation tiers with behavioral rules, no-re-read rule with exceptions.)
+Read `.agent/.automaton/references/CONTEXT-BUDGET.md` for progressive loading and degradation tiers. (~76 lines: 4 principles, 6-step loading order, 4 degradation tiers with behavioral rules, no-re-read rule with exceptions.)

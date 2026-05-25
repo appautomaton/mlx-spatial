@@ -9,13 +9,15 @@ metadata:
 
 Planning controller. Turns approved framing into ordered slices with verification commands.
 
-First action: run `scripts/get-context.mjs` → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
 
 ## Preamble
 
-auto-plan builds the smallest plan that makes execution safe while preserving the approved scope. It does not write code. It breaks work into ordered slices, each producing a testable outcome. Small slices use defaults; material risk, dependency, or checkpoint differences are explicit.
+auto-plan builds the smallest plan that makes execution safe while preserving the approved scope. It does not write code or broaden scope beyond the approved spec.
 
-Context budget: `PLAN.md` is the reloadable execution index, not the whole implementation dossier. Keep PLAN.md compact enough to re-read. For large coherent work, summarize slices in PLAN.md and link optional detail files under `.agent/work/<change>/slices/`. Split only for independent outcomes, not because one coherent plan has many requirements.
+Loading discipline: hold SPEC.md, review state, and source files needed for accurate slices. Read wider project files when understanding existing code informs slice boundaries or verification commands.
+
+Artifact discipline: `PLAN.md` is the reloadable execution index, not the whole implementation dossier. Keep PLAN.md compact enough to re-read. For large coherent work, summarize slices in PLAN.md and link optional detail files under `.agent/work/<change>/slices/`. Split only for independent outcomes, not because one coherent plan has many requirements.
 
 ## Quality Gate
 
@@ -32,8 +34,6 @@ Before finalizing `PLAN.md`:
 
 Load files in this order. Stop as soon as you have enough to proceed.
 
-<CONTEXT-LOADING>
-
 ```
 1. .agent/.automaton/state/current.json (always, < 50 tokens)
 2. STATUS.md             (always, < 200 tokens)
@@ -45,7 +45,6 @@ Load files in this order. Stop as soon as you have enough to proceed.
 ```
 
 Read and explore source files when understanding existing code helps produce accurate slices — module structure, current implementations, test patterns, and integration points all inform slice boundaries, verification commands, and dependency ordering. Do not ignore linked `spec/*.md` files when they contain normative requirements, gap IDs, invariants, or acceptance detail.
-</CONTEXT-LOADING>
 
 ### Assess Review State (if reviews exist)
 
@@ -61,15 +60,13 @@ If `SPEC.md` names requirement IDs, gap IDs, invariants, audit questions, migrat
 
 Break work into ordered execution units, not topic buckets. Each slice must be:
 - Testable: it produces an outcome that can be verified.
-- Bounded: it consumes a known fraction of the context window.
+- Bounded: it can be executed and verified without loading unrelated slices.
 - Independent: it can be executed without loading slices that come after it.
 - Checkpointed only for human input: it marks a pause only when a human must act or choose before the next approved slice can start.
 
 For content slices, also name the artifact target, allowed sources, factual-risk gate, and format constraint so `auto-execute` does not invent missing context.
 
-Before writing slices, think ahead to execution topology: which slices must run serially, which checkpoints require human judgment, which use subagents, and whether any parallel-safe groups exist. Continuation is the default after a verified slice; mark a checkpoint only when the agent must pause for human verification, a human decision, or a human action. Parallel-safe means dependencies are independent and write sets are disjoint; default to none.
-
-<SLICE-DESIGN>
+Before writing slices, think ahead to execution topology: which slices must run serially, which checkpoints require human judgment, which use subagents, and whether any parallel-safe groups exist. Continuation is the default after a verified slice; mark a checkpoint only when the agent must pause for human verification, a human decision, or a human action. Parallel-safe means dependencies are independent and write sets are disjoint; default to none. For multi-slice plans, make the topology clear that execution should continue through all approved slices; execution windows are context-management batches, not planned stopping points.
 
 Frame each slice with required fields first, then only the overrides the slice needs:
 
@@ -90,7 +87,6 @@ Defaults, state only when overriding:
 
 Include when useful:
 **Touches:** [files, directories, or subsystems]
-**Context budget:** [~X% of context window]
 **Produces:** [specific artifact or state change]
 **Detail:** [linked `slices/slice-NNN.md` file]
 ```
@@ -106,8 +102,7 @@ Rules:
 - Use `decision` only when the user must choose among named product, architecture, design, or scope options before the next slice can start. The checkpoint reason must include the concrete question and options. Do not use `decision` for reversible engineering judgment, known limitations, validation results, or "next slice should be..." notes.
 - Use `human-action` when progress requires an external action the agent cannot perform, such as 2FA, account approval, or off-machine access.
 - Slices should be small enough to complete in one session.
-- If a coherent slice exceeds ~15% of context window, move extended instructions to `slices/slice-NNN.md` and keep PLAN.md as the index. Split the slice only when it contains independent outcomes.
-</SLICE-DESIGN>
+- If a coherent slice has extended instructions that make PLAN.md hard to scan, move them to `slices/slice-NNN.md` and keep PLAN.md as the index. Split the slice only when it contains independent outcomes.
 
 ### Write PLAN.md
 
@@ -123,15 +118,14 @@ Write the plan to `.agent/work/<change>/PLAN.md`.
 - **Architecture approach** — trigger: introduces a new pattern, non-obvious decision, or cross-system integration. Omit when the design is obvious from SPEC.
 - **Requirement traceability** — trigger: SPEC names gap IDs, invariant IDs, audit questions, migration checkpoints, or coverage targets. Omit when the SPEC has no traceable IDs.
 - **Aggregate verification commands table** — trigger: ≥ 3 slices or commands not captured per-slice. Per-slice inline suffices for smaller plans (index over transcript).
-- **Context budget for this change** — trigger: plan spans multiple sessions, expects context pressure, or warrants budget allocation. Omit for plans under one session.
 
-Apply the Artifact Signal Discipline rules from `references/ARTIFACT-LIFECYCLE.md` while writing: no mirror sections, index over transcript, append-replace not stack. Replace prior `## Review:` sections on re-run for the same change — do not stack reviews.
+Apply the Artifact Signal Discipline rules from `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` while writing: no mirror sections, index over transcript, append-replace not stack. Replace prior `## Review:` sections on re-run for the same change — do not stack reviews.
 
 ### Write DESIGN.md (if non-trivial)
 
 If the architecture is non-trivial or new patterns are introduced, write `DESIGN.md` to `.agent/work/<change>/DESIGN.md`. Keep it under 200 lines. If the architecture is obvious from the spec, skip this file.
 
-<HARD-GATE>
+<GATE>
 
 Do NOT write PLAN.md if:
 - SPEC.md is missing or unreadable.
@@ -139,11 +133,11 @@ Do NOT write PLAN.md if:
 - The scope is still ambiguous after reading SPEC.md.
 
 If any of these are true, recommend `auto-frame` and stop.
-</HARD-GATE>
+</GATE>
 
 ### Update State
 
-Run `sync-status.mjs` from this skill's installed directory → writes STATUS.md frontmatter from current.json, outputs `{synced, statusPath, active_change, stage}`.
+Run `node .agent/.automaton/scripts/sync-status.mjs` from the project root.
 Update `.agent/.automaton/state/current.json`:
 - `canonical_design` → path to DESIGN.md (if written)
 - `canonical_plan` → path to PLAN.md
@@ -154,8 +148,8 @@ Update `.agent/.automaton/state/current.json`:
 - `PLAN.md`: written to `.agent/work/<change>/PLAN.md`
 - `DESIGN.md`: written to `.agent/work/<change>/DESIGN.md` (if needed)
 - `.agent/.automaton/state/current.json` updated with `canonical_design` (when written), `canonical_plan`, and `stage: plan`
-- Diagnostic handling: `error`-level diagnostics block advancement; `warning`-level diagnostics surface to the next stage
-- Recommended next skill: `auto-eng-review` or `auto-execute`. The user or host invokes the next skill; auto-plan does not require nested invocation.
+- Diagnostic handling: `error`-level diagnostics block the plan; `warning`-level diagnostics surface to the next stage
+- Recommended next skill: `auto-eng-review` or `auto-execute`. The user or host invokes the next skill; auto-plan does not chain.
 
 ## Rules
 
@@ -175,10 +169,10 @@ Read `references/slice-examples.md` for well-designed vs. poorly-designed slices
 
 Read `references/verification-patterns.md` for common verification commands by stack. (~47 lines: Node/Python/Rust/Go/General commands, 4 verification principles including "verify the exact behavior, not absence of errors.")
 
-### Context Budget
+### Context Loading Discipline
 
-Read `references/CONTEXT-BUDGET.md` for progressive loading and degradation tiers. (~76 lines: 4 principles, 6-step loading order, 4 degradation tiers with behavioral rules, no-re-read rule with exceptions.)
+Read `.agent/.automaton/references/CONTEXT-BUDGET.md` for progressive loading and context pressure tiers. (~76 lines: 4 principles, 6-step loading order, 4 pressure tiers with behavioral rules, no-re-read rule with exceptions.)
 
 ### Artifact Lifecycle
 
-Read `references/ARTIFACT-LIFECYCLE.md` when handoff rules or state pointer boundaries need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)
+Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` when handoff rules or state pointer boundaries need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)
