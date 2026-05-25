@@ -27,7 +27,7 @@ python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
   --output-dir outputs/sam3d/living-room-script
 ```
 
-The script expects the public AppAutomaton runtime bundle at `weights/sam-3d-objects-mlx`. Local conversion from Meta's gated source repo is a maintainer/audit workflow, not the default user path.
+The script expects the public `appautomaton/sam-3d-objects-mlx` runtime bundle at `weights/sam-3d-objects-mlx`. Local conversion from Meta's gated source repo is a maintainer/audit workflow, not the default user path.
 
 Defaults:
 
@@ -131,14 +131,15 @@ Run checkpoint-backed Apple LiTo image-to-3DGS generation:
 python scripts/lito/generate.py inputs/lito/sample.png \
   --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
-  --memory-profile safe \
+  --memory-profile balanced \
   --print-metrics
 ```
 
 The script uses the upstream-recorded LiTo defaults from `LITO_RECOMMENDED_*`
 and writes a 3D Gaussian Splat PLY plus a safetensors sidecar when `--format ply`
-is selected. Use `--source-contract-smoke` only when testing the synthetic
-framework probe path.
+is selected. Use `--memory-profile safe` only for lower-memory smoke/debug runs,
+and pair it with `--source-contract-smoke` when testing the synthetic framework
+probe path.
 
 ## Packaging
 

@@ -262,6 +262,7 @@ version = "0.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "fast-simplification" },
+    { name = "huggingface-hub" },
     { name = "mlx" },
     { name = "numpy" },
     { name = "pillow" },
@@ -273,7 +274,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "huggingface-hub" },
     { name = "plyfile" },
     { name = "pt-safe-loader" },
     { name = "pytest" },
@@ -282,6 +282,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fast-simplification", specifier = ">=0.1.13" },
+    { name = "huggingface-hub", specifier = ">=0.36" },
     { name = "mlx" },
     { name = "numpy" },
     { name = "pillow", specifier = ">=12.2.0" },
@@ -293,7 +294,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "huggingface-hub", specifier = ">=0.36" },
     { name = "plyfile", specifier = ">=1.1" },
     { name = "pt-safe-loader", specifier = ">=0.1.4" },
     { name = "pytest", specifier = ">=8" },

@@ -10,12 +10,6 @@ Publish AppAutomaton-first:
 appautomaton/<model-name>
 ```
 
-For the current SAM3D conversion, the local working name is:
-
-```text
-weights/sam-3d-objects-mlx
-```
-
 Use an AppAutomaton model repo first. For SAM3D, the public runtime bundle is:
 
 ```text
@@ -70,6 +64,8 @@ Include:
 
 Do not copy large upstream model-card sections. Attribute and link to upstream instead.
 
+Lead with the user path: install `mlx-spatial`, download the model bundle, validate assets, and run one minimal command. Put upstream attribution and license details after the usage path so humans can start quickly and agents can identify the runnable contract.
+
 For SAM3D, use:
 
 - Source model: https://huggingface.co/facebook/sam-3d-objects
@@ -102,7 +98,7 @@ The audit should include:
 - dtype conversion notes
 - maximum absolute difference
 
-The current SAM3D local audit compared `ss_generator`, `slat_generator`, `ss_decoder`, `slat_decoder_gs`, `slat_decoder_mesh`, and `slat_decoder_gs_4` across 3,362 tensors with no missing, extra, shape-mismatched, or nonzero-difference tensors.
+The SAM3D audit should compare `ss_generator`, `slat_generator`, `ss_decoder`, `slat_decoder_gs`, `slat_decoder_mesh`, and `slat_decoder_gs_4`, and report tensor counts plus missing, extra, shape-mismatch, dtype, and numeric-difference summaries.
 
 ## License And Access Checks
 
@@ -115,6 +111,8 @@ Before publishing or duplicating a converted model bundle:
 5. Record the check date in the model card.
 
 If redistribution is unclear, do not publish converted weights. Publish conversion instructions instead.
+
+Repository visibility must match the card links. If the card links to `mlx-spatial` source, confirm the GitHub repo is public before publishing the model card.
 
 ## mlx-community Deferral
 

@@ -9,7 +9,7 @@ Upstream references:
 - Code repo: https://github.com/facebookresearch/sam-3d-objects
 - License source: the upstream model and code pages identify the SAM License as the governing license.
 
-The public AppAutomaton bundle is the recommended runtime download for `mlx-spatial`. The upstream Meta model remains the source-of-truth for license and provenance; its Hugging Face repo is gated and is only needed for maintainer conversion/audit work.
+The public `appautomaton/sam-3d-objects-mlx` bundle is the recommended runtime download for `mlx-spatial`. The upstream Meta model remains the source-of-truth for license and provenance; its Hugging Face repo is gated and is only needed for maintainer conversion/audit work.
 
 ## Local Asset Layout
 
@@ -25,7 +25,7 @@ The converted SAM3D root is expected to contain `pipeline.yaml` plus checkpoint 
 
 ## Download Runtime Bundle
 
-Download the ready MLX bundle from the public AppAutomaton Hugging Face repo:
+Download the ready MLX bundle from the public Hugging Face repo:
 
 ```bash
 uv run hf download appautomaton/sam-3d-objects-mlx \
@@ -34,7 +34,7 @@ uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
 uv run mlx-spatial-sam3d inspect weights/sam-3d-objects-mlx
 ```
 
-This is the normal user setup path. No local SAM3D conversion is required when using this bundle.
+This is the normal user setup path. No local SAM3D conversion is required when using this bundle. From an installed package, use the same commands without `uv run`.
 
 ## Maintainer Conversion Path
 
@@ -53,7 +53,7 @@ uv run mlx-spatial-sam3d convert weights/sam-3d-objects \
   --moge-output-root weights/sam-3d-objects-mlx/moge
 ```
 
-The current local conversion audit compared all converted SAM3D tensors against the original checkpoint sources with zero numeric differences. Keep that audit with the model bundle, not in the Python package.
+The SAM3D conversion audit compares converted tensors against the original checkpoint sources and belongs with the model bundle, not in the Python package.
 
 ## Recommended Inference Command
 
@@ -72,11 +72,12 @@ Equivalent package CLI:
 uv run mlx-spatial-sam3d reconstruct weights/sam-3d-objects-mlx \
   inputs/sam3d/living-room/image.png \
   --mask inputs/sam3d/living-room/mask-3.png \
-  --moge-root weights/sam-3d-objects-mlx/moge \
   --output outputs/sam3d/living-room-primary-default/gaussians.ply \
   --trace-output outputs/sam3d/living-room-primary-default/trace.json \
   --memory-profile balanced
 ```
+
+`--moge-root weights/sam-3d-objects-mlx/moge` is the default when using the public `appautomaton/sam-3d-objects-mlx` bundle. Pass it only when using a different MoGe root.
 
 Recommended defaults:
 
@@ -116,7 +117,7 @@ python scripts/sam3d/inspect_trace.py outputs/sam3d/<run>/trace.json
 
 Strict quality mode blocks before writing junk outputs when sparse occupancy is saturated, geometry collapses to a flat axis, or Gaussian opacity/geometry metrics are outside the configured nominal bands.
 
-This matters because an inference can still produce a bad object for a bad input or mask. The current behavior is to block those outputs.
+This matters because an inference can still produce a bad object for a bad input or mask. The runtime blocks those outputs.
 
 ## PLY Coordinates
 

@@ -35,6 +35,7 @@ CLI smoke checks:
 uv run mlx-spatial-sam3d --help
 uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
+uv run mlx-spatial-lito --help
 ```
 
 ## Local Assets
@@ -53,11 +54,21 @@ Tests should pass without downloading gated weights unless they are explicitly m
 ## Editing Constraints
 
 - Prefer existing module boundaries over new abstractions.
-- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, or `hyworld2_*` modules.
+- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, `hyworld2_*`, or `lito_*` modules.
 - Keep shared primitives model-neutral.
 - Do not add generated outputs, converted weights, vendor checkouts, or agent state to package artifacts.
 - Use structured parsers for model metadata and safetensors; avoid ad hoc parsing when a local helper exists.
 - Keep scripts self-documented with argparse and stable defaults.
+
+## Documentation Style
+
+Stable docs should be short enough to scan and precise enough for agents to execute:
+
+- Lead with the supported path before maintainer or parity paths.
+- Name exact asset roots, input roots, output roots, and CLIs.
+- Prefer current commands over historical transcripts.
+- Put dated verification evidence in release notes, PRs, or `.agent/work/` artifacts, not stable docs.
+- Do not describe internal slice decisions unless the decision still affects the public runtime contract.
 
 ## Reference Parity
 

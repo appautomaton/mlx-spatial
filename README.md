@@ -11,18 +11,29 @@ This is not a training framework, and it does not bundle model weights.
 
 ## What Works Now
 
-The current package covers four model families:
+The package covers four model families:
 
 | Pipeline | Input | Output | Weight setup |
 | --- | --- | --- | --- |
-| SAM 3D Objects | image + object mask | Gaussian PLY, optional GLB | AppAutomaton MLX bundle |
+| SAM 3D Objects | image + object mask | Gaussian PLY, optional GLB | `appautomaton` MLX bundle |
 | TRELLIS.2 | object-centric RGB/RGBA image | shape OBJ or textured GLB | downloaded safetensors directly |
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
-| LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | AppAutomaton research MLX bundle |
+| LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
+
+Choose by job:
+
+- Use SAM3D when you have an object image plus an exact mask and want object
+  reconstruction with Gaussian PLY output.
+- Use TRELLIS.2 when you have an object-centric image and want a shape OBJ or
+  textured GLB.
+- Use HY-WorldMirror when the input is a scene or frame set and you need camera,
+  depth, normal, or point-cloud outputs.
+- Use LiTo when you want Apple's research image-to-3DGS path and can work with
+  Gaussian splat PLY output instead of a mesh.
 
 Honest status:
 
-- SAM3D is the best object reconstruction path today. It uses the public
+- SAM3D is the strongest object reconstruction path in this package. It uses the public
   `appautomaton/sam-3d-objects-mlx` bundle.
 - TRELLIS.2 generation works, including textured GLB export. The export path is
   usable, but still an area we keep improving for texture and mesh quality.
@@ -68,8 +79,7 @@ uv run mlx-spatial-lito --help
 ```
 
 The repository also includes readable script wrappers under `scripts/`. These
-are the easiest starting point because they encode the settings we currently
-recommend.
+are the easiest starting point because they encode recommended settings.
 
 ## Model Assets
 
@@ -85,7 +95,7 @@ weights/dinov3-vitl16-pretrain-lvd1689m/
 weights/hy-world-2/
 ```
 
-SAM3D uses the converted AppAutomaton runtime bundle:
+SAM3D uses the converted `appautomaton/sam-3d-objects-mlx` runtime bundle:
 
 ```bash
 uv run hf download appautomaton/sam-3d-objects-mlx \
@@ -93,7 +103,7 @@ uv run hf download appautomaton/sam-3d-objects-mlx \
 uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
 ```
 
-LiTo uses the converted AppAutomaton research bundle:
+LiTo uses the converted `appautomaton/lito-research-mlx` research bundle:
 
 ```bash
 uv run hf download appautomaton/lito-research-mlx \
@@ -206,7 +216,7 @@ Use an object-centric image with a useful alpha mask when possible:
 python scripts/lito/generate.py inputs/lito/sample.png \
   --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
-  --memory-profile safe \
+  --memory-profile balanced \
   --print-metrics
 ```
 
@@ -236,6 +246,7 @@ vendors/             ignored upstream checkouts
 
 ## Documentation
 
+- [docs/README.md](docs/README.md): documentation map and reader contract.
 - [scripts/README.md](scripts/README.md): recommended inference scripts and their defaults.
 - [docs/sam3d.md](docs/sam3d.md): SAM3D setup, inference, quality gates, PLY expectations, and coordinate notes.
 - [docs/trellis2.md](docs/trellis2.md): TRELLIS.2 asset layout, no-conversion note, scripts, and export caveats.
@@ -243,7 +254,7 @@ vendors/             ignored upstream checkouts
 - [docs/lito.md](docs/lito.md): LiTo setup, research-weight bundle, image-to-3DGS CLI, memory profiles, and PLY viewing notes.
 - [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
 - [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
-- [docs/model-publishing.md](docs/model-publishing.md): AppAutomaton-first model bundles and model-card rules.
+- [docs/model-publishing.md](docs/model-publishing.md): model bundles and model-card rules.
 - [docs/release.md](docs/release.md): release checklist.
 
 ## Release Hygiene
