@@ -10,6 +10,7 @@ from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_root,
+    write_fake_pixal3d_shape_hr_root,
     write_fake_pixal3d_shape_slat_root,
     write_fake_pixal3d_sparse_decoder_root,
     write_fake_pixal3d_sparse_flow_root,
@@ -229,6 +230,119 @@ def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_
     assert metadata["blocker_next_target"] == "shape-slat-cascade"
     assert result.trace.metadata["shape_lr_projection"]["selected_projected_shape"] == (4096, 6)
     assert result.trace.metadata["shape_slat_lr"]["sampled_feature_shape"] == (4096, 32)
+
+
+def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path):
+    root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+    naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        shape_lr_naf_feature_map=naf,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "shape-hr-projection-conditioning"
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+        "sparse-structure-flow",
+        "sparse-structure-decoding",
+        "artifact:sparse_structure",
+        "projection-conditioning:shape_512",
+        "shape-slat-sampling:512",
+        "artifact:shape_slat_lr",
+        "shape-slat-cascade:upsample",
+        "artifact:shape_slat_hr_coordinates",
+    )
+    assert [path.name for path in result.artifacts] == [
+        "sparse_projection.npz",
+        "sparse_structure.npz",
+        "shape_slat_lr.npz",
+        "shape_slat_hr_coordinates.npz",
+    ]
+    payload = np.load(result.artifacts[3])
+    assert payload["coordinates"].shape == (4096, 4)
+    assert int(payload["actual_hr_resolution"]) == 1024
+    assert int(payload["actual_hr_grid_resolution"]) == 64
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["stage"] == "shape_slat_hr_coordinates"
+    assert metadata["raw_upsampled_shape"] == [4096, 4]
+    assert metadata["blocker_next_target"] == "shape-hr-projection-conditioning"
+    assert result.trace.metadata["shape_hr_cascade"]["completed_upsamples"] == 4
+    assert result.trace.metadata["shape_hr_cascade"]["token_count"] == 4096
+
+
+def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_shape_flow(tmp_path):
+    root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+    naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        shape_lr_naf_feature_map=naf,
+        shape_hr_naf_feature_map=naf,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "texture-projection-conditioning"
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+        "sparse-structure-flow",
+        "sparse-structure-decoding",
+        "artifact:sparse_structure",
+        "projection-conditioning:shape_512",
+        "shape-slat-sampling:512",
+        "artifact:shape_slat_lr",
+        "shape-slat-cascade:upsample",
+        "artifact:shape_slat_hr_coordinates",
+        "projection-conditioning:shape_1024",
+        "shape-slat-sampling:1024",
+        "artifact:shape_slat_hr",
+    )
+    assert [path.name for path in result.artifacts] == [
+        "sparse_projection.npz",
+        "sparse_structure.npz",
+        "shape_slat_lr.npz",
+        "shape_slat_hr_coordinates.npz",
+        "shape_slat_hr.npz",
+    ]
+    payload = np.load(result.artifacts[4])
+    assert payload["coordinates"].shape == (4096, 4)
+    assert payload["features"].shape == (4096, 32)
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["stage"] == "shape_slat_hr"
+    assert metadata["actual_hr_resolution"] == 1024
+    assert metadata["actual_hr_grid_resolution"] == 64
+    assert metadata["blocker_next_target"] == "texture-projection-conditioning"
+    assert result.trace.metadata["shape_hr_projection"]["selected_projected_shape"] == (4096, 6)
+    assert result.trace.metadata["shape_slat_hr"]["sampled_feature_shape"] == (4096, 32)
 
 
 def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():

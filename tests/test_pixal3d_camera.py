@@ -8,6 +8,7 @@ from mlx_spatial import (
     pixal3d_distance_from_fov,
     pixal3d_manual_camera_params,
     pixal3d_requested_hr_resolution,
+    pixal3d_select_hr_coordinates,
     pixal3d_select_hr_resolution,
     pixal3d_stage_plan,
 )
@@ -57,3 +58,18 @@ def test_pixal3d_stage_plan_records_quantized_hr_token_count():
 
     assert plan.actual_hr_resolution == 1536
     assert plan.hr_token_count == 2
+
+
+def test_pixal3d_select_hr_coordinates_returns_quantized_unique_coordinates():
+    coords = np.array([[0, 0, 0, 0], [0, 0, 0, 0], [0, 511, 511, 511]], dtype=np.int32)
+
+    selection = pixal3d_select_hr_coordinates(
+        coords,
+        requested_hr_resolution=1536,
+        max_num_tokens=49_152,
+    )
+
+    assert selection.actual_hr_resolution == 1536
+    assert selection.actual_hr_grid_resolution == 96
+    assert selection.token_count == 2
+    assert selection.coordinates.tolist() == [[0, 0, 0, 0], [0, 95, 95, 95]]

@@ -44,6 +44,19 @@ class Pixal3DShapeSLatArtifact:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Pixal3DShapeHRCoordinatesArtifact:
+    """Written Pixal3D HR shape-cascade coordinate bundle."""
+
+    path: Path
+    coordinates_shape: tuple[int, int]
+    requested_hr_resolution: int
+    actual_hr_resolution: int
+    actual_hr_grid_resolution: int
+    token_count: int
+    metadata: dict[str, Any]
+
+
 def write_pixal3d_projection_npz(
     path: str | Path,
     conditioning: Pixal3DProjectionConditioning,
@@ -119,6 +132,62 @@ def write_pixal3d_shape_slat_npz(
         path=output,
         coordinates_shape=tuple(int(dim) for dim in coordinates_array.shape),
         features_shape=tuple(int(dim) for dim in features_array.shape),
+        metadata=payload_metadata,
+    )
+
+
+def write_pixal3d_shape_hr_coordinates_npz(
+    path: str | Path,
+    coordinates: mx.array,
+    *,
+    requested_hr_resolution: int,
+    actual_hr_resolution: int,
+    actual_hr_grid_resolution: int,
+    max_num_tokens: int,
+    raw_upsampled_shape: tuple[int, int],
+    metadata: dict[str, Any] | None = None,
+) -> Pixal3DShapeHRCoordinatesArtifact:
+    """Write guarded Pixal3D HR cascade coordinates to an inspectable NPZ bundle."""
+
+    coordinates_array = _array(coordinates)
+    if coordinates_array.ndim != 2 or coordinates_array.shape[1] != 4:
+        raise ValueError(f"HR shape coordinates must have shape (n, 4), got {coordinates_array.shape}")
+    if requested_hr_resolution <= 0 or actual_hr_resolution <= 0 or actual_hr_grid_resolution <= 0:
+        raise ValueError("HR resolutions and grid resolution must be positive")
+    if max_num_tokens <= 0:
+        raise ValueError("max_num_tokens must be positive")
+
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    normalized_raw_shape = tuple(int(dim) for dim in raw_upsampled_shape)
+    payload_metadata = {
+        "stage": "shape_slat_hr_coordinates",
+        "coordinate_order": "batch,z,y,x",
+        "coordinates_shape": tuple(int(dim) for dim in coordinates_array.shape),
+        "raw_upsampled_shape": normalized_raw_shape,
+        "requested_hr_resolution": int(requested_hr_resolution),
+        "actual_hr_resolution": int(actual_hr_resolution),
+        "actual_hr_grid_resolution": int(actual_hr_grid_resolution),
+        "max_num_tokens": int(max_num_tokens),
+        "token_count": int(coordinates_array.shape[0]),
+        **(metadata or {}),
+    }
+    np.savez_compressed(
+        output,
+        coordinates=coordinates_array.astype(np.int32, copy=False),
+        requested_hr_resolution=np.array(int(requested_hr_resolution), dtype=np.int32),
+        actual_hr_resolution=np.array(int(actual_hr_resolution), dtype=np.int32),
+        actual_hr_grid_resolution=np.array(int(actual_hr_grid_resolution), dtype=np.int32),
+        max_num_tokens=np.array(int(max_num_tokens), dtype=np.int32),
+        metadata_json=json.dumps(payload_metadata, sort_keys=True, default=str),
+    )
+    return Pixal3DShapeHRCoordinatesArtifact(
+        path=output,
+        coordinates_shape=tuple(int(dim) for dim in coordinates_array.shape),
+        requested_hr_resolution=int(requested_hr_resolution),
+        actual_hr_resolution=int(actual_hr_resolution),
+        actual_hr_grid_resolution=int(actual_hr_grid_resolution),
+        token_count=int(coordinates_array.shape[0]),
         metadata=payload_metadata,
     )
 

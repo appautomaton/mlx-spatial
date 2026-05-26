@@ -6,6 +6,7 @@ import pytest
 
 from mlx_spatial.pixal3d_export import (
     write_pixal3d_projection_npz,
+    write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_sparse_structure_npz,
 )
@@ -107,3 +108,31 @@ def test_write_pixal3d_shape_slat_npz_requires_matching_token_count(tmp_path):
             mx.zeros((2, 4), dtype=mx.int32),
             mx.zeros((1, 32), dtype=mx.float32),
         )
+
+
+def test_write_pixal3d_shape_hr_coordinates_npz_records_resolution_guard(tmp_path):
+    artifact = write_pixal3d_shape_hr_coordinates_npz(
+        tmp_path / "shape_slat_hr_coordinates.npz",
+        mx.array([[0, 0, 1, 1], [0, 1, 0, 1]], dtype=mx.int32),
+        requested_hr_resolution=1536,
+        actual_hr_resolution=1024,
+        actual_hr_grid_resolution=64,
+        max_num_tokens=49152,
+        raw_upsampled_shape=(4, 4),
+        metadata={"pipeline_type": "1536_cascade"},
+    )
+
+    assert artifact.path.is_file()
+    assert artifact.coordinates_shape == (2, 4)
+    assert artifact.requested_hr_resolution == 1536
+    assert artifact.actual_hr_resolution == 1024
+    assert artifact.actual_hr_grid_resolution == 64
+    assert artifact.token_count == 2
+    payload = np.load(artifact.path)
+    assert payload["coordinates"].tolist() == [[0, 0, 1, 1], [0, 1, 0, 1]]
+    assert int(payload["actual_hr_resolution"]) == 1024
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["stage"] == "shape_slat_hr_coordinates"
+    assert metadata["coordinate_order"] == "batch,z,y,x"
+    assert metadata["raw_upsampled_shape"] == [4, 4]
+    assert metadata["token_count"] == 2

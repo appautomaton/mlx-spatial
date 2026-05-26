@@ -43,6 +43,19 @@ class Pixal3DStagePlan:
     hr_token_count: int | None = None
 
 
+@dataclass(frozen=True)
+class Pixal3DHRCoordinateSelection:
+    """Guarded HR coordinate selection for the Pixal3D shape cascade."""
+
+    coordinates: mx.array
+    requested_hr_resolution: int
+    actual_hr_resolution: int
+    actual_hr_grid_resolution: int
+    token_count: int
+    max_num_tokens: int
+    lr_resolution: int
+
+
 def pixal3d_compute_f_pixels(camera_angle_x: float, image_resolution: int = PIXAL3D_WILD_IMAGE_RESOLUTION) -> float:
     """Match upstream Pixal3D focal-pixel conversion from horizontal FOV."""
 
@@ -141,6 +154,38 @@ def pixal3d_select_hr_resolution(
         actual -= PIXAL3D_HR_RESOLUTION_STEP
 
 
+def pixal3d_select_hr_coordinates(
+    coordinates: mx.array | np.ndarray,
+    *,
+    requested_hr_resolution: int,
+    max_num_tokens: int,
+    lr_resolution: int = PIXAL3D_CASCADE_LR_RESOLUTION,
+) -> Pixal3DHRCoordinateSelection:
+    """Quantize, deduplicate, and guard Pixal3D HR cascade coordinates."""
+
+    if max_num_tokens <= 0:
+        raise ValueError("max_num_tokens must be positive")
+    if requested_hr_resolution < PIXAL3D_MIN_HR_RESOLUTION:
+        raise ValueError(f"requested_hr_resolution must be at least {PIXAL3D_MIN_HR_RESOLUTION}")
+    coords = _coordinates_np(coordinates)
+    actual = int(requested_hr_resolution)
+    while True:
+        quantized = _quantized_coordinates_np(coords, actual_hr_resolution=actual, lr_resolution=lr_resolution)
+        unique = np.unique(quantized, axis=0).astype(np.int32, copy=False)
+        token_count = int(unique.shape[0])
+        if token_count < max_num_tokens or actual == PIXAL3D_MIN_HR_RESOLUTION:
+            return Pixal3DHRCoordinateSelection(
+                coordinates=mx.array(unique, dtype=mx.int32),
+                requested_hr_resolution=int(requested_hr_resolution),
+                actual_hr_resolution=int(actual),
+                actual_hr_grid_resolution=int(actual // 16),
+                token_count=token_count,
+                max_num_tokens=int(max_num_tokens),
+                lr_resolution=int(lr_resolution),
+            )
+        actual -= PIXAL3D_HR_RESOLUTION_STEP
+
+
 def pixal3d_stage_plan(
     pipeline_type: str,
     *,
@@ -187,7 +232,16 @@ def _quantized_unique_token_count(
 ) -> int:
     if coordinates.shape[0] == 0:
         return 0
+    quantized = _quantized_coordinates_np(coordinates, actual_hr_resolution=actual_hr_resolution, lr_resolution=lr_resolution)
+    return int(np.unique(quantized, axis=0).shape[0])
+
+
+def _quantized_coordinates_np(
+    coordinates: np.ndarray,
+    *,
+    actual_hr_resolution: int,
+    lr_resolution: int,
+) -> np.ndarray:
     grid_res = actual_hr_resolution // 16
     quantized_xyz = np.rint(((coordinates[:, 1:] + 0.5) / lr_resolution) * (grid_res - 1)).astype(np.int64)
-    quantized = np.concatenate([coordinates[:, :1], quantized_xyz], axis=1)
-    return int(np.unique(quantized, axis=0).shape[0])
+    return np.concatenate([coordinates[:, :1], quantized_xyz], axis=1)

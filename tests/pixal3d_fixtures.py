@@ -191,6 +191,66 @@ def write_fake_pixal3d_shape_slat_root(
     return root
 
 
+def write_fake_pixal3d_shape_hr_root(
+    root: Path,
+    *,
+    proj_in_channels: int = 3,
+    sparse_steps: int = 1,
+    shape_steps: int = 1,
+) -> Path:
+    write_fake_pixal3d_shape_slat_root(
+        root,
+        proj_in_channels=proj_in_channels,
+        sparse_steps=sparse_steps,
+        shape_steps=shape_steps,
+    )
+    (root / "ckpts/shape_dec_next_dc_f16c32_fp16.json").write_text(
+        json.dumps(_tiny_shape_decoder_config()),
+        encoding="utf-8",
+    )
+    save_file(
+        _tiny_shape_decoder_checkpoint(),
+        root / "ckpts/shape_dec_next_dc_f16c32_fp16.safetensors",
+    )
+    (root / "ckpts/slat_flow_img2shape_dit_1_3B_1024_bf16.json").write_text(
+        json.dumps(
+            {
+                "name": "ElasticSLatFlowModel",
+                "args": {
+                    "resolution": 64,
+                    "in_channels": 32,
+                    "out_channels": 32,
+                    "model_channels": 6,
+                    "cond_channels": proj_in_channels,
+                    "num_blocks": 1,
+                    "num_heads": 1,
+                    "mlp_ratio": 2.0,
+                    "pe_mode": "rope",
+                    "share_mod": True,
+                    "initialization": "scaled",
+                    "qk_rms_norm": True,
+                    "qk_rms_norm_cross": True,
+                    "image_attn_mode": "proj",
+                    "proj_in_channels": proj_in_channels * 2,
+                    "dtype": "bfloat16",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        _tiny_slat_checkpoint(
+            model_channels=6,
+            in_channels=32,
+            out_channels=32,
+            cond_channels=proj_in_channels,
+            proj_in_channels=proj_in_channels * 2,
+        ),
+        root / "ckpts/slat_flow_img2shape_dit_1_3B_1024_bf16.safetensors",
+    )
+    return root
+
+
 def minimal_pixal3d_pipeline(*, sparse_steps: int = 12, shape_steps: int = 12, texture_steps: int = 12):
     return {
         "args": {
@@ -345,3 +405,47 @@ def _tiny_slat_checkpoint(
         f"{prefix}.mlp.mlp.2.weight": mx.zeros((model_channels, model_channels * 2), dtype=mx.float32),
         f"{prefix}.mlp.mlp.2.bias": mx.zeros((model_channels,), dtype=mx.float32),
     }
+
+
+def _tiny_shape_decoder_config() -> dict:
+    return {
+        "name": "FlexiDualGridVaeDecoder",
+        "args": {
+            "model_channels": [16, 8, 8, 8, 8],
+            "latent_channels": 32,
+            "num_blocks": [0, 0, 0, 0, 0],
+            "block_type": ["SparseConvNeXtBlock3d"] * 5,
+            "up_block_type": ["SparseResBlockC2S3d"] * 4,
+            "block_args": [{}, {}, {}, {}, {}],
+            "use_fp16": False,
+            "resolution": 512,
+            "pred_subdiv": True,
+        },
+    }
+
+
+def _tiny_shape_decoder_checkpoint() -> dict[str, mx.array]:
+    model_channels = (16, 8, 8, 8, 8)
+    tensors: dict[str, mx.array] = {
+        "from_latent.weight": mx.ones((model_channels[0], 32), dtype=mx.float32),
+        "from_latent.bias": mx.zeros((model_channels[0],), dtype=mx.float32),
+        "output_layer.weight": mx.zeros((7, model_channels[-1]), dtype=mx.float32),
+        "output_layer.bias": mx.zeros((7,), dtype=mx.float32),
+    }
+    for level, (in_channels, out_channels) in enumerate(zip(model_channels[:-1], model_channels[1:])):
+        prefix = f"blocks.{level}.0"
+        subdiv_bias = [-1.0] * 8
+        subdiv_bias[0] = 1.0
+        tensors.update(
+            {
+                f"{prefix}.norm1.weight": mx.ones((in_channels,), dtype=mx.float32),
+                f"{prefix}.norm1.bias": mx.zeros((in_channels,), dtype=mx.float32),
+                f"{prefix}.conv1.weight": mx.zeros((out_channels * 8, 3, 3, 3, in_channels), dtype=mx.float32),
+                f"{prefix}.conv1.bias": mx.zeros((out_channels * 8,), dtype=mx.float32),
+                f"{prefix}.conv2.weight": mx.zeros((out_channels, 3, 3, 3, out_channels), dtype=mx.float32),
+                f"{prefix}.conv2.bias": mx.zeros((out_channels,), dtype=mx.float32),
+                f"{prefix}.to_subdiv.weight": mx.zeros((8, in_channels), dtype=mx.float32),
+                f"{prefix}.to_subdiv.bias": mx.array(subdiv_bias, dtype=mx.float32),
+            }
+        )
+    return tensors

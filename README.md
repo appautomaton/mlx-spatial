@@ -53,10 +53,11 @@ Honest status:
   tensor bundle, not a mesh or Gaussian splat export.
 - Pixal3D is partially wired: assets, manual camera, projection conditioning,
   projection attention, sparse FlowEuler probing, sparse decoder coordinates,
-  512 shape SLat probing when NAF features are supplied, cascade planning,
-  trace output, and sparse/shape NPZ artifacts are implemented. The normal CLI
-  still needs MLX NAF features before it can reach shape SLat; HR cascade,
-  shape decoder, texture SLat, and textured GLB export remain blocked.
+  512/1024 shape SLat probing when explicit NAF features are supplied, shape
+  decoder HR coordinate upsample, cascade planning, trace output, and
+  sparse/shape NPZ artifacts are implemented. The normal CLI still needs MLX
+  NAF features before it can reach shape SLat; texture SLat, full decode, PBR
+  bake, and textured GLB export remain blocked.
 
 ## Install
 
@@ -295,8 +296,9 @@ Current expected output starts with `trace.json` plus `sparse_projection.npz`.
 When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
 also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. The
 normal CLI then reports the missing MLX NAF feature boundary. The lower-level
-runtime can write `shape_slat_lr.npz` after explicit NAF features are supplied;
-the next structured blocker is HR shape cascade and decoder handoff.
+runtime can write `shape_slat_lr.npz`, `shape_slat_hr_coordinates.npz`, and
+`shape_slat_hr.npz` after explicit LR/HR NAF features are supplied; the next
+structured blocker is texture projection conditioning.
 
 ## Repository Layout
 
