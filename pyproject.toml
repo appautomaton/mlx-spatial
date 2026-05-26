@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlx-spatial"
-version = "0.0.2"
+version = "0.0.3"
 description = "MLX-first primitives for 3D and spatial model inference."
 readme = "README.md"
 license = { file = "LICENSE" }
