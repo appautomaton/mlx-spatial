@@ -117,11 +117,13 @@ Entry point: `mlx_spatial.pixal3d:main`, exposed as `mlx-spatial-pixal3d`.
 
 Pixal3D is a projection-conditioned image-to-3D implementation track. The
 runtime currently validates TencentARC Pixal3D assets, computes manual-FOV
-camera params, builds view-aligned DINOv3 projection conditioning from supplied
-hidden states, supports `image_attn_mode="proj"` in the shared sparse-structure
-and SLat flow boundaries, records cascade stage plans, and writes trace/NPZ
-intermediate artifacts. Full image hidden-state extraction, full checkpoint
-execution, sparse/texture decoders, and textured GLB export are still blocked.
+camera params, runs sparse-stage DINOv3 hidden-state extraction through the
+shared MLX DINOv3 helper, builds view-aligned projection conditioning, supports
+`image_attn_mode="proj"` in the shared sparse-structure and SLat flow
+boundaries, records cascade stage plans, and writes trace/NPZ intermediate
+artifacts. Full Pixal3D checkpoint execution, sparse/texture decoders,
+high-resolution NAF projection features, and textured GLB export are still
+blocked.
 
 Main modules:
 

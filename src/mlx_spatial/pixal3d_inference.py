@@ -8,16 +8,31 @@ from pathlib import Path
 from typing import Literal
 
 import mlx.core as mx
+from PIL import Image, UnidentifiedImageError
 
+from .model_assets import DINOv3_VITL16_ASSETS
 from .mlx_memory import mlx_memory_snapshot
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
 from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_stage_plan
 from .pixal3d_export import write_pixal3d_projection_npz
-from .pixal3d_projection import build_pixal3d_projection_conditioning
+from .pixal3d_projection import (
+    PIXAL3D_DINOV3_EMBED_DIM,
+    build_pixal3d_projection_conditioning,
+    pixal3d_projection_stage_config,
+)
+from .trellis2_dinov3 import (
+    DINOv3_ACCESS_NOTE,
+    DINOv3_VITL16_REPO_ID,
+    assess_dinov3_mlx_conditioning,
+    dinov3_download_command,
+    inspect_dinov3_assets,
+)
+from .trellis2_forward import prepare_dinov3_image_tensor
 
 
 PIXAL3D_RECOMMENDED_PIPELINE_TYPE = "1024_cascade"
 PIXAL3D_PIPELINE_TYPES = ("1024_cascade", "1536_cascade")
+PIXAL3D_DEFAULT_DINO_ROOT = DINOv3_VITL16_ASSETS.root_hint
 PIXAL3D_DEFAULT_SEED = 42
 PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
 
@@ -82,6 +97,7 @@ class Pixal3DInferencePipeline:
         manual_fov: float | None = None,
         seed: int = PIXAL3D_DEFAULT_SEED,
         max_num_tokens: int = PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+        dino_root: str | Path | None = None,
         projection_hidden_states: mx.array | None = None,
     ) -> Pixal3DGenerationResult:
         """Validate Pixal3D inputs and return the current execution boundary."""
@@ -232,25 +248,102 @@ class Pixal3DInferencePipeline:
         metadata["camera"] = camera
 
         if projection_hidden_states is None:
-            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
-            return self._blocked(
-                image_path,
-                completed,
-                pipeline_type,
-                manual_fov,
-                seed,
-                max_num_tokens,
-                output_path,
-                "image-conditioning",
-                "run Pixal3D DINOv3 hidden-state extraction",
-                "Pixal3D MLX DINOv3 hidden-state extraction is not wired into the runtime yet",
-                {
-                    "accepted_manual_boundary": "pass projection_hidden_states to exercise projection-conditioned model boundaries",
-                    "expected_hidden_state_layout": "[batch, cls+register+patch_tokens, channels]",
-                },
-                metadata=metadata,
+            resolved_dino_root = Path(dino_root) if dino_root is not None else Path(PIXAL3D_DEFAULT_DINO_ROOT)
+            metadata["dino_root"] = resolved_dino_root
+            dino_inspection = inspect_dinov3_assets(resolved_dino_root)
+            if dino_inspection.blocker is not None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "image-conditioning",
+                    dino_inspection.blocker.operation,
+                    _dino_blocker_reason(dino_inspection.blocker.reason, resolved_dino_root),
+                    _dino_blocker_metadata(dino_inspection.blocker, resolved_dino_root),
+                    metadata=metadata,
+                )
+            ss_stage = pixal3d_projection_stage_config("ss")
+            try:
+                with Image.open(image_path) as pil_image:
+                    image_tensor = prepare_dinov3_image_tensor(pil_image, image_size=ss_stage.image_size)
+            except (OSError, UnidentifiedImageError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "image-conditioning",
+                    "prepare Pixal3D DINOv3 image tensor",
+                    f"failed to decode or normalize input image for DINOv3: {error}",
+                    {"image_path": str(image_path), "image_size": ss_stage.image_size},
+                    metadata=metadata,
+                )
+            dino_result = assess_dinov3_mlx_conditioning(
+                resolved_dino_root,
+                expected_feature_width=PIXAL3D_DINOV3_EMBED_DIM,
+                image_tensor=image_tensor,
             )
+            if dino_result.blocker is not None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "image-conditioning",
+                    dino_result.blocker.operation,
+                    _dino_blocker_reason(dino_result.blocker.reason, resolved_dino_root),
+                    _dino_blocker_metadata(dino_result.blocker, resolved_dino_root),
+                    metadata=metadata,
+                )
+            if dino_result.hidden_states is None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "image-conditioning",
+                    "run Pixal3D DINOv3 hidden-state extraction",
+                    "DINOv3 conditioning completed without returning hidden states",
+                    {"dino_root": str(resolved_dino_root)},
+                    metadata=metadata,
+                )
+            projection_hidden_states = dino_result.hidden_states
+            completed.append("image-conditioning")
+            timings["image-conditioning"] = time.perf_counter() - started
+            metadata["dino_conditioning"] = {
+                "root": str(resolved_dino_root),
+                "shape": dino_result.shape,
+                "dtype": dino_result.dtype,
+                "detail": dino_result.detail,
+                "image_size": ss_stage.image_size,
+            }
+        else:
+            metadata["dino_conditioning"] = {
+                "source": "caller-supplied projection_hidden_states",
+                "shape": tuple(int(dim) for dim in projection_hidden_states.shape),
+                "dtype": str(projection_hidden_states.dtype).removeprefix("mlx.core."),
+            }
 
         ss_conditioning = build_pixal3d_projection_conditioning(
             projection_hidden_states,
@@ -376,3 +469,20 @@ def _resolve_output_path(
 def _slug(value: str) -> str:
     normalized = "".join(char if char.isalnum() or char in "._-" else "-" for char in value.strip())
     return normalized.strip("-._") or "pixal3d"
+
+
+def _dino_blocker_reason(reason: str, root: Path) -> str:
+    if str(root) in reason and DINOv3_VITL16_REPO_ID in reason:
+        return reason
+    return f"{DINOv3_VITL16_REPO_ID} assets at {root}: {reason}"
+
+
+def _dino_blocker_metadata(blocker: object, root: Path) -> dict[str, object]:
+    return {
+        "dino_root": str(root),
+        "repo_id": DINOv3_VITL16_REPO_ID,
+        "access_note": DINOv3_ACCESS_NOTE,
+        "download_command": " ".join(dinov3_download_command(root)),
+        "reference": getattr(blocker, "reference", None),
+        "next_slice": getattr(blocker, "next_slice", None),
+    }

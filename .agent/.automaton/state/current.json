@@ -1,8 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-mlx-support",
+  "active_change": "2026-05-26-pixal3d-dinov3-conditioning",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-mlx-support/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-26-pixal3d-mlx-support/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-mlx-support/PLAN.md",
-  "engineering_review": "approved_with_risks"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-dinov3-conditioning/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-dinov3-conditioning/PLAN.md"
 }

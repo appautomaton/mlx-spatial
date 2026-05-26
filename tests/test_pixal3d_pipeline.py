@@ -1,9 +1,10 @@
 import mlx.core as mx
+from PIL import Image
 
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
-from pixal3d_fixtures import write_fake_pixal3d_root
+from pixal3d_fixtures import write_fake_pixal3d_dinov3_root, write_fake_pixal3d_root
 
 
 def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
@@ -20,6 +21,59 @@ def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
     assert result.trace.metadata["stage_plan"].requested_hr_resolution == 1536
     assert "memory_before" in result.trace.metadata
     assert "memory_after" in result.trace.metadata
+
+
+def test_pixal3d_pipeline_reports_missing_dinov3_assets_with_manual_fov(tmp_path):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        dino_root=tmp_path / "missing-dinov3",
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "image-conditioning"
+    assert result.trace.blocker.operation == "local DINOv3 asset validation"
+    assert result.trace.blocker.metadata["dino_root"] == str(tmp_path / "missing-dinov3")
+    assert "hf download facebook/dinov3-vitl16-pretrain-lvd1689m" in result.trace.blocker.metadata["download_command"]
+    assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config", "camera-setup")
+
+
+def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_root(tmp_path):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    dino_root = write_fake_pixal3d_dinov3_root(tmp_path / "dinov3")
+    image = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), (128, 64, 32)).save(image)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        dino_root=dino_root,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "sparse-structure-flow"
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "image-conditioning",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+    )
+    assert result.trace.metadata["dino_conditioning"]["root"] == str(dino_root)
+    assert result.trace.metadata["dino_conditioning"]["shape"] == (1, 21, 1024)
+    assert result.trace.metadata["ss_projection"]["projected_shape"] == (1, 16**3, 1024)
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0].name == "sparse_projection.npz"
+    assert result.artifacts[0].is_file()
 
 
 def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_hidden_states(tmp_path):

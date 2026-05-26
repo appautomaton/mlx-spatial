@@ -177,6 +177,7 @@ uv run hf download TencentARC/Pixal3D \
 ```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
+  --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
@@ -186,6 +187,7 @@ Pixal3D inputs:
 
 - input: a single object-centric RGB/RGBA image
 - root: `weights/pixal3d`
+- DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 - output: `trace.json`; completed MLX intermediate boundaries write NPZ artifacts next to the trace
 
@@ -195,7 +197,7 @@ Script defaults:
 - seed: `42`
 - max tokens: `49152`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: full Pixal3D DINOv3 image hidden-state extraction and downstream checkpoint execution are still under implementation
+- current blocker: after DINOv3 sparse projection conditioning, full Pixal3D sparse-flow/checkpoint execution and decoder handoff are still under implementation
 
 ### LiTo
 

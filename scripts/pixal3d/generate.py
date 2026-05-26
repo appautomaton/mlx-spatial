@@ -16,7 +16,8 @@ Output:
 
 Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,
-    seed 42, max-num-tokens 49152, and manual FOV when avoiding MoGe auto-camera.
+    DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, seed 42,
+    max-num-tokens 49152, and manual FOV when avoiding MoGe auto-camera.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ if SRC.is_dir():
 
 from mlx_spatial.pixal3d import main as pixal3d_main  # noqa: E402
 from mlx_spatial.pixal3d_inference import (  # noqa: E402
+    PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_SEED,
     PIXAL3D_PIPELINE_TYPES,
@@ -43,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("image", type=Path, help="input RGB/RGBA image")
     parser.add_argument("--root", default="weights/pixal3d", help="Pixal3D safetensors root; default: %(default)s")
+    parser.add_argument(
+        "--dino-root",
+        default=PIXAL3D_DEFAULT_DINO_ROOT,
+        help="local DINOv3 ViT-L/16 root for Pixal3D image conditioning; default: %(default)s",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -77,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         str(args.seed),
         "--max-num-tokens",
         str(args.max_num_tokens),
+        "--dino-root",
+        str(args.dino_root),
     ]
     if args.output_dir is not None:
         cli_args.extend(["--output-dir", str(args.output_dir)])

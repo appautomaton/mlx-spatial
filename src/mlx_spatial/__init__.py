@@ -161,6 +161,7 @@ from .pixal3d_assets import (
     validate_pixal3d_assets,
 )
 from .pixal3d_inference import (
+    PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_SEED,
     PIXAL3D_PIPELINE_TYPES,
@@ -654,6 +655,7 @@ __all__ = [
     "MapAnythingTensorSummary",
     "PIXAL3D_ASSETS",
     "PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS",
+    "PIXAL3D_DEFAULT_DINO_ROOT",
     "PIXAL3D_DEFAULT_MAX_NUM_TOKENS",
     "PIXAL3D_DEFAULT_ROOT",
     "PIXAL3D_DEFAULT_SEED",

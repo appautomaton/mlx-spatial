@@ -21,6 +21,39 @@ def write_fake_pixal3d_root(root: Path) -> Path:
     return root
 
 
+def write_fake_pixal3d_dinov3_root(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "mlx_spatial_fake_dinov3",
+                "image_size": 64,
+                "patch_size": 16,
+                "hidden_size": 1024,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 16,
+                "intermediate_size": 4096,
+                "layer_norm_eps": 0.000001,
+                "use_swiglu_ffn": True,
+                "num_register_tokens": 4,
+                "rope_theta": 100.0,
+                "pos_embed_rescale": 2.0,
+                "mlx_spatial_fake_conditioning": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        {
+            "embeddings.patch_embeddings.weight": mx.ones((1024, 3, 16, 16), dtype=mx.float32),
+            "layer.0.norm1.weight": mx.ones((1024,), dtype=mx.float32),
+            "layer.0.attention.query.weight": mx.ones((1024, 1024), dtype=mx.float32),
+        },
+        root / "model.safetensors",
+    )
+    return root
+
+
 def minimal_pixal3d_pipeline():
     return {
         "args": {

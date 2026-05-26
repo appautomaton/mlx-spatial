@@ -19,6 +19,7 @@ from .pixal3d_assets import (
     validate_pixal3d_assets,
 )
 from .pixal3d_inference import (
+    PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_SEED,
     PIXAL3D_PIPELINE_TYPES,
@@ -70,6 +71,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     generate_parser.add_argument("--seed", type=int, default=PIXAL3D_DEFAULT_SEED)
     generate_parser.add_argument("--max-num-tokens", type=int, default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS)
+    generate_parser.add_argument(
+        "--dino-root",
+        default=PIXAL3D_DEFAULT_DINO_ROOT,
+        help="local DINOv3 ViT-L/16 root for Pixal3D image conditioning",
+    )
     generate_parser.add_argument("--trace-output", type=Path, help="trace JSON path; default: <output-dir>/trace.json")
 
     args = parser.parse_args(argv)
@@ -138,6 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             manual_fov=args.manual_fov,
             seed=args.seed,
             max_num_tokens=args.max_num_tokens,
+            dino_root=args.dino_root,
         )
         output_path = result.trace.output_path or Path("outputs/pixal3d/model.glb")
         trace_path = args.trace_output or output_path.with_name("trace.json")

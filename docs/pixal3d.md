@@ -8,6 +8,8 @@ Implemented now:
 
 - local asset validation and checkpoint inspection for `TencentARC/Pixal3D`
 - Pixal3D manual-FOV camera math matching the upstream inference script
+- sparse-stage DINOv3 hidden-state extraction through the shared MLX DINOv3
+  helper
 - projection conditioning from DINOv3 hidden states: global tokens plus
   view-aligned sparse-structure grid features
 - Pixal3D `image_attn_mode="proj"` block math in the shared sparse-structure
@@ -18,9 +20,10 @@ Implemented now:
 
 Still blocked:
 
-- Pixal3D DINOv3 image hidden-state extraction is not wired into the runtime
 - full sparse-structure sampling, sparse decoder handoff, shape/texture SLat
   execution, and textured GLB export are not release-ready
+- shape/texture high-resolution projection still needs an MLX NAF-equivalent
+  feature path
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
 
 ## Assets
@@ -48,6 +51,15 @@ The upstream Hugging Face metadata currently identifies the Pixal3D model repo
 as MIT-licensed. Respect any Hugging Face access gates and upstream model-card
 terms when downloading or redistributing outputs.
 
+Pixal3D image conditioning also needs local DINOv3 ViT-L/16 assets:
+
+```bash
+uv run mlx-spatial-trellis2 dinov3-download-command weights/dinov3-vitl16-pretrain-lvd1689m
+uv run hf download facebook/dinov3-vitl16-pretrain-lvd1689m \
+  config.json model.safetensors \
+  --local-dir weights/dinov3-vitl16-pretrain-lvd1689m
+```
+
 ## Recommended Run
 
 Use the vendored sample image from the shallow upstream checkout:
@@ -55,28 +67,24 @@ Use the vendored sample image from the shallow upstream checkout:
 ```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
+  --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
 ```
 
-Current expected output:
+When Pixal3D and DINOv3 assets are present, the current expected output is:
 
 ```text
 outputs/pixal3d/sample/
   trace.json
-```
-
-When a caller supplies DINOv3 hidden states directly to the Python runtime, the
-pipeline can also write:
-
-```text
-outputs/pixal3d/sample/
   sparse_projection.npz
 ```
 
-The CLI intentionally returns a structured blocker until image hidden-state
-extraction and downstream checkpoint execution are wired.
+If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
+blocker with the exact root and download command. If DINOv3 conditioning
+completes, the remaining blocker is `sparse-structure-flow` until Pixal3D
+checkpoint execution and decoder handoff are implemented.
 
 ## Settings
 
@@ -85,6 +93,7 @@ extraction and downstream checkpoint execution are wired.
 - seed: `42`
 - max tokens: `49152`, matching the upstream cascade guard
 - manual FOV: radians, for example `0.2`
+- DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 
 The cascade planner starts at 1024 or 1536 output resolution, quantizes HR
@@ -102,6 +111,8 @@ Runtime modules are Torch-free:
   and NAF blocker
 - `pixal3d_export.py`: intermediate NPZ artifact writing
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
+- `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
+  hidden-state extraction
 - `trellis2_sparse_structure.py`, `trellis2_slat.py`: shared flow boundaries
   with config-gated Pixal3D projection attention
 

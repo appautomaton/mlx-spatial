@@ -282,15 +282,15 @@ Use the vendored upstream sample image and explicit manual FOV:
 ```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
+  --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
 ```
 
-Current expected output is `trace.json`, with structured blockers for the
-missing Pixal3D DINOv3 image hidden-state and downstream checkpoint execution
-path. When the Python runtime is given hidden states directly, it can also write
-`sparse_projection.npz` for the completed projection-conditioning boundary.
+Current expected output is `trace.json` plus `sparse_projection.npz` when local
+DINOv3 assets are available. The remaining structured blocker is downstream
+Pixal3D sparse-flow/checkpoint execution and decoder handoff.
 
 ## Repository Layout
 
