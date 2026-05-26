@@ -197,7 +197,8 @@ Script defaults:
 - seed: `42`
 - max tokens: `49152`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: after DINOv3 sparse projection conditioning, full Pixal3D sparse-flow/checkpoint execution and decoder handoff are still under implementation
+- current blocker: after DINOv3 sparse projection conditioning and sparse FlowEuler probing,
+  sparse decoder coordinate extraction and shape-SLat handoff are still under implementation
 
 ### LiTo
 

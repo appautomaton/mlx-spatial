@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-dinov3-conditioning",
+  "active_change": "2026-05-26-pixal3d-sparse-flow-boundary",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-dinov3-conditioning/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-dinov3-conditioning/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-sparse-flow-boundary/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-sparse-flow-boundary/PLAN.md"
 }

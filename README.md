@@ -289,8 +289,9 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
 ```
 
 Current expected output is `trace.json` plus `sparse_projection.npz` when local
-DINOv3 assets are available. The remaining structured blocker is downstream
-Pixal3D sparse-flow/checkpoint execution and decoder handoff.
+DINOv3 assets are available. When sparse-flow checkpoint assets are mapped, the
+runtime can also execute the sparse FlowEuler boundary; the remaining structured
+blocker is sparse decoder coordinate extraction or shape-SLat handoff.
 
 ## Repository Layout
 

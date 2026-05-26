@@ -4,7 +4,11 @@ from PIL import Image
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
-from pixal3d_fixtures import write_fake_pixal3d_dinov3_root, write_fake_pixal3d_root
+from pixal3d_fixtures import (
+    write_fake_pixal3d_dinov3_root,
+    write_fake_pixal3d_root,
+    write_fake_pixal3d_sparse_flow_root,
+)
 
 
 def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
@@ -97,6 +101,38 @@ def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_hidden_states(
     assert result.artifacts[0].name == "sparse_projection.npz"
     assert result.artifacts[0].is_file()
     assert result.trace.metadata["ss_projection"]["projected_shape"] == (1, 16**3, 3)
+
+
+def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
+    root = write_fake_pixal3d_sparse_flow_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+    )
+
+    assert not result.ready
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+        "sparse-structure-flow",
+    )
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "sparse-structure-decoding"
+    assert result.trace.metadata["sparse_flow"]["sampled_latent_shape"] == (1, 2, 16, 16, 16)
+    assert result.trace.metadata["sparse_flow"]["completed_blocks"] == 1
+    assert result.trace.blocker.metadata["config_path"] == "ckpts/ss_dec_conv3d_16l8_fp16.json"
 
 
 def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():

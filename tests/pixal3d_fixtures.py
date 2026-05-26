@@ -7,13 +7,13 @@ from safetensors.mlx import save_file
 from mlx_spatial.model_assets import PIXAL3D_ASSETS
 
 
-def write_fake_pixal3d_root(root: Path) -> Path:
+def write_fake_pixal3d_root(root: Path, *, sparse_steps: int = 12) -> Path:
     for relative_path in PIXAL3D_ASSETS.required_paths:
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".json":
             if path.name == "pipeline.json":
-                path.write_text(json.dumps(minimal_pixal3d_pipeline()), encoding="utf-8")
+                path.write_text(json.dumps(minimal_pixal3d_pipeline(sparse_steps=sparse_steps)), encoding="utf-8")
             else:
                 path.write_text(json.dumps({"name": path.stem, "args": {}}), encoding="utf-8")
         elif path.suffix == ".safetensors":
@@ -54,7 +54,53 @@ def write_fake_pixal3d_dinov3_root(root: Path) -> Path:
     return root
 
 
-def minimal_pixal3d_pipeline():
+def write_fake_pixal3d_sparse_flow_root(
+    root: Path,
+    *,
+    proj_in_channels: int = 3,
+    sparse_steps: int = 1,
+) -> Path:
+    write_fake_pixal3d_root(root, sparse_steps=sparse_steps)
+    (root / "ckpts/ss_flow_img_dit_1_3B_64_bf16.json").write_text(
+        json.dumps(
+            {
+                "name": "SparseStructureFlowModel",
+                "args": {
+                    "resolution": 16,
+                    "in_channels": 2,
+                    "out_channels": 2,
+                    "model_channels": 6,
+                    "cond_channels": proj_in_channels,
+                    "num_blocks": 1,
+                    "num_heads": 1,
+                    "mlp_ratio": 2.0,
+                    "pe_mode": "rope",
+                    "share_mod": True,
+                    "initialization": "scaled",
+                    "qk_rms_norm": True,
+                    "qk_rms_norm_cross": True,
+                    "image_attn_mode": "proj",
+                    "proj_in_channels": proj_in_channels,
+                    "dtype": "bfloat16",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        _tiny_sparse_flow_checkpoint(
+            model_channels=6,
+            in_channels=2,
+            out_channels=2,
+            cond_channels=proj_in_channels,
+            proj_in_channels=proj_in_channels,
+        ),
+        root / "ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors",
+    )
+    return root
+
+
+def minimal_pixal3d_pipeline(*, sparse_steps: int = 12):
     return {
         "args": {
             "models": {
@@ -67,7 +113,7 @@ def minimal_pixal3d_pipeline():
                 "tex_slat_flow_model_1024": "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16",
             },
             "default_pipeline_type": "1536_cascade",
-            "sparse_structure_sampler": _sampler(7.5, 0.7, [0.6, 1.0], 5.0),
+            "sparse_structure_sampler": _sampler(7.5, 0.7, [0.6, 1.0], 5.0, steps=sparse_steps),
             "shape_slat_sampler": _sampler(7.5, 0.5, [0.6, 1.0], 3.0),
             "tex_slat_sampler": _sampler(1.0, 0.0, [0.6, 0.9], 3.0),
             "shape_slat_normalization": {"mean": [0.0] * 32, "std": [1.0] * 32},
@@ -86,15 +132,62 @@ def minimal_pixal3d_checkpoint_tensors():
     }
 
 
-def _sampler(guidance_strength, guidance_rescale, interval, rescale_t):
+def _sampler(guidance_strength, guidance_rescale, interval, rescale_t, *, steps=12):
     return {
         "name": "FlowEulerGuidanceIntervalSampler",
         "args": {"sigma_min": 1e-5},
         "params": {
-            "steps": 12,
+            "steps": steps,
             "guidance_strength": guidance_strength,
             "guidance_rescale": guidance_rescale,
             "guidance_interval": interval,
             "rescale_t": rescale_t,
         },
+    }
+
+
+def _tiny_sparse_flow_checkpoint(
+    *,
+    model_channels: int,
+    in_channels: int,
+    out_channels: int,
+    cond_channels: int,
+    proj_in_channels: int,
+) -> dict[str, mx.array]:
+    prefix = "blocks.0"
+    head_dim = model_channels
+    return {
+        "input_layer.weight": mx.ones((model_channels, in_channels), dtype=mx.float32),
+        "input_layer.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        "out_layer.weight": mx.zeros((out_channels, model_channels), dtype=mx.float32),
+        "out_layer.bias": mx.zeros((out_channels,), dtype=mx.float32),
+        "t_embedder.mlp.0.weight": mx.zeros((model_channels, 256), dtype=mx.float32),
+        "t_embedder.mlp.0.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        "t_embedder.mlp.2.weight": mx.zeros((model_channels, model_channels), dtype=mx.float32),
+        "t_embedder.mlp.2.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        "adaLN_modulation.1.weight": mx.zeros((model_channels * 6, model_channels), dtype=mx.float32),
+        "adaLN_modulation.1.bias": mx.zeros((model_channels * 6,), dtype=mx.float32),
+        f"{prefix}.modulation": mx.zeros((model_channels * 6,), dtype=mx.float32),
+        f"{prefix}.norm2.weight": mx.ones((model_channels,), dtype=mx.float32),
+        f"{prefix}.norm2.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        f"{prefix}.self_attn.to_qkv.weight": mx.zeros((model_channels * 3, model_channels), dtype=mx.float32),
+        f"{prefix}.self_attn.to_qkv.bias": mx.zeros((model_channels * 3,), dtype=mx.float32),
+        f"{prefix}.self_attn.q_rms_norm.gamma": mx.ones((1, head_dim), dtype=mx.float32),
+        f"{prefix}.self_attn.k_rms_norm.gamma": mx.ones((1, head_dim), dtype=mx.float32),
+        f"{prefix}.self_attn.to_out.weight": mx.zeros((model_channels, model_channels), dtype=mx.float32),
+        f"{prefix}.self_attn.to_out.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_q.weight": mx.zeros((model_channels, model_channels), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_q.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_kv.weight": mx.zeros((model_channels * 2, cond_channels), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_kv.bias": mx.zeros((model_channels * 2,), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.q_rms_norm.gamma": mx.ones((1, head_dim), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.k_rms_norm.gamma": mx.ones((1, head_dim), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_out.weight": mx.zeros((model_channels, model_channels), dtype=mx.float32),
+        f"{prefix}.cross_attn.cross_attn_block.to_out.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        f"{prefix}.cross_attn.proj_linear.weight": mx.zeros((model_channels, proj_in_channels), dtype=mx.float32),
+        f"{prefix}.cross_attn.proj_linear.bias": mx.zeros((model_channels,), dtype=mx.float32),
+        f"{prefix}.mlp.mlp.0.weight": mx.zeros((model_channels * 2, model_channels), dtype=mx.float32),
+        f"{prefix}.mlp.mlp.0.bias": mx.zeros((model_channels * 2,), dtype=mx.float32),
+        f"{prefix}.mlp.mlp.2.weight": mx.zeros((model_channels, model_channels * 2), dtype=mx.float32),
+        f"{prefix}.mlp.mlp.2.bias": mx.zeros((model_channels,), dtype=mx.float32),
     }

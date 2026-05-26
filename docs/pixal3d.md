@@ -14,14 +14,15 @@ Implemented now:
   view-aligned sparse-structure grid features
 - Pixal3D `image_attn_mode="proj"` block math in the shared sparse-structure
   and SLat flow boundaries
+- sparse-structure FlowEuler probing through the shared MLX sparse flow helper
 - cascade stage planning for `1024_cascade` and `1536_cascade`
 - trace output and `sparse_projection.npz` intermediate artifacts when the
   sparse projection boundary completes
 
 Still blocked:
 
-- full sparse-structure sampling, sparse decoder handoff, shape/texture SLat
-  execution, and textured GLB export are not release-ready
+- sparse decoder coordinate extraction with real Pixal3D checkpoints,
+  shape/texture SLat execution, and textured GLB export are not release-ready
 - shape/texture high-resolution projection still needs an MLX NAF-equivalent
   feature path
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
@@ -83,8 +84,9 @@ outputs/pixal3d/sample/
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
 blocker with the exact root and download command. If DINOv3 conditioning
-completes, the remaining blocker is `sparse-structure-flow` until Pixal3D
-checkpoint execution and decoder handoff are implemented.
+completes and sparse-flow assets are mapped, the runtime can execute the sparse
+FlowEuler boundary. The remaining blocker is then `sparse-structure-decoding`
+or `shape-slat-sampling`, depending on how far the local checkpoints get.
 
 ## Settings
 
@@ -113,8 +115,10 @@ Runtime modules are Torch-free:
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction
-- `trellis2_sparse_structure.py`, `trellis2_slat.py`: shared flow boundaries
-  with config-gated Pixal3D projection attention
+- `trellis2_sparse_structure.py`: shared sparse FlowEuler probing, sparse
+  decoder boundary checks, and config-gated Pixal3D projection attention
+- `trellis2_slat.py`: shared SLat flow boundary with config-gated Pixal3D
+  projection attention
 
 Dev-only PyTorch reference capture is guarded by `PIXAL3D_TORCH_REF=1` and
 belongs in `tools/`, not runtime imports.

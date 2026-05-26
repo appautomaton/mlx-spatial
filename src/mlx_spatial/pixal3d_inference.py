@@ -27,7 +27,13 @@ from .trellis2_dinov3 import (
     dinov3_download_command,
     inspect_dinov3_assets,
 )
-from .trellis2_forward import prepare_dinov3_image_tensor
+from .trellis2_forward import prepare_dinov3_image_tensor, sparse_structure_target_resolution
+from .trellis2_sparse_structure import (
+    probe_sparse_structure_decoder_boundary,
+    probe_sparse_structure_forward_boundary,
+    read_sparse_structure_decoder_config,
+    read_sparse_structure_flow_config,
+)
 
 
 PIXAL3D_RECOMMENDED_PIPELINE_TYPE = "1024_cascade"
@@ -395,9 +401,137 @@ class Pixal3DInferencePipeline:
         completed.append("artifact:sparse_projection")
         metadata["artifact_paths"] = [projection_artifact.path]
         metadata["projection_artifact"] = projection_artifact
+
+        sparse_flow_model = _pixal3d_model_asset(config.models, "sparse_structure_flow_model")
+        sparse_decoder_model = _pixal3d_model_asset(config.models, "sparse_structure_decoder")
+        try:
+            sparse_config = read_sparse_structure_flow_config(self.root, sparse_flow_model.config_path)
+            sparse_probe = probe_sparse_structure_forward_boundary(
+                self.root / sparse_flow_model.checkpoint_path,
+                sparse_config,
+                conditioning={
+                    "global": ss_conditioning.global_tokens,
+                    "proj": ss_conditioning.projected_features,
+                },
+                steps=config.sparse_structure_sampler.steps,
+                rescale_t=config.sparse_structure_sampler.rescale_t,
+                guidance_strength=config.sparse_structure_sampler.guidance_strength,
+                guidance_rescale=config.sparse_structure_sampler.guidance_rescale,
+                guidance_interval=config.sparse_structure_sampler.guidance_interval,
+                sigma_min=config.sparse_structure_sampler.sigma_min,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as error:
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "sparse-structure-flow",
+                "run Pixal3D sparse-structure FlowEuler cascade",
+                str(error),
+                {
+                    "config_path": sparse_flow_model.config_path,
+                    "checkpoint_path": sparse_flow_model.checkpoint_path,
+                },
+                metadata=metadata,
+                artifacts=(projection_artifact.path,),
+            )
+
+        metadata["sparse_flow"] = {
+            "sampled_latent_shape": sparse_probe.sampled_latent_shape,
+            "completed_blocks": sparse_probe.completed_blocks,
+            "blocker_operation": sparse_probe.blocker_operation,
+            "blocker_detail": sparse_probe.blocker_detail,
+        }
+        if sparse_probe.sampled_latent is None:
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "sparse-structure-flow",
+                sparse_probe.blocker_operation,
+                sparse_probe.blocker_detail,
+                {
+                    "config_path": sparse_flow_model.config_path,
+                    "checkpoint_path": sparse_flow_model.checkpoint_path,
+                },
+                metadata=metadata,
+                artifacts=(projection_artifact.path,),
+            )
+        completed.append("sparse-structure-flow")
+        timings["sparse-structure-flow"] = time.perf_counter() - started
+
+        try:
+            decoder_config = read_sparse_structure_decoder_config(self.root, sparse_decoder_model.config_path)
+            decoder_probe = probe_sparse_structure_decoder_boundary(
+                self.root / sparse_decoder_model.checkpoint_path,
+                decoder_config,
+                sparse_latent=sparse_probe.sampled_latent,
+                target_resolution=sparse_structure_target_resolution(pipeline_type),
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as error:
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "sparse-structure-decoding",
+                "probe Pixal3D sparse decoder",
+                str(error),
+                {
+                    "config_path": sparse_decoder_model.config_path,
+                    "checkpoint_path": sparse_decoder_model.checkpoint_path,
+                },
+                metadata=metadata,
+                artifacts=(projection_artifact.path,),
+            )
+
+        metadata["sparse_decoder"] = {
+            "latent_shape": decoder_probe.latent_shape,
+            "decoded_shape": decoder_probe.decoded_shape,
+            "coordinates_shape": decoder_probe.coordinates_shape,
+            "target_resolution": decoder_probe.target_resolution,
+            "blocker_operation": decoder_probe.blocker_operation,
+            "blocker_detail": decoder_probe.blocker_detail,
+        }
         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
         metadata["timings_sec"] = timings
-
+        if decoder_probe.coordinates is not None and decoder_probe.coordinates_shape is not None and decoder_probe.coordinates_shape[0] > 0:
+            completed.append("sparse-structure-decoding")
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "shape-slat-sampling",
+                "run Pixal3D shape SLat cascade",
+                "sparse decoder produced coordinates; Pixal3D shape SLat cascade is not wired into this runtime yet",
+                {
+                    "coordinates_shape": decoder_probe.coordinates_shape,
+                    "next_target": "wire Pixal3D shape SLat projection conditioning and sampler",
+                },
+                metadata=metadata,
+                artifacts=(projection_artifact.path,),
+            )
         return self._blocked(
             image_path,
             completed,
@@ -406,12 +540,12 @@ class Pixal3DInferencePipeline:
             seed,
             max_num_tokens,
             output_path,
-            "sparse-structure-flow",
-            "run Pixal3D sparse-structure FlowEuler cascade",
-            "Pixal3D orchestration reached the first model block boundary; full checkpoint execution and decoder handoff continue in later slices",
+            "sparse-structure-decoding",
+            decoder_probe.blocker_operation,
+            decoder_probe.blocker_detail,
             {
-                "next_target": "wire real Pixal3D checkpoint execution and sparse decoder handoff",
-                "implemented_boundary": "sparse structure projection conditioning",
+                "config_path": sparse_decoder_model.config_path,
+                "checkpoint_path": sparse_decoder_model.checkpoint_path,
             },
             metadata=metadata,
             artifacts=(projection_artifact.path,),
@@ -486,3 +620,10 @@ def _dino_blocker_metadata(blocker: object, root: Path) -> dict[str, object]:
         "reference": getattr(blocker, "reference", None),
         "next_slice": getattr(blocker, "next_slice", None),
     }
+
+
+def _pixal3d_model_asset(models: tuple[object, ...], key: str) -> object:
+    for model in models:
+        if getattr(model, "key", None) == key:
+            return model
+    raise ValueError(f"Pixal3D pipeline config is missing model key {key!r}")

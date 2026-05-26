@@ -120,10 +120,11 @@ runtime currently validates TencentARC Pixal3D assets, computes manual-FOV
 camera params, runs sparse-stage DINOv3 hidden-state extraction through the
 shared MLX DINOv3 helper, builds view-aligned projection conditioning, supports
 `image_attn_mode="proj"` in the shared sparse-structure and SLat flow
-boundaries, records cascade stage plans, and writes trace/NPZ intermediate
-artifacts. Full Pixal3D checkpoint execution, sparse/texture decoders,
-high-resolution NAF projection features, and textured GLB export are still
-blocked.
+boundaries, can execute the sparse FlowEuler probe when assets are mapped,
+records cascade stage plans, and writes trace/NPZ intermediate artifacts.
+Sparse decoder coordinate extraction with real Pixal3D checkpoints, shape/texture
+decoders, high-resolution NAF projection features, and textured GLB export are
+still blocked.
 
 Main modules:
 
