@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-sparse-decoder-coordinates",
+  "active_change": "2026-05-26-pixal3d-shape-slat-lr-boundary",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-sparse-decoder-coordinates/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-sparse-decoder-coordinates/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-shape-slat-lr-boundary/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-shape-slat-lr-boundary/PLAN.md"
 }

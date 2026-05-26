@@ -189,7 +189,9 @@ from .pixal3d_camera import (
 )
 from .pixal3d_export import (
     Pixal3DProjectionArtifact,
+    Pixal3DShapeSLatArtifact,
     Pixal3DSparseStructureArtifact,
+    write_pixal3d_shape_slat_npz,
     write_pixal3d_projection_npz,
     write_pixal3d_sparse_structure_npz,
 )
@@ -218,6 +220,7 @@ from .pixal3d_projection import (
     pixal3d_stage_with_grid_resolution,
     project_pixal3d_points_to_image,
     sample_pixal3d_feature_map,
+    select_pixal3d_projected_features_at_coordinates,
 )
 from .model_assets import DINOv3_VITL16_ASSETS, PIXAL3D_ASSETS, RMBG2_ASSETS, TRELLIS2_ASSETS, validate_model_assets
 from .ovoxel import (

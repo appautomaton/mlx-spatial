@@ -34,6 +34,16 @@ class Pixal3DSparseStructureArtifact:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Pixal3DShapeSLatArtifact:
+    """Written Pixal3D shape SLat feature bundle."""
+
+    path: Path
+    coordinates_shape: tuple[int, int]
+    features_shape: tuple[int, int]
+    metadata: dict[str, Any]
+
+
 def write_pixal3d_projection_npz(
     path: str | Path,
     conditioning: Pixal3DProjectionConditioning,
@@ -65,6 +75,50 @@ def write_pixal3d_projection_npz(
         path=output,
         global_shape=tuple(int(dim) for dim in global_tokens.shape),
         projected_shape=tuple(int(dim) for dim in projected.shape),
+        metadata=payload_metadata,
+    )
+
+
+def write_pixal3d_shape_slat_npz(
+    path: str | Path,
+    coordinates: mx.array,
+    features: mx.array,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Pixal3DShapeSLatArtifact:
+    """Write Pixal3D shape SLat coordinates/features to an inspectable NPZ bundle."""
+
+    coordinates_array = _array(coordinates)
+    features_array = _array(features)
+    if coordinates_array.ndim != 2 or coordinates_array.shape[1] != 4:
+        raise ValueError(f"shape SLat coordinates must have shape (n, 4), got {coordinates_array.shape}")
+    if features_array.ndim != 2:
+        raise ValueError(f"shape SLat features must have shape (n, channels), got {features_array.shape}")
+    if features_array.shape[0] != coordinates_array.shape[0]:
+        raise ValueError(
+            "shape SLat coordinate/feature token mismatch: "
+            f"coordinates={coordinates_array.shape[0]} features={features_array.shape[0]}"
+        )
+
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload_metadata = {
+        "stage": "shape_slat_lr",
+        "coordinate_order": "batch,z,y,x",
+        "coordinates_shape": tuple(int(dim) for dim in coordinates_array.shape),
+        "features_shape": tuple(int(dim) for dim in features_array.shape),
+        **(metadata or {}),
+    }
+    np.savez_compressed(
+        output,
+        coordinates=coordinates_array.astype(np.int32, copy=False),
+        features=features_array.astype(np.float32, copy=False),
+        metadata_json=json.dumps(payload_metadata, sort_keys=True, default=str),
+    )
+    return Pixal3DShapeSLatArtifact(
+        path=output,
+        coordinates_shape=tuple(int(dim) for dim in coordinates_array.shape),
+        features_shape=tuple(int(dim) for dim in features_array.shape),
         metadata=payload_metadata,
     )
 

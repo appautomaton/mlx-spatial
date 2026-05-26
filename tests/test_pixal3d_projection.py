@@ -12,6 +12,7 @@ from mlx_spatial import (
     pixal3d_stage_with_grid_resolution,
     project_pixal3d_points_to_image,
     sample_pixal3d_feature_map,
+    select_pixal3d_projected_features_at_coordinates,
 )
 
 
@@ -171,6 +172,35 @@ def test_pixal3d_projection_stage_grid_override_keeps_stage_metadata():
     assert stage.image_size == 64
     assert stage.grid_resolution == 3
     assert stage.projected_token_count == 27
+
+
+def test_select_pixal3d_projected_features_at_coordinates_uses_batch_zyx_order():
+    projected = mx.array(np.arange(2 * 8 * 3, dtype=np.float32).reshape(2, 8, 3))
+    coords = mx.array(
+        [
+            [0, 0, 0, 0],
+            [0, 1, 0, 1],
+            [1, 0, 1, 0],
+        ],
+        dtype=mx.int32,
+    )
+
+    selected = select_pixal3d_projected_features_at_coordinates(projected, coords, grid_resolution=2)
+
+    expected = np.array(projected).reshape(16, 3)[[0, 5, 10]]
+    np.testing.assert_allclose(np.array(selected), expected, atol=1e-6)
+
+
+def test_select_pixal3d_projected_features_at_coordinates_validates_bounds():
+    projected = mx.zeros((1, 8, 3), dtype=mx.float32)
+    coords = mx.array([[0, 0, 0, 2]], dtype=mx.int32)
+
+    try:
+        select_pixal3d_projected_features_at_coordinates(projected, coords, grid_resolution=2)
+    except ValueError as error:
+        assert "out of bounds" in str(error)
+    else:
+        raise AssertionError("expected sparse coordinate bounds validation")
 
 
 def _hidden_states(*, batch: int, patch_grid: tuple[int, int], channels: int) -> mx.array:

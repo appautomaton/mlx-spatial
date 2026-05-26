@@ -4,7 +4,11 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from mlx_spatial.pixal3d_export import write_pixal3d_projection_npz, write_pixal3d_sparse_structure_npz
+from mlx_spatial.pixal3d_export import (
+    write_pixal3d_projection_npz,
+    write_pixal3d_shape_slat_npz,
+    write_pixal3d_sparse_structure_npz,
+)
 from mlx_spatial.pixal3d_projection import Pixal3DProjectionConditioning, pixal3d_projection_stage_config
 
 
@@ -73,4 +77,33 @@ def test_write_pixal3d_sparse_structure_npz_requires_coordinate_shape(tmp_path):
             mx.zeros((2, 3), dtype=mx.int32),
             decoded_shape=(1, 1, 2, 2, 2),
             target_resolution=2,
+        )
+
+
+def test_write_pixal3d_shape_slat_npz_records_coordinates_features_and_metadata(tmp_path):
+    artifact = write_pixal3d_shape_slat_npz(
+        tmp_path / "shape_slat_lr.npz",
+        mx.array([[0, 0, 1, 1], [0, 1, 0, 1]], dtype=mx.int32),
+        mx.ones((2, 32), dtype=mx.float32),
+        metadata={"pipeline_type": "1024_cascade"},
+    )
+
+    assert artifact.path.is_file()
+    assert artifact.coordinates_shape == (2, 4)
+    assert artifact.features_shape == (2, 32)
+    payload = np.load(artifact.path)
+    assert payload["coordinates"].tolist() == [[0, 0, 1, 1], [0, 1, 0, 1]]
+    assert payload["features"].shape == (2, 32)
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["stage"] == "shape_slat_lr"
+    assert metadata["coordinate_order"] == "batch,z,y,x"
+    assert metadata["pipeline_type"] == "1024_cascade"
+
+
+def test_write_pixal3d_shape_slat_npz_requires_matching_token_count(tmp_path):
+    with pytest.raises(ValueError, match="token mismatch"):
+        write_pixal3d_shape_slat_npz(
+            tmp_path / "shape_slat_lr.npz",
+            mx.zeros((2, 4), dtype=mx.int32),
+            mx.zeros((1, 32), dtype=mx.float32),
         )

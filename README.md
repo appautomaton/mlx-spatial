@@ -20,7 +20,7 @@ The package covers six model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace plus sparse projection/structure NPZ while implementation is in progress | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace plus sparse/shape intermediate NPZ while implementation is in progress | downloaded safetensors directly |
 
 Choose by job:
 
@@ -53,9 +53,10 @@ Honest status:
   tensor bundle, not a mesh or Gaussian splat export.
 - Pixal3D is partially wired: assets, manual camera, projection conditioning,
   projection attention, sparse FlowEuler probing, sparse decoder coordinates,
-  cascade planning, trace output, and sparse NPZ artifacts are implemented.
-  Shape SLat, texture SLat, high-resolution NAF features, and textured GLB
-  export remain blocked.
+  512 shape SLat probing when NAF features are supplied, cascade planning,
+  trace output, and sparse/shape NPZ artifacts are implemented. The normal CLI
+  still needs MLX NAF features before it can reach shape SLat; HR cascade,
+  shape decoder, texture SLat, and textured GLB export remain blocked.
 
 ## Install
 
@@ -292,8 +293,10 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
 
 Current expected output starts with `trace.json` plus `sparse_projection.npz`.
 When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
-also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates; the next
-structured blocker is shape-SLat sampling.
+also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. The
+normal CLI then reports the missing MLX NAF feature boundary. The lower-level
+runtime can write `shape_slat_lr.npz` after explicit NAF features are supplied;
+the next structured blocker is HR shape cascade and decoder handoff.
 
 ## Repository Layout
 

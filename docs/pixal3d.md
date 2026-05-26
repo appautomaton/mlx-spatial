@@ -17,15 +17,18 @@ Implemented now:
 - sparse-structure FlowEuler probing through the shared MLX sparse flow helper
 - sparse decoder coordinate extraction when a compatible sparse decoder
   checkpoint/config is available
+- coordinate-indexed 512 shape SLat probing when explicit NAF-upsampled
+  features are supplied to the lower-level runtime
 - cascade stage planning for `1024_cascade` and `1536_cascade`
-- trace output, `sparse_projection.npz`, and `sparse_structure.npz`
-  intermediate artifacts as each MLX boundary completes
+- trace output, `sparse_projection.npz`, `sparse_structure.npz`, and
+  `shape_slat_lr.npz` intermediate artifacts as each MLX boundary completes
 
 Still blocked:
 
-- shape/texture SLat execution and textured GLB export are not release-ready
-- shape/texture high-resolution projection still needs an MLX NAF-equivalent
-  feature path
+- normal CLI runs still need an MLX NAF-equivalent feature path before shape
+  SLat can run without explicit lower-level test features
+- HR shape SLat cascade, shape decoder, texture SLat execution, and textured
+  GLB export are not release-ready
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
 
 ## Assets
@@ -82,14 +85,17 @@ outputs/pixal3d/sample/
   trace.json
   sparse_projection.npz
   sparse_structure.npz    # written after sparse decoder coordinates are available
+  shape_slat_lr.npz       # written only after NAF features are supplied
 ```
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
 blocker with the exact root and download command. If DINOv3 conditioning
 completes and sparse-flow assets are mapped, the runtime can execute the sparse
 FlowEuler boundary. If the sparse decoder also produces coordinates, the runtime
-writes `sparse_structure.npz` and the remaining blocker is
-`shape-slat-sampling`.
+writes `sparse_structure.npz`. Normal CLI runs then stop at
+`shape-projection-conditioning` until MLX NAF features are available. With
+explicit lower-level NAF features, the runtime can probe 512 shape SLat, write
+`shape_slat_lr.npz`, and stop at `shape-slat-cascade`.
 
 ## Settings
 
@@ -113,9 +119,9 @@ Runtime modules are Torch-free:
 - `pixal3d_assets.py`: asset manifest, validation, config parsing, and probes
 - `pixal3d_camera.py`: manual-FOV camera and cascade planning
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
-  and NAF blocker
-- `pixal3d_export.py`: intermediate projection and sparse-coordinate NPZ
-  artifact writing
+  coordinate-indexed feature selection, and NAF blocker
+- `pixal3d_export.py`: intermediate projection, sparse-coordinate, and shape
+  SLat NPZ artifact writing
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction

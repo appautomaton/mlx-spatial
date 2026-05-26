@@ -122,17 +122,19 @@ shared MLX DINOv3 helper, builds view-aligned projection conditioning, supports
 `image_attn_mode="proj"` in the shared sparse-structure and SLat flow
 boundaries, can execute the sparse FlowEuler probe when assets are mapped,
 extracts sparse decoder coordinates when compatible sparse decoder assets are
-available, records cascade stage plans, and writes trace/NPZ intermediate
-artifacts. Shape/texture SLat execution, high-resolution NAF projection
-features, and textured GLB export are still blocked.
+available, runs the 512 shape SLat probe when NAF-upsampled features are
+provided, records cascade stage plans, and writes trace/NPZ intermediate
+artifacts. Normal CLI runs still need the MLX NAF feature path before shape SLat
+can run; HR shape cascade, shape decoder, texture SLat, texture/PBR decode, and
+textured GLB export are still blocked.
 
 Main modules:
 
 - `pixal3d.py`: CLI command routing for download, validate, inspect, probe, and generation.
 - `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
 - `pixal3d_camera.py`: upstream-compatible manual-FOV camera math and cascade HR token planning.
-- `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, and NAF blocker.
-- `pixal3d_export.py`: intermediate projection and sparse-coordinate NPZ artifact writers.
+- `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and NAF blocker.
+- `pixal3d_export.py`: intermediate projection, sparse-coordinate, and shape-SLat NPZ artifact writers.
 - `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, and blockers.
 - `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
 

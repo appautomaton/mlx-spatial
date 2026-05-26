@@ -190,8 +190,8 @@ Pixal3D inputs:
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 - output: `trace.json`; completed MLX intermediate boundaries write
-  `sparse_projection.npz` and, after sparse decoding, `sparse_structure.npz`
-  next to the trace
+  `sparse_projection.npz`, after sparse decoding `sparse_structure.npz`, and
+  after the NAF feature boundary `shape_slat_lr.npz` next to the trace
 
 Script defaults:
 
@@ -199,9 +199,9 @@ Script defaults:
 - seed: `42`
 - max tokens: `49152`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: after DINOv3 sparse projection conditioning, sparse
-  FlowEuler probing, and sparse decoder coordinates, shape-SLat sampling is the
-  next missing MLX stage
+- current blocker: normal script runs stop at the missing MLX NAF feature path
+  before shape SLat; lower-level runtime tests can pass explicit NAF features
+  and reach the 512 shape SLat probe
 
 ### LiTo
 

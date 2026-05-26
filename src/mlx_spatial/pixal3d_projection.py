@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 import mlx.core as mx
+import numpy as np
 
 
 PIXAL3D_DINOV3_EMBED_DIM = 1024
@@ -317,6 +318,44 @@ def build_pixal3d_projection_conditioning(
         projected_features=mx.concatenate([lr_features, hr_features], axis=-1),
         projected_lr_features=lr_features,
     )
+
+
+def select_pixal3d_projected_features_at_coordinates(
+    projected_features: mx.array,
+    sparse_coordinates: mx.array,
+    *,
+    grid_resolution: int,
+) -> mx.array:
+    """Select projected grid features at sparse `(batch, z, y, x)` coordinates."""
+
+    if grid_resolution <= 0:
+        raise ValueError("grid_resolution must be positive")
+    if projected_features.ndim != 3:
+        raise ValueError(f"projected_features must have shape (batch, grid^3, channels), got {projected_features.shape}")
+    if sparse_coordinates.ndim != 2 or int(sparse_coordinates.shape[1]) != 4:
+        raise ValueError(f"sparse_coordinates must have shape (num_tokens, 4), got {sparse_coordinates.shape}")
+
+    batch_size, token_count, channels = (int(dim) for dim in projected_features.shape)
+    expected_tokens = grid_resolution**3
+    if token_count != expected_tokens:
+        raise ValueError(f"projected feature token count mismatch: expected {expected_tokens}, got {token_count}")
+
+    coords = np.array(sparse_coordinates, dtype=np.int64)
+    if coords.shape[0] == 0:
+        return mx.zeros((0, channels), dtype=projected_features.dtype)
+    batch = coords[:, 0]
+    spatial = coords[:, 1:]
+    if np.any(batch < 0) or np.any(batch >= batch_size):
+        raise ValueError(f"sparse coordinate batch index out of bounds for batch size {batch_size}")
+    if np.any(spatial < 0) or np.any(spatial >= grid_resolution):
+        raise ValueError(f"sparse coordinate spatial index out of bounds for grid_resolution={grid_resolution}")
+
+    z = spatial[:, 0]
+    y = spatial[:, 1]
+    x = spatial[:, 2]
+    flat_index = batch * expected_tokens + z * grid_resolution * grid_resolution + y * grid_resolution + x
+    flat_features = mx.reshape(projected_features, (batch_size * expected_tokens, channels))
+    return flat_features[mx.array(flat_index.astype(np.int32))]
 
 
 def pixal3d_stage_with_grid_resolution(
