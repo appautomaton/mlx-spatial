@@ -76,6 +76,8 @@ class SparseStructureFlowConfig:
     qk_rms_norm: bool
     qk_rms_norm_cross: bool
     dtype: str
+    image_attn_mode: str = "cross"
+    proj_in_channels: int | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ def read_sparse_structure_flow_config(root: str | Path, config_path: str) -> Spa
             qk_rms_norm=bool(args["qk_rms_norm"]),
             qk_rms_norm_cross=bool(args["qk_rms_norm_cross"]),
             dtype=str(args["dtype"]),
+            image_attn_mode=str(args.get("image_attn_mode", "cross")),
+            proj_in_channels=int(args["proj_in_channels"]) if args.get("proj_in_channels") is not None else None,
         )
     except FileNotFoundError:
         raise
@@ -270,7 +274,7 @@ def probe_sparse_structure_forward_boundary(
     config: SparseStructureFlowConfig,
     *,
     batch_size: int = 1,
-    conditioning: mx.array | None = None,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array] | None = None,
     steps: int = 1,
     rescale_t: float = 1.0,
     guidance_strength: float = 1.0,
@@ -299,7 +303,7 @@ def probe_sparse_structure_forward_boundary(
     cond = conditioning
     if cond is None:
         cond = mx.zeros((batch_size, 1, config.cond_channels), dtype=input_weight.dtype)
-    _validate_conditioning_shape(cond.shape, config, batch_size=batch_size)
+    _validate_conditioning(cond, config, batch_size=batch_size, token_count=config.resolution**3)
     projected, block0, stack, output = _sparse_structure_model_forward(sample, 1.0, cond, config, tensors)
     mx.eval(projected)
     projection_shape = tuple(int(dim) for dim in projected.shape)
@@ -430,7 +434,7 @@ def probe_sparse_structure_decoder_boundary(
 def _sparse_structure_model_forward(
     sample: mx.array,
     t: float,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
 ) -> tuple[mx.array, mx.array, mx.array, mx.array]:
@@ -468,7 +472,7 @@ def _sparse_structure_model_forward(
 
 def _flow_euler_sample_sparse_structure(
     sample: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -480,7 +484,7 @@ def _flow_euler_sample_sparse_structure(
     sigma_min: float,
 ) -> mx.array:
     schedule = flow_euler_schedule(steps=steps, rescale_t=rescale_t, guidance_interval=guidance_interval)
-    neg_conditioning = mx.zeros_like(conditioning)
+    neg_conditioning = _conditioning_zeros_like(conditioning)
     for t, t_prev in schedule.pairs:
         pred_v = _flow_euler_guided_prediction(
             sample,
@@ -501,8 +505,8 @@ def _flow_euler_sample_sparse_structure(
 def _flow_euler_guided_prediction(
     sample: mx.array,
     t: float,
-    conditioning: mx.array,
-    neg_conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    neg_conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -534,7 +538,7 @@ def _flow_euler_guided_prediction(
 def _flow_euler_model_prediction(
     sample: mx.array,
     t: float,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
 ) -> mx.array:
@@ -646,7 +650,7 @@ def _pixel_shuffle_3d_ncdhw(values: mx.array, *, upscale_factor: int) -> mx.arra
 
 def _sparse_structure_block_forward(
     hidden_states: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -654,7 +658,7 @@ def _sparse_structure_block_forward(
     block_index: int,
 ) -> mx.array:
     hidden_states = hidden_states.astype(mx.float32)
-    conditioning = conditioning.astype(mx.float32)
+    conditioning = _cast_conditioning(conditioning, mx.float32)
     prefix = f"blocks.{block_index}"
     shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = _split_modulation(
         tensors[f"{prefix}.modulation"].astype(mx.float32)[None, :] + mod
@@ -753,16 +757,73 @@ def _sparse_structure_self_attention(
 
 def _sparse_structure_cross_attention(
     hidden_states: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SparseStructureFlowConfig,
     tensors: dict[str, mx.array],
     *,
     block_index: int,
 ) -> mx.array:
+    if config.image_attn_mode == "proj":
+        return _sparse_structure_project_attention(hidden_states, conditioning, config, tensors, block_index=block_index)
+    if config.image_attn_mode != "cross":
+        raise ValueError(f"unsupported sparse structure image_attn_mode: {config.image_attn_mode!r}")
+
     batch, token_count, _ = tuple(int(dim) for dim in hidden_states.shape)
     cond_count = int(conditioning.shape[1])
     head_dim = _head_dim(config)
     prefix = f"blocks.{block_index}.cross_attn"
+    return _sparse_structure_cross_attention_with_prefix(
+        hidden_states,
+        conditioning,
+        config,
+        tensors,
+        prefix=prefix,
+        cond_count=cond_count,
+        head_dim=head_dim,
+    )
+
+
+def _sparse_structure_project_attention(
+    hidden_states: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    config: SparseStructureFlowConfig,
+    tensors: dict[str, mx.array],
+    *,
+    block_index: int,
+) -> mx.array:
+    global_context, proj_context = _split_projection_conditioning(conditioning)
+    batch, token_count, _ = tuple(int(dim) for dim in hidden_states.shape)
+    _validate_projection_context_shape(global_context.shape, proj_context.shape, config, batch_size=batch, token_count=token_count)
+    head_dim = _head_dim(config)
+    prefix = f"blocks.{block_index}.cross_attn"
+    global_out = _sparse_structure_cross_attention_with_prefix(
+        hidden_states,
+        global_context,
+        config,
+        tensors,
+        prefix=f"{prefix}.cross_attn_block",
+        cond_count=int(global_context.shape[1]),
+        head_dim=head_dim,
+    )
+    proj_out = _linear(
+        proj_context,
+        tensors[f"{prefix}.proj_linear.weight"].astype(mx.float32),
+        tensors[f"{prefix}.proj_linear.bias"].astype(mx.float32),
+    )
+    return global_out + proj_out
+
+
+def _sparse_structure_cross_attention_with_prefix(
+    hidden_states: mx.array,
+    conditioning: mx.array,
+    config: SparseStructureFlowConfig,
+    tensors: dict[str, mx.array],
+    *,
+    prefix: str,
+    cond_count: int,
+    head_dim: int,
+) -> mx.array:
+    batch, token_count, _ = tuple(int(dim) for dim in hidden_states.shape)
     query = _linear(
         hidden_states,
         tensors[f"{prefix}.to_q.weight"].astype(mx.float32),
@@ -916,6 +977,70 @@ def _validate_conditioning_shape(
         raise ValueError(f"sparse flow conditioning width mismatch: expected {config.cond_channels}, got {actual[2]}")
 
 
+def _validate_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    config: SparseStructureFlowConfig,
+    *,
+    batch_size: int,
+    token_count: int,
+) -> None:
+    if config.image_attn_mode == "cross":
+        _validate_conditioning_shape(conditioning.shape, config, batch_size=batch_size)
+        return
+    if config.image_attn_mode == "proj":
+        global_context, proj_context = _split_projection_conditioning(conditioning)
+        _validate_projection_context_shape(global_context.shape, proj_context.shape, config, batch_size=batch_size, token_count=token_count)
+        return
+    raise ValueError(f"unsupported sparse structure image_attn_mode: {config.image_attn_mode!r}")
+
+
+def _split_projection_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+) -> tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return conditioning["global"], conditioning["proj"]
+    if isinstance(conditioning, tuple) and len(conditioning) == 2:
+        return conditioning
+    raise ValueError("projection conditioning must be a dict with 'global'/'proj' or a (global, proj) tuple")
+
+
+def _validate_projection_context_shape(
+    global_shape: tuple[int, ...],
+    proj_shape: tuple[int, ...],
+    config: SparseStructureFlowConfig,
+    *,
+    batch_size: int,
+    token_count: int,
+) -> None:
+    _validate_conditioning_shape(global_shape, config, batch_size=batch_size)
+    expected_proj_channels = config.proj_in_channels or config.cond_channels
+    actual = tuple(int(dim) for dim in proj_shape)
+    expected = (batch_size, token_count, expected_proj_channels)
+    if actual != expected:
+        raise ValueError(f"sparse projection context shape mismatch: expected {expected}, got {actual}")
+
+
+def _cast_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    dtype: mx.Dtype,
+) -> mx.array | dict[str, mx.array] | tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return {key: value.astype(dtype) for key, value in conditioning.items()}
+    if isinstance(conditioning, tuple):
+        return tuple(value.astype(dtype) for value in conditioning)
+    return conditioning.astype(dtype)
+
+
+def _conditioning_zeros_like(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+) -> mx.array | dict[str, mx.array] | tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return {key: mx.zeros_like(value) for key, value in conditioning.items()}
+    if isinstance(conditioning, tuple):
+        return tuple(mx.zeros_like(value) for value in conditioning)
+    return mx.zeros_like(conditioning)
+
+
 def extract_sparse_structure_coordinates(
     decoded_logits: mx.array,
     *,
@@ -984,11 +1109,11 @@ def _sparse_structure_stack_inspection_names(config: SparseStructureFlowConfig) 
         "adaLN_modulation.1.bias",
     ]
     for block_index in range(config.num_blocks):
-        names.extend(_sparse_structure_block_tensor_names(block_index))
+        names.extend(_sparse_structure_block_tensor_names(block_index, config))
     return tuple(names)
 
 
-def _sparse_structure_block_tensor_names(block_index: int) -> tuple[str, ...]:
+def _sparse_structure_block_tensor_names(block_index: int, config: SparseStructureFlowConfig) -> tuple[str, ...]:
     prefix = f"blocks.{block_index}"
     return (
         f"{prefix}.modulation",
@@ -1000,18 +1125,34 @@ def _sparse_structure_block_tensor_names(block_index: int) -> tuple[str, ...]:
         f"{prefix}.self_attn.k_rms_norm.gamma",
         f"{prefix}.self_attn.to_out.weight",
         f"{prefix}.self_attn.to_out.bias",
-        f"{prefix}.cross_attn.to_q.weight",
-        f"{prefix}.cross_attn.to_q.bias",
-        f"{prefix}.cross_attn.to_kv.weight",
-        f"{prefix}.cross_attn.to_kv.bias",
-        f"{prefix}.cross_attn.q_rms_norm.gamma",
-        f"{prefix}.cross_attn.k_rms_norm.gamma",
-        f"{prefix}.cross_attn.to_out.weight",
-        f"{prefix}.cross_attn.to_out.bias",
+        *_sparse_structure_cross_attention_tensor_names(block_index, config),
         f"{prefix}.mlp.mlp.0.weight",
         f"{prefix}.mlp.mlp.0.bias",
         f"{prefix}.mlp.mlp.2.weight",
         f"{prefix}.mlp.mlp.2.bias",
+    )
+
+
+def _sparse_structure_cross_attention_tensor_names(block_index: int, config: SparseStructureFlowConfig) -> tuple[str, ...]:
+    prefix = f"blocks.{block_index}.cross_attn"
+    if config.image_attn_mode == "cross":
+        cross_prefix = prefix
+        extra: tuple[str, ...] = ()
+    elif config.image_attn_mode == "proj":
+        cross_prefix = f"{prefix}.cross_attn_block"
+        extra = (f"{prefix}.proj_linear.weight", f"{prefix}.proj_linear.bias")
+    else:
+        raise ValueError(f"unsupported sparse structure image_attn_mode: {config.image_attn_mode!r}")
+    return (
+        f"{cross_prefix}.to_q.weight",
+        f"{cross_prefix}.to_q.bias",
+        f"{cross_prefix}.to_kv.weight",
+        f"{cross_prefix}.to_kv.bias",
+        f"{cross_prefix}.q_rms_norm.gamma",
+        f"{cross_prefix}.k_rms_norm.gamma",
+        f"{cross_prefix}.to_out.weight",
+        f"{cross_prefix}.to_out.bias",
+        *extra,
     )
 
 
@@ -1049,24 +1190,51 @@ def _validate_sparse_structure_stack_infos(
         _validate_checkpoint_info_shape(infos, f"{prefix}.self_attn.to_out.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_q.weight",
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_q.weight",
             (config.model_channels, config.model_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_q.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_kv.weight",
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_q.bias",
+            (config.model_channels,),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_kv.weight",
             (config.model_channels * 2, config.cond_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_kv.bias", (config.model_channels * 2,))
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.q_rms_norm.gamma", (config.num_heads, head_dim))
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.k_rms_norm.gamma", (config.num_heads, head_dim))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_out.weight",
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_kv.bias",
+            (config.model_channels * 2,),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.q_rms_norm.gamma",
+            (config.num_heads, head_dim),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.k_rms_norm.gamma",
+            (config.num_heads, head_dim),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_out.weight",
             (config.model_channels, config.model_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_out.bias", (config.model_channels,))
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_sparse_structure_cross_attention_prefix(block_index, config)}.to_out.bias",
+            (config.model_channels,),
+        )
+        if config.image_attn_mode == "proj":
+            _validate_checkpoint_info_shape(
+                infos,
+                f"{prefix}.cross_attn.proj_linear.weight",
+                (config.model_channels, config.proj_in_channels or config.cond_channels),
+            )
+            _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.proj_linear.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(
             infos,
             f"{prefix}.mlp.mlp.0.weight",
@@ -1079,6 +1247,15 @@ def _validate_sparse_structure_stack_infos(
             (config.model_channels, intermediate_channels),
         )
         _validate_checkpoint_info_shape(infos, f"{prefix}.mlp.mlp.2.bias", (config.model_channels,))
+
+
+def _sparse_structure_cross_attention_prefix(block_index: int, config: SparseStructureFlowConfig) -> str:
+    prefix = f"blocks.{block_index}.cross_attn"
+    if config.image_attn_mode == "cross":
+        return prefix
+    if config.image_attn_mode == "proj":
+        return f"{prefix}.cross_attn_block"
+    raise ValueError(f"unsupported sparse structure image_attn_mode: {config.image_attn_mode!r}")
 
 
 def _sparse_structure_decoder_tensor_names(config: SparseStructureDecoderConfig) -> tuple[str, ...]:

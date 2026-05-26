@@ -11,7 +11,7 @@ This is not a training framework, and it does not bundle model weights.
 
 ## What Works Now
 
-The package covers five model families:
+The package covers six model families:
 
 | Pipeline | Input | Output | Weight setup |
 | --- | --- | --- | --- |
@@ -20,6 +20,7 @@ The package covers five model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace and projection NPZ while implementation is in progress | downloaded safetensors directly |
 
 Choose by job:
 
@@ -33,6 +34,8 @@ Choose by job:
   Gaussian splat PLY output instead of a mesh.
 - Use MapAnything when you have related scene views and want image-only depth,
   confidence, masks, camera parameters, and dense world points.
+- Use Pixal3D when you want to inspect TencentARC Pixal3D's projection-conditioned
+  model path as it is being wired into MLX.
 
 Honest status:
 
@@ -48,6 +51,10 @@ Honest status:
 - MapAnything runs checkpoint-backed scene generation with the public
   `facebook/map-anything` weights. The supported artifact is a scene `.npz`
   tensor bundle, not a mesh or Gaussian splat export.
+- Pixal3D is partially wired: assets, manual camera, projection conditioning,
+  projection attention, cascade planning, trace output, and sparse projection
+  NPZ artifacts are implemented. Full DINOv3 image extraction, checkpoint
+  execution, and textured GLB export remain blocked.
 
 ## Install
 
@@ -75,7 +82,7 @@ Requirements:
 
 ## Command Line Tools
 
-The package installs five CLIs:
+The package installs six CLIs:
 
 ```bash
 uv run mlx-spatial-sam3d --help
@@ -83,6 +90,7 @@ uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
 uv run mlx-spatial-mapanything --help
+uv run mlx-spatial-pixal3d --help
 ```
 
 The repository also includes readable script wrappers under `scripts/`. These
@@ -119,8 +127,8 @@ uv run hf download appautomaton/lito-research-mlx \
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 
-TRELLIS.2, HY-WorldMirror, and MapAnything do not need SAM3D-style conversion.
-They load the downloaded safetensors and JSON configs directly:
+TRELLIS.2, HY-WorldMirror, MapAnything, and Pixal3D do not need SAM3D-style
+conversion. They load the downloaded safetensors and JSON configs directly:
 
 ```bash
 uv run mlx-spatial-trellis2 download-command --root weights/trellis2
@@ -128,6 +136,7 @@ uv run mlx-spatial-trellis2 rmbg-download-command --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-download-command weights/dinov3-vitl16-pretrain-lvd1689m
 uv run mlx-spatial-hyworld2 download-command weights/hy-world-2
 uv run mlx-spatial-mapanything download-command weights/map-anything
+uv run mlx-spatial-pixal3d download-command weights/pixal3d
 ```
 
 Run the printed `hf download ...` commands, then validate:
@@ -138,6 +147,7 @@ uv run mlx-spatial-trellis2 rmbg-validate --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-validate weights/dinov3-vitl16-pretrain-lvd1689m
 uv run mlx-spatial-hyworld2 validate weights/hy-world-2
 uv run mlx-spatial-mapanything validate weights/map-anything
+uv run mlx-spatial-pixal3d validate weights/pixal3d
 ```
 
 Respect the licenses and access terms of the upstream model providers. The
@@ -265,6 +275,23 @@ semantically: images, depth, confidence, masks, intrinsics, camera poses, and
 world points. The MLX file uses clean top-level keys and also records
 `extrinsics`.
 
+### Pixal3D Implementation Track
+
+Use the vendored upstream sample image and explicit manual FOV:
+
+```bash
+python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
+  --root weights/pixal3d \
+  --output-dir outputs/pixal3d/sample \
+  --pipeline-type 1024_cascade \
+  --manual-fov 0.2
+```
+
+Current expected output is `trace.json`, with structured blockers for the
+missing Pixal3D DINOv3 image hidden-state and downstream checkpoint execution
+path. When the Python runtime is given hidden states directly, it can also write
+`sparse_projection.npz` for the completed projection-conditioning boundary.
+
 ## Repository Layout
 
 ```text
@@ -287,6 +314,7 @@ vendors/             ignored upstream checkouts
 - [docs/hyworld2.md](docs/hyworld2.md): HY-WorldMirror asset layout, scene inputs, memory profiles, and outputs.
 - [docs/lito.md](docs/lito.md): LiTo setup, research-weight bundle, image-to-3DGS CLI, memory profiles, and PLY viewing notes.
 - [docs/mapanything.md](docs/mapanything.md): MapAnything asset layout, scene `.npz` schema, parity notes, and viewer/export boundary.
+- [docs/pixal3d.md](docs/pixal3d.md): Pixal3D asset layout, current MLX boundary, recommended settings, and blockers.
 - [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
 - [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
 - [docs/model-publishing.md](docs/model-publishing.md): model bundles and model-card rules.

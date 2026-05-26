@@ -111,6 +111,32 @@ pipeline use `scene.*` prefixes for the same semantic tensors. Keep Torch,
 TorchVision, UniCeption, OpenCV, and vendor Python imports out of the runtime
 dependencies; they belong only to explicit `torch-ref` parity workflows.
 
+## Pixal3D Boundary
+
+Entry point: `mlx_spatial.pixal3d:main`, exposed as `mlx-spatial-pixal3d`.
+
+Pixal3D is a projection-conditioned image-to-3D implementation track. The
+runtime currently validates TencentARC Pixal3D assets, computes manual-FOV
+camera params, builds view-aligned DINOv3 projection conditioning from supplied
+hidden states, supports `image_attn_mode="proj"` in the shared sparse-structure
+and SLat flow boundaries, records cascade stage plans, and writes trace/NPZ
+intermediate artifacts. Full image hidden-state extraction, full checkpoint
+execution, sparse/texture decoders, and textured GLB export are still blocked.
+
+Main modules:
+
+- `pixal3d.py`: CLI command routing for download, validate, inspect, probe, and generation.
+- `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
+- `pixal3d_camera.py`: upstream-compatible manual-FOV camera math and cascade HR token planning.
+- `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, and NAF blocker.
+- `pixal3d_export.py`: intermediate projection NPZ artifact writer.
+- `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, and blockers.
+- `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
+
+Pixal3D reuses `trellis2_sparse_structure.py` and `trellis2_slat.py` for shared
+flow math, but only through config-gated paths so existing TRELLIS.2 checkpoints
+stay on the original cross-attention behavior.
+
 ## CLI And Script Split
 
 Package CLIs under `[project.scripts]` are the supported runtime surfaces. Repository scripts under `scripts/` are readable wrappers and maintenance tools that encode recommended settings for users and maintainers.

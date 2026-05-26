@@ -63,6 +63,7 @@ mlx-spatial-hyworld2 = "mlx_spatial.hyworld2:main"
 mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
 mlx-spatial-lito = "mlx_spatial.lito:main"
 mlx-spatial-mapanything = "mlx_spatial.mapanything:main"
+mlx-spatial-pixal3d = "mlx_spatial.pixal3d:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlx_spatial"]

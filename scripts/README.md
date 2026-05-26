@@ -165,6 +165,38 @@ The scene bundle contains `images`, `depth`, `confidence`, `masks`,
 or Gaussian Splat PLY. A colored point cloud or inline viewer can be derived
 from the bundle for inspection, but that is a downstream visualization step.
 
+### Pixal3D
+
+Run TencentARC Pixal3D generation with local safetensors:
+
+```bash
+uv run hf download TencentARC/Pixal3D \
+  --local-dir weights/pixal3d
+```
+
+```bash
+python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
+  --root weights/pixal3d \
+  --output-dir outputs/pixal3d/sample \
+  --pipeline-type 1024_cascade \
+  --manual-fov 0.2
+```
+
+Pixal3D inputs:
+
+- input: a single object-centric RGB/RGBA image
+- root: `weights/pixal3d`
+- sample image: `vendors/Pixal3D/assets/images/0_img.png`
+- output: `trace.json`; completed MLX intermediate boundaries write NPZ artifacts next to the trace
+
+Script defaults:
+
+- pipeline type: `1024_cascade`, the recommended Apple Silicon default
+- seed: `42`
+- max tokens: `49152`
+- manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
+- current blocker: full Pixal3D DINOv3 image hidden-state extraction and downstream checkpoint execution are still under implementation
+
 ### LiTo
 
 Run checkpoint-backed Apple LiTo image-to-3DGS generation:
