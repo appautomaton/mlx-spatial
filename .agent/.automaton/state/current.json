@@ -1,7 +1,6 @@
 {
-  "active_change": "2026-05-24-docs-coherence-cleanup",
+  "active_change": "2026-05-26-mlx-spatial-mapanything-release-readiness",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-24-docs-coherence-cleanup/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-24-docs-coherence-cleanup/PLAN.md",
-  "engineering_review": "approved"
+  "canonical_spec": ".agent/work/2026-05-26-mlx-spatial-mapanything-release-readiness/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-mlx-spatial-mapanything-release-readiness/PLAN.md"
 }
