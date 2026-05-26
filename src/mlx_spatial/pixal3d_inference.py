@@ -11,7 +11,8 @@ import mlx.core as mx
 from PIL import Image, UnidentifiedImageError
 
 from .model_assets import DINOv3_VITL16_ASSETS
-from .mlx_memory import mlx_memory_snapshot
+from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot
+from .ovoxel import flexi_dual_grid_fields_to_mesh
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
 from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_select_hr_coordinates, pixal3d_stage_plan
 from .pixal3d_export import (
@@ -22,6 +23,7 @@ from .pixal3d_export import (
     write_pixal3d_sparse_structure_npz,
     write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
+    write_pixal3d_textured_glb,
 )
 from .pixal3d_projection import (
     PIXAL3D_DINOV3_EMBED_DIM,
@@ -44,6 +46,13 @@ from .trellis2_dinov3 import (
     inspect_dinov3_assets,
 )
 from .trellis2_forward import prepare_dinov3_image_tensor, sparse_structure_target_resolution
+from .trellis2_export import (
+    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
+    TRELLIS2_TEXTURE_BAKE_BACKENDS,
+    TRELLIS2_XATLAS_AUTO_FACE_GUARD,
+    bake_trellis2_texture_fields_mac_native,
+    postprocess_trellis2_mesh_for_glb,
+)
 from .trellis2_sparse_structure import (
     probe_sparse_structure_decoder_boundary,
     probe_sparse_structure_forward_boundary,
@@ -58,6 +67,9 @@ PIXAL3D_PIPELINE_TYPES = ("1024_cascade", "1536_cascade")
 PIXAL3D_DEFAULT_DINO_ROOT = DINOv3_VITL16_ASSETS.root_hint
 PIXAL3D_DEFAULT_SEED = 42
 PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
+PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
+PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
+PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
 
 Pixal3DStageStatus = Literal["ready", "blocked", "unimplemented"]
 
@@ -121,6 +133,11 @@ class Pixal3DInferencePipeline:
         seed: int = PIXAL3D_DEFAULT_SEED,
         max_num_tokens: int = PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
         dino_root: str | Path | None = None,
+        texture_size: int = PIXAL3D_DEFAULT_TEXTURE_SIZE,
+        glb_target_faces: int = PIXAL3D_DEFAULT_GLB_TARGET_FACES,
+        xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
+        xatlas_parallel_chunks: int = 0,
+        texture_bake_backend: str = PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
         projection_hidden_states: mx.array | None = None,
         shape_lr_naf_feature_map: mx.array | None = None,
         shape_hr_naf_feature_map: mx.array | None = None,
@@ -135,6 +152,13 @@ class Pixal3DInferencePipeline:
         timings: dict[str, float] = {}
         metadata = {
             "memory_before": mlx_memory_snapshot().as_dict(),
+            "export_options": {
+                "texture_size": int(texture_size),
+                "glb_target_faces": int(glb_target_faces),
+                "xatlas_face_guard": xatlas_face_guard,
+                "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
+                "texture_bake_backend": texture_bake_backend,
+            },
         }
         started = time.perf_counter()
         mx.random.seed(seed)
@@ -152,6 +176,34 @@ class Pixal3DInferencePipeline:
                 "validate Pixal3D pipeline type",
                 f"unsupported pipeline_type={pipeline_type!r}",
                 {"supported": PIXAL3D_PIPELINE_TYPES},
+            )
+
+        export_guard_error = _validate_pixal3d_export_guards(
+            texture_size=texture_size,
+            glb_target_faces=glb_target_faces,
+            xatlas_parallel_chunks=xatlas_parallel_chunks,
+            texture_bake_backend=texture_bake_backend,
+        )
+        if export_guard_error is not None:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D export options",
+                export_guard_error,
+                {
+                    "texture_size": texture_size,
+                    "glb_target_faces": glb_target_faces,
+                    "xatlas_parallel_chunks": xatlas_parallel_chunks,
+                    "texture_bake_backend": texture_bake_backend,
+                    "supported_texture_bake_backends": TRELLIS2_TEXTURE_BAKE_BACKENDS,
+                },
+                metadata=metadata,
             )
 
         if not image_path.is_file():
@@ -1317,32 +1369,144 @@ class Pixal3DInferencePipeline:
             decode_artifacts = (*shape_decode_artifacts, texture_decoder_artifact.path)
             metadata["artifact_paths"] = list(decode_artifacts)
             metadata["texture_decoder_artifact"] = texture_decoder_artifact
+            clear_mlx_cache()
+
+            try:
+                mesh = flexi_dual_grid_fields_to_mesh(
+                    shape_decode.coordinates,
+                    shape_decode.fields,
+                    grid_size=hr_selection.actual_hr_resolution,
+                )
+                postprocess_result = postprocess_trellis2_mesh_for_glb(mesh, target_faces=glb_target_faces)
+                baked_texture = bake_trellis2_texture_fields_mac_native(
+                    postprocess_result.mesh,
+                    texture_decode.coordinates,
+                    texture_decode.attributes,
+                    decode_resolution=hr_selection.actual_hr_resolution,
+                    texture_size=texture_size,
+                    xatlas_face_guard=xatlas_face_guard,
+                    xatlas_parallel_chunks=xatlas_parallel_chunks,
+                    texture_bake_backend=texture_bake_backend,
+                    projection_source_mesh=getattr(postprocess_result, "source_mesh", None),
+                )
+            except (ImportError, RuntimeError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "mesh-export",
+                    "extract Pixal3D FlexiDualGrid mesh and bake decoded PBR voxels",
+                    str(error),
+                    {
+                        "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
+                        "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
+                        "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
+                        "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
+                        "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
+                        "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
+                        "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                        "texture_size": texture_size,
+                        "glb_target_faces": glb_target_faces,
+                        "xatlas_face_guard": xatlas_face_guard,
+                        "xatlas_parallel_chunks": xatlas_parallel_chunks,
+                        "texture_bake_backend": texture_bake_backend,
+                    },
+                    metadata=metadata,
+                    artifacts=decode_artifacts,
+                )
+
+            metadata["mesh_export"] = {
+                "source_mesh_vertices": int(mesh.vertices.shape[0]),
+                "source_mesh_faces": int(mesh.faces.shape[0]),
+                "postprocess_stats": postprocess_result.stats,
+                "baked_vertices_shape": tuple(int(dim) for dim in baked_texture.vertices.shape),
+                "baked_faces_shape": tuple(int(dim) for dim in baked_texture.faces.shape),
+                "baked_uv_shape": tuple(int(dim) for dim in baked_texture.uvs.shape),
+                "texture_size": int(baked_texture.texture_size),
+                "voxel_count": int(baked_texture.voxel_count),
+                "coverage_ratio": float(baked_texture.coverage_ratio),
+                "raw_coverage_ratio": float(baked_texture.raw_coverage_ratio),
+                "bake_backend": baked_texture.backend,
+                "unwrap_backend": baked_texture.unwrap_backend,
+                "unwrap_chunks": baked_texture.unwrap_chunks,
+                "unwrap_chart_count": baked_texture.unwrap_chart_count,
+                "unwrap_utilization": float(baked_texture.unwrap_utilization),
+                "xatlas_face_guard": baked_texture.xatlas_face_guard,
+                "xatlas_face_guard_mode": baked_texture.xatlas_face_guard_mode,
+                "sampled_texel_count": baked_texture.sampled_texel_count,
+                "missing_texel_count": baked_texture.missing_texel_count,
+                "out_of_grid_texel_count": baked_texture.out_of_grid_texel_count,
+                "source_projection_used": baked_texture.source_projection_used,
+                "source_projection_detail": baked_texture.source_projection_detail,
+            }
+            completed.append("mesh-export")
+
+            try:
+                glb_artifact = write_pixal3d_textured_glb(
+                    baked_texture,
+                    output_path,
+                    metadata={
+                        "pipeline_type": pipeline_type,
+                        "manual_fov": manual_fov,
+                        "seed": seed,
+                        "texture_size": int(baked_texture.texture_size),
+                        "coverage_ratio": float(baked_texture.coverage_ratio),
+                        "raw_coverage_ratio": float(baked_texture.raw_coverage_ratio),
+                        "bake_backend": baked_texture.backend,
+                        "unwrap_backend": baked_texture.unwrap_backend,
+                        "shape_decoder_artifact": str(shape_decoder_artifact.path),
+                        "texture_decoder_artifact": str(texture_decoder_artifact.path),
+                    },
+                )
+            except (OSError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "glb-export",
+                    "write Pixal3D textured GLB",
+                    str(error),
+                    {
+                        "output_path": str(output_path),
+                        "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
+                        "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
+                    },
+                    metadata=metadata,
+                    artifacts=decode_artifacts,
+                )
+
+            completed.append("artifact:textured_glb")
+            final_artifacts = (*decode_artifacts, glb_artifact.path)
+            metadata["artifact_paths"] = list(final_artifacts)
+            metadata["textured_glb_artifact"] = glb_artifact
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
             metadata["timings_sec"] = timings
-            return self._blocked(
-                image_path,
-                completed,
-                pipeline_type,
-                manual_fov,
-                seed,
-                max_num_tokens,
-                output_path,
-                "mesh-extraction",
-                "extract Pixal3D FlexiDualGrid mesh and GLB/PBR payload",
-                "decoded shape fields and texture PBR voxels completed; Pixal3D mesh extraction, PBR baking, and GLB export are not wired into this runtime yet",
-                {
-                    "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
-                    "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
-                    "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
-                    "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
-                    "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
-                    "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
-                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
-                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
-                    "next_target": "wire Pixal3D FlexiDualGrid mesh extraction, PBR baking, and GLB export",
-                },
-                metadata=metadata,
-                artifacts=decode_artifacts,
+            return Pixal3DGenerationResult(
+                trace=Pixal3DInferenceTrace(
+                    root=self.root,
+                    image_path=image_path,
+                    completed_stages=tuple(completed),
+                    pipeline_type=pipeline_type,
+                    manual_fov=manual_fov,
+                    seed=seed,
+                    max_num_tokens=max_num_tokens,
+                    output_path=output_path,
+                    blocker=None,
+                    metadata=metadata,
+                ),
+                artifacts=final_artifacts,
             )
         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
         metadata["timings_sec"] = timings
@@ -1414,6 +1578,24 @@ def _apply_pixal3d_slat_normalization(features: mx.array, normalization: object,
     mean = mx.array(mean_values, dtype=mx.float32)[None, :]
     std = mx.array(std_values, dtype=mx.float32)[None, :]
     return features.astype(mx.float32) * std + mean
+
+
+def _validate_pixal3d_export_guards(
+    *,
+    texture_size: int,
+    glb_target_faces: int,
+    xatlas_parallel_chunks: int,
+    texture_bake_backend: str,
+) -> str | None:
+    if texture_size <= 0:
+        return f"texture_size must be positive, got {texture_size}"
+    if glb_target_faces <= 0:
+        return f"glb_target_faces must be positive, got {glb_target_faces}"
+    if xatlas_parallel_chunks < 0:
+        return f"xatlas_parallel_chunks must be non-negative, got {xatlas_parallel_chunks}"
+    if texture_bake_backend not in TRELLIS2_TEXTURE_BAKE_BACKENDS:
+        return f"texture_bake_backend must be one of {TRELLIS2_TEXTURE_BAKE_BACKENDS}, got {texture_bake_backend}"
+    return None
 
 
 def _remove_pixal3d_slat_normalization(features: mx.array, normalization: object, *, name: str) -> mx.array:

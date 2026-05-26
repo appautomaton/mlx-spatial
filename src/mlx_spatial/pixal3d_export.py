@@ -11,6 +11,7 @@ import mlx.core as mx
 import numpy as np
 
 from .pixal3d_projection import Pixal3DProjectionConditioning
+from .trellis2_export import Trellis2TextureBakeResult, trellis2_textured_glb_payload
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,16 @@ class Pixal3DTextureDecoderArtifact:
     batch_size: int
     decode_resolution: int | None
     voxel_size: float | None
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Pixal3DTexturedGLBArtifact:
+    """Written Pixal3D textured GLB artifact."""
+
+    path: Path
+    format: str
+    bytes_written: int
     metadata: dict[str, Any]
 
 
@@ -333,6 +344,39 @@ def write_pixal3d_texture_decoder_npz(
         batch_size=int(batch_size),
         decode_resolution=int(decode_resolution) if decode_resolution is not None else None,
         voxel_size=float(voxel_size) if voxel_size is not None else None,
+        metadata=payload_metadata,
+    )
+
+
+def write_pixal3d_textured_glb(
+    baked_texture: Trellis2TextureBakeResult,
+    output_path: str | Path,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Pixal3DTexturedGLBArtifact:
+    """Write a Pixal3D-labeled textured GLB using the shared GLB payload writer."""
+
+    path = Path(output_path)
+    if path.suffix.lower() != ".glb":
+        raise ValueError("textured Pixal3D exports require a .glb output path")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = trellis2_textured_glb_payload(
+        baked_texture,
+        generator="mlx-spatial Pixal3D",
+        mesh_name="Pixal3D_TexturedMesh",
+        material_name="Pixal3D_PBR",
+    )
+    path.write_bytes(payload)
+    payload_metadata = {
+        "stage": "textured_glb",
+        "format": "glb",
+        "bytes_written": int(path.stat().st_size),
+        **(metadata or {}),
+    }
+    return Pixal3DTexturedGLBArtifact(
+        path=path,
+        format="glb",
+        bytes_written=int(path.stat().st_size),
         metadata=payload_metadata,
     )
 

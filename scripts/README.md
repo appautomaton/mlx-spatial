@@ -194,18 +194,24 @@ Pixal3D inputs:
   after explicit NAF feature boundaries `shape_slat_lr.npz`,
   `shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and
   `texture_slat.npz`; compatible decoder assets then write
-  `shape_decoder_fields.npz` and `texture_decoder_pbr.npz` next to the trace
+  `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`; when decoded
+  tensors are available the runtime writes `model.glb`
 
 Script defaults:
 
 - pipeline type: `1024_cascade`, the recommended Apple Silicon default
 - seed: `42`
 - max tokens: `49152`
+- texture size: `1024`
+- GLB face target: `50000`
+- xatlas face guard: `auto`
+- xatlas parallel chunks: `0`
+- texture bake backend: `kdtree`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
 - current blocker: normal script runs stop at the missing MLX NAF feature path
   before shape SLat; lower-level runtime tests can pass explicit NAF features
   and reach the 512/1024 shape SLat, 1024 texture SLat, shared shape decoder,
-  and shared texture decoder before the mesh extraction/export boundary
+  shared texture decoder, and textured GLB export path
 
 ### LiTo
 

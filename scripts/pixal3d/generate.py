@@ -10,17 +10,18 @@ Input:
         vendors/Pixal3D/assets/images/0_img.png
 
 Output:
-    A textured GLB once the MLX model/export path is implemented. Until then,
-    the script writes trace.json and completed intermediate NPZ artifacts such
-    as sparse_projection.npz, sparse_structure.npz, shape_slat_lr.npz,
-    shape_slat_hr_coordinates.npz, shape_slat_hr.npz, texture_slat.npz,
-    shape_decoder_fields.npz, and texture_decoder_pbr.npz next to the trace as
-    each boundary becomes available.
+    A textured GLB once the lower-level MLX path reaches decoded shape/texture
+    tensors. The script also writes trace.json and completed intermediate NPZ
+    artifacts such as sparse_projection.npz, sparse_structure.npz,
+    shape_slat_lr.npz, shape_slat_hr_coordinates.npz, shape_slat_hr.npz,
+    texture_slat.npz, shape_decoder_fields.npz, and texture_decoder_pbr.npz
+    next to the trace as each boundary becomes available.
 
 Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,
     DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, seed 42,
-    max-num-tokens 49152, and manual FOV when avoiding MoGe auto-camera.
+    max-num-tokens 49152, texture size 1024, GLB target faces 50000,
+    kdtree texture baking, and manual FOV when avoiding MoGe auto-camera.
 """
 
 from __future__ import annotations
@@ -37,11 +38,15 @@ if SRC.is_dir():
 from mlx_spatial.pixal3d import main as pixal3d_main  # noqa: E402
 from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_DINO_ROOT,
+    PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
+    PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
 )
+from mlx_spatial.trellis2_export import TRELLIS2_TEXTURE_BAKE_BACKENDS  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,6 +78,36 @@ def main(argv: list[str] | None = None) -> int:
         default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
         help="Pixal3D sparse token guard; default: %(default)s",
     )
+    parser.add_argument(
+        "--texture-size",
+        type=int,
+        default=PIXAL3D_DEFAULT_TEXTURE_SIZE,
+        help="baked GLB texture resolution; default: %(default)s",
+    )
+    parser.add_argument(
+        "--glb-target-faces",
+        type=int,
+        default=PIXAL3D_DEFAULT_GLB_TARGET_FACES,
+        help="mesh postprocess face target before GLB export; default: %(default)s",
+    )
+    parser.add_argument(
+        "--xatlas-face-guard",
+        type=_parse_xatlas_face_guard,
+        default="auto",
+        help="maximum faces allowed into xatlas unwrap, or 'auto'; default: %(default)s",
+    )
+    parser.add_argument(
+        "--xatlas-parallel-chunks",
+        type=int,
+        default=0,
+        help="split xatlas unwrap into chunks; default: %(default)s",
+    )
+    parser.add_argument(
+        "--texture-bake-backend",
+        choices=TRELLIS2_TEXTURE_BAKE_BACKENDS,
+        default=PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
+        help="texture voxel sampling backend for GLB export; default: %(default)s",
+    )
     parser.add_argument("--trace-output", type=Path, help="trace JSON path; default: next to output")
     args = parser.parse_args(argv)
 
@@ -87,6 +122,16 @@ def main(argv: list[str] | None = None) -> int:
         str(args.seed),
         "--max-num-tokens",
         str(args.max_num_tokens),
+        "--texture-size",
+        str(args.texture_size),
+        "--glb-target-faces",
+        str(args.glb_target_faces),
+        "--xatlas-face-guard",
+        str(args.xatlas_face_guard),
+        "--xatlas-parallel-chunks",
+        str(args.xatlas_parallel_chunks),
+        "--texture-bake-backend",
+        args.texture_bake_backend,
         "--dino-root",
         str(args.dino_root),
     ]
@@ -99,6 +144,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.trace_output is not None:
         cli_args.extend(["--trace-output", str(args.trace_output)])
     return pixal3d_main(cli_args)
+
+
+def _parse_xatlas_face_guard(value: str) -> int | str:
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return "auto"
+    parsed = int(normalized)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("--xatlas-face-guard must be 'auto' or a positive integer")
+    return parsed
 
 
 if __name__ == "__main__":

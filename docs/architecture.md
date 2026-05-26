@@ -126,11 +126,11 @@ available, runs the 512 shape SLat probe when NAF-upsampled features are
 provided, upsamples guarded HR coordinates through the shared shape decoder
 helper, runs the 1024 shape SLat probe when HR NAF features are provided,
 runs the 1024 texture SLat probe when texture NAF features are provided, runs
-shared shape/texture decoder execution, records cascade stage plans, and writes
-trace/NPZ intermediate artifacts through decoded shape fields and texture PBR
-voxels. Normal CLI runs still need the MLX NAF feature path before shape SLat
-can run; Pixal3D mesh extraction, PBR baking, and textured GLB export are still
-blocked.
+shared shape/texture decoder execution, reuses shared mesh extraction and
+texture baking, records cascade stage plans, and writes trace/NPZ intermediate
+artifacts plus a Pixal3D-labeled textured GLB after decoded tensors are
+available. Normal CLI runs still need the MLX NAF feature path before shape
+SLat can run.
 
 Main modules:
 
@@ -138,14 +138,14 @@ Main modules:
 - `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
 - `pixal3d_camera.py`: upstream-compatible manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
 - `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and NAF blocker.
-- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, shape-decoder, and texture-decoder NPZ artifact writers.
-- `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, and blockers.
+- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, shape-decoder, texture-decoder, and textured-GLB artifact writers.
+- `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, export settings, and blockers.
 - `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
 
-Pixal3D reuses `trellis2_sparse_structure.py`, `trellis2_slat.py`, and
-`trellis2_decode.py` for shared flow and decoder math, but only through
-config-gated paths so existing TRELLIS.2 checkpoints stay on the original
-cross-attention and decode behavior.
+Pixal3D reuses `trellis2_sparse_structure.py`, `trellis2_slat.py`,
+`trellis2_decode.py`, and `trellis2_export.py` for shared flow, decoder, and
+export math, but only through config-gated or caller-labeled paths so existing
+TRELLIS.2 checkpoints and GLB metadata stay on their original behavior.
 
 ## CLI And Script Split
 

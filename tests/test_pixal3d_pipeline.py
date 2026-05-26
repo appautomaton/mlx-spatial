@@ -1,12 +1,17 @@
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
 from PIL import Image
 
+import mlx_spatial.pixal3d_inference as pixal3d_inference
+from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
+from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_decode_root,
@@ -455,7 +460,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
 
     assert not result.ready
     assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "mesh-extraction"
+    assert result.trace.blocker.stage == "mesh-export"
     assert result.trace.completed_stages == (
         "input-image",
         "asset-validation",
@@ -508,6 +513,83 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
     assert result.trace.blocker.metadata["texture_decoder_attributes_shape"] == (4096, 6)
 
 
+def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+    naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
+    calls = _patch_pixal3d_export_fixtures(monkeypatch)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output=tmp_path / "out" / "pixal3d.glb",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        shape_lr_naf_feature_map=naf,
+        shape_hr_naf_feature_map=naf,
+        texture_naf_feature_map=naf,
+        texture_size=16,
+        glb_target_faces=123,
+        xatlas_face_guard=456,
+        xatlas_parallel_chunks=1,
+        texture_bake_backend="kdtree",
+    )
+
+    assert result.ready
+    assert result.trace.blocker is None
+    assert result.trace.completed_stages[-4:] == (
+        "texture-decoder",
+        "artifact:texture_decoder_pbr",
+        "mesh-export",
+        "artifact:textured_glb",
+    )
+    assert result.trace.output_path == tmp_path / "out" / "pixal3d.glb"
+    assert result.artifacts[-1] == tmp_path / "out" / "pixal3d.glb"
+    assert result.artifacts[-1].read_bytes() == b"glb"
+    assert result.trace.metadata["mesh_export"]["source_mesh_vertices"] == 4
+    assert result.trace.metadata["mesh_export"]["source_mesh_faces"] == 2
+    assert result.trace.metadata["mesh_export"]["texture_size"] == 16
+    assert result.trace.metadata["mesh_export"]["bake_backend"] == "xatlas-kdtree"
+    assert result.trace.metadata["textured_glb_artifact"].bytes_written == 3
+    assert calls["mesh_grid_size"] == 1024
+    assert calls["postprocess_target_faces"] == 123
+    assert calls["bake_texture_size"] == 16
+    assert calls["bake_xatlas_face_guard"] == 456
+    assert calls["bake_xatlas_parallel_chunks"] == 1
+    assert calls["bake_texture_bake_backend"] == "kdtree"
+
+
+def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+    naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
+    _patch_pixal3d_export_fixtures(monkeypatch, writer_failure=OSError("fixture writer failure"))
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output=tmp_path / "out" / "pixal3d.glb",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        shape_lr_naf_feature_map=naf,
+        shape_hr_naf_feature_map=naf,
+        texture_naf_feature_map=naf,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "glb-export"
+    assert "fixture writer failure" in result.trace.blocker.reason
+    assert [path.name for path in result.artifacts][-2:] == ["shape_decoder_fields.npz", "texture_decoder_pbr.npz"]
+    assert result.trace.completed_stages[-3:] == ("texture-decoder", "artifact:texture_decoder_pbr", "mesh-export")
+
+
 def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():
     coords = mx.array([[0, index, index, index] for index in range(64)], dtype=mx.int32)
 
@@ -516,3 +598,102 @@ def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():
     assert plan.actual_hr_resolution == 1024
     assert plan.actual_hr_grid_resolution == 64
     assert plan.hr_token_count is not None
+
+
+def _patch_pixal3d_export_fixtures(monkeypatch, *, writer_failure: Exception | None = None):
+    calls = {}
+    mesh = FlexibleDualGridMesh(
+        vertices=np.array(
+            [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0], [0.5, 0.5, 0.0]],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64),
+    )
+
+    def fake_mesh_from_fields(coordinates, fields, *, grid_size):
+        calls["mesh_coordinates_shape"] = tuple(int(dim) for dim in coordinates.shape)
+        calls["mesh_fields_shape"] = tuple(int(dim) for dim in fields.shape)
+        calls["mesh_grid_size"] = grid_size
+        return mesh
+
+    def fake_postprocess(source_mesh, *, target_faces):
+        calls["postprocess_mesh"] = source_mesh
+        calls["postprocess_target_faces"] = target_faces
+        return SimpleNamespace(
+            mesh=source_mesh,
+            source_mesh=source_mesh,
+            stats=SimpleNamespace(
+                original_vertices=4,
+                original_faces=2,
+                final_vertices=4,
+                final_faces=2,
+            ),
+        )
+
+    def fake_bake(
+        bake_mesh,
+        texture_coordinates,
+        texture_attributes,
+        *,
+        decode_resolution,
+        texture_size,
+        xatlas_face_guard,
+        xatlas_parallel_chunks,
+        texture_bake_backend,
+        projection_source_mesh,
+    ):
+        calls["bake_mesh"] = bake_mesh
+        calls["bake_texture_coordinates_shape"] = tuple(int(dim) for dim in texture_coordinates.shape)
+        calls["bake_texture_attributes_shape"] = tuple(int(dim) for dim in texture_attributes.shape)
+        calls["bake_decode_resolution"] = decode_resolution
+        calls["bake_texture_size"] = texture_size
+        calls["bake_xatlas_face_guard"] = xatlas_face_guard
+        calls["bake_xatlas_parallel_chunks"] = xatlas_parallel_chunks
+        calls["bake_texture_bake_backend"] = texture_bake_backend
+        calls["bake_projection_source_mesh"] = projection_source_mesh
+        return Trellis2TextureBakeResult(
+            vertices=mesh.vertices,
+            faces=mesh.faces,
+            uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32),
+            base_color_rgba=np.zeros((texture_size, texture_size, 4), dtype=np.uint8),
+            metallic_roughness=np.zeros((texture_size, texture_size, 3), dtype=np.uint8),
+            coverage_mask=np.ones((texture_size, texture_size), dtype=bool),
+            texture_size=texture_size,
+            voxel_count=int(texture_coordinates.shape[0]),
+            k_neighbors=4,
+            origin=(-0.5, -0.5, -0.5),
+            voxel_size=1.0 / float(decode_resolution),
+            backend=f"xatlas-{texture_bake_backend}",
+            raw_coverage_ratio=0.75,
+            unwrap_backend="xatlas-global",
+            unwrap_seconds=0.01,
+            unwrap_chunks=xatlas_parallel_chunks,
+            unwrap_chart_count=2,
+            unwrap_utilization=0.5,
+            xatlas_face_guard=int(xatlas_face_guard) if isinstance(xatlas_face_guard, int) else 999,
+            xatlas_face_guard_mode="manual",
+            sampled_texel_count=texture_size * texture_size,
+            missing_texel_count=0,
+            out_of_grid_texel_count=0,
+            source_projection_used=False,
+            source_projection_detail="source mesh matches export mesh; projection not needed",
+        )
+
+    def fake_write_glb(baked_texture, output_path, *, metadata=None):
+        if writer_failure is not None:
+            raise writer_failure
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"glb")
+        return SimpleNamespace(
+            path=path,
+            format="glb",
+            bytes_written=3,
+            metadata={"stage": "textured_glb", **(metadata or {})},
+        )
+
+    monkeypatch.setattr(pixal3d_inference, "flexi_dual_grid_fields_to_mesh", fake_mesh_from_fields)
+    monkeypatch.setattr(pixal3d_inference, "postprocess_trellis2_mesh_for_glb", fake_postprocess)
+    monkeypatch.setattr(pixal3d_inference, "bake_trellis2_texture_fields_mac_native", fake_bake)
+    monkeypatch.setattr(pixal3d_inference, "write_pixal3d_textured_glb", fake_write_glb)
+    return calls

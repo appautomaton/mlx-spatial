@@ -1,4 +1,5 @@
 import json
+import struct
 
 import mlx.core as mx
 import numpy as np
@@ -12,8 +13,10 @@ from mlx_spatial.pixal3d_export import (
     write_pixal3d_sparse_structure_npz,
     write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
+    write_pixal3d_textured_glb,
 )
 from mlx_spatial.pixal3d_projection import Pixal3DProjectionConditioning, pixal3d_projection_stage_config
+from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
 
 
 def test_write_pixal3d_projection_npz_records_features_and_metadata(tmp_path):
@@ -220,3 +223,49 @@ def test_write_pixal3d_texture_decoder_npz_records_pbr_voxels_and_metadata(tmp_p
     assert metadata["stage"] == "texture_decoder_pbr"
     assert metadata["attribute_channels"] == ["base_color_r", "base_color_g", "base_color_b", "metallic", "roughness", "alpha"]
     assert metadata["pipeline_type"] == "1024_cascade"
+
+
+def test_write_pixal3d_textured_glb_uses_pixal3d_document_labels(tmp_path):
+    baked = Trellis2TextureBakeResult(
+        vertices=np.array(
+            [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        base_color_rgba=np.zeros((4, 4, 4), dtype=np.uint8),
+        metallic_roughness=np.zeros((4, 4, 3), dtype=np.uint8),
+        coverage_mask=np.ones((4, 4), dtype=bool),
+        texture_size=4,
+        voxel_count=1,
+        k_neighbors=1,
+        origin=(-0.5, -0.5, -0.5),
+        voxel_size=0.25,
+    )
+
+    artifact = write_pixal3d_textured_glb(
+        baked,
+        tmp_path / "model.glb",
+        metadata={"pipeline_type": "1024_cascade"},
+    )
+
+    assert artifact.path.is_file()
+    assert artifact.format == "glb"
+    assert artifact.bytes_written > 0
+    assert artifact.metadata["stage"] == "textured_glb"
+    assert artifact.metadata["pipeline_type"] == "1024_cascade"
+    document = _glb_json(artifact.path.read_bytes())
+    assert document["asset"]["generator"] == "mlx-spatial Pixal3D"
+    assert document["nodes"][0]["name"] == "Pixal3D_TexturedMesh"
+    assert document["materials"][0]["name"] == "Pixal3D_PBR"
+
+
+def _glb_json(payload: bytes) -> dict:
+    magic, version, total_length = struct.unpack_from("<III", payload, 0)
+    assert magic == 0x46546C67
+    assert version == 2
+    assert total_length == len(payload)
+    json_length, json_type = struct.unpack_from("<I4s", payload, 12)
+    assert json_type == b"JSON"
+    document = payload[20 : 20 + json_length].rstrip(b" ")
+    return json.loads(document.decode("utf-8"))

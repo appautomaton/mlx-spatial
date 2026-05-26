@@ -162,8 +162,11 @@ from .pixal3d_assets import (
 )
 from .pixal3d_inference import (
     PIXAL3D_DEFAULT_DINO_ROOT,
+    PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
+    PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
     Pixal3DGenerationResult,
@@ -196,6 +199,7 @@ from .pixal3d_export import (
     Pixal3DShapeSLatArtifact,
     Pixal3DTextureDecoderArtifact,
     Pixal3DTextureSLatArtifact,
+    Pixal3DTexturedGLBArtifact,
     Pixal3DSparseStructureArtifact,
     write_pixal3d_shape_decoder_npz,
     write_pixal3d_shape_hr_coordinates_npz,
@@ -204,6 +208,7 @@ from .pixal3d_export import (
     write_pixal3d_sparse_structure_npz,
     write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
+    write_pixal3d_textured_glb,
 )
 from .pixal3d_parity import (
     PIXAL3D_PARITY_BUNDLE_VERSION,
@@ -671,9 +676,12 @@ __all__ = [
     "PIXAL3D_ASSETS",
     "PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS",
     "PIXAL3D_DEFAULT_DINO_ROOT",
+    "PIXAL3D_DEFAULT_GLB_TARGET_FACES",
     "PIXAL3D_DEFAULT_MAX_NUM_TOKENS",
     "PIXAL3D_DEFAULT_ROOT",
     "PIXAL3D_DEFAULT_SEED",
+    "PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND",
+    "PIXAL3D_DEFAULT_TEXTURE_SIZE",
     "PIXAL3D_DINOV3_EMBED_DIM",
     "PIXAL3D_CASCADE_LR_RESOLUTION",
     "PIXAL3D_HR_RESOLUTION_STEP",
@@ -712,6 +720,7 @@ __all__ = [
     "Pixal3DStagePlan",
     "Pixal3DTextureDecoderArtifact",
     "Pixal3DTextureSLatArtifact",
+    "Pixal3DTexturedGLBArtifact",
     "scatter_sparse_features",
     "sparse_conv_map",
     "RMBG2_ASSETS",
@@ -1063,4 +1072,5 @@ __all__ = [
     "write_pixal3d_sparse_structure_npz",
     "write_pixal3d_texture_decoder_npz",
     "write_pixal3d_texture_slat_npz",
+    "write_pixal3d_textured_glb",
 ]
