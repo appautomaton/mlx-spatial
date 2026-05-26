@@ -23,16 +23,18 @@ Implemented now:
   quantization, and HR coordinate artifact writing
 - coordinate-indexed 1024 shape SLat probing when explicit HR NAF-upsampled
   features are supplied to the lower-level runtime
+- coordinate-indexed 1024 texture SLat probing when explicit texture
+  NAF-upsampled features are supplied to the lower-level runtime
 - cascade stage planning for `1024_cascade` and `1536_cascade`
 - trace output, `sparse_projection.npz`, `sparse_structure.npz`, and
-  shape SLat intermediate artifacts as each MLX boundary completes
+  shape/texture SLat intermediate artifacts as each MLX boundary completes
 
 Still blocked:
 
 - normal CLI runs still need an MLX NAF-equivalent feature path before shape
   SLat can run without explicit lower-level test features
-- texture projection/NAF, texture SLat execution, full shape/texture decode,
-  PBR baking, mesh extraction, and textured GLB export are not release-ready
+- full shape/texture decode, PBR baking, mesh extraction, and textured GLB
+  export are not release-ready
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
 
 ## Assets
@@ -92,6 +94,7 @@ outputs/pixal3d/sample/
   shape_slat_lr.npz             # written only after LR NAF features are supplied
   shape_slat_hr_coordinates.npz # written after compatible shape decoder upsample
   shape_slat_hr.npz             # written only after HR NAF features are supplied
+  texture_slat.npz              # written only after texture NAF features are supplied
 ```
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
@@ -103,8 +106,8 @@ writes `sparse_structure.npz`. Normal CLI runs then stop at
 explicit lower-level NAF features, the runtime can probe 512 shape SLat, write
 `shape_slat_lr.npz`, upsample guarded HR coordinates with the shared shape
 decoder helper, write `shape_slat_hr_coordinates.npz`, optionally probe 1024
-shape SLat and write `shape_slat_hr.npz`, then stop at the texture projection
-boundary.
+shape SLat and write `shape_slat_hr.npz`, optionally probe 1024 texture SLat
+and write `texture_slat.npz`, then stop at the latent decode/export boundary.
 
 ## Settings
 
@@ -130,7 +133,7 @@ Runtime modules are Torch-free:
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
   coordinate-indexed feature selection, and NAF blocker
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR
-  coordinate, and shape SLat NPZ artifact writing
+  coordinate, shape SLat, and texture SLat NPZ artifact writing
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction

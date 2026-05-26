@@ -19,6 +19,7 @@ from .pixal3d_export import (
     write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_sparse_structure_npz,
+    write_pixal3d_texture_slat_npz,
 )
 from .pixal3d_projection import (
     PIXAL3D_DINOV3_EMBED_DIM,
@@ -42,7 +43,7 @@ from .trellis2_sparse_structure import (
     read_sparse_structure_decoder_config,
     read_sparse_structure_flow_config,
 )
-from .trellis2_slat import probe_shape_slat_forward_boundary, read_slat_flow_config
+from .trellis2_slat import probe_shape_slat_forward_boundary, probe_texture_slat_forward_boundary, read_slat_flow_config
 
 
 PIXAL3D_RECOMMENDED_PIPELINE_TYPE = "1024_cascade"
@@ -116,6 +117,7 @@ class Pixal3DInferencePipeline:
         projection_hidden_states: mx.array | None = None,
         shape_lr_naf_feature_map: mx.array | None = None,
         shape_hr_naf_feature_map: mx.array | None = None,
+        texture_naf_feature_map: mx.array | None = None,
     ) -> Pixal3DGenerationResult:
         """Validate Pixal3D inputs and return the current execution boundary."""
 
@@ -941,6 +943,195 @@ class Pixal3DInferencePipeline:
                 shape_hr_slat_artifact.path,
             ]
             metadata["shape_slat_hr_artifact"] = shape_hr_slat_artifact
+            texture_stage = pixal3d_stage_with_grid_resolution(
+                pixal3d_projection_stage_config("tex_1024"),
+                hr_selection.actual_hr_grid_resolution,
+            )
+            texture_conditioning = build_pixal3d_projection_conditioning(
+                projection_hidden_states,
+                texture_stage,
+                camera_angle_x=camera.camera_angle_x,
+                distance=camera.distance,
+                mesh_scale=camera.mesh_scale,
+                naf_feature_map=texture_naf_feature_map,
+            )
+            metadata["texture_projection"] = {
+                "ready": texture_conditioning.ready,
+                "global_shape": tuple(int(dim) for dim in texture_conditioning.global_tokens.shape)
+                if texture_conditioning.global_tokens is not None
+                else None,
+                "projected_shape": tuple(int(dim) for dim in texture_conditioning.projected_features.shape)
+                if texture_conditioning.projected_features is not None
+                else None,
+                "projected_lr_shape": tuple(int(dim) for dim in texture_conditioning.projected_lr_features.shape)
+                if texture_conditioning.projected_lr_features is not None
+                else None,
+                "blocker": texture_conditioning.blocker,
+            }
+            if texture_conditioning.blocker is not None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "texture-projection-conditioning",
+                    texture_conditioning.blocker.operation,
+                    texture_conditioning.blocker.reason,
+                    texture_conditioning.blocker.metadata,
+                    metadata=metadata,
+                    artifacts=(
+                        projection_artifact.path,
+                        sparse_structure_artifact.path,
+                        shape_slat_artifact.path,
+                        shape_hr_coordinates_artifact.path,
+                        shape_hr_slat_artifact.path,
+                    ),
+                )
+            completed.append("projection-conditioning:tex_1024")
+            timings["projection-conditioning:tex_1024"] = time.perf_counter() - started
+
+            assert texture_conditioning.projected_features is not None
+            assert texture_conditioning.global_tokens is not None
+            texture_projected = select_pixal3d_projected_features_at_coordinates(
+                texture_conditioning.projected_features,
+                hr_selection.coordinates,
+                grid_resolution=texture_conditioning.stage.grid_resolution,
+            )
+            metadata["texture_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in texture_projected.shape)
+
+            texture_slat_model = _pixal3d_model_asset(config.models, "tex_slat_flow_model_1024")
+            shape_hr_features_for_texture = _remove_pixal3d_slat_normalization(
+                shape_hr_features,
+                config.shape_slat_normalization,
+                name="shape_slat_hr",
+            )
+            metadata["texture_slat"] = {
+                "normalized_shape_feature_shape": tuple(int(dim) for dim in shape_hr_features_for_texture.shape),
+            }
+            try:
+                texture_slat_config = read_slat_flow_config(self.root, texture_slat_model.config_path)
+                texture_probe = probe_texture_slat_forward_boundary(
+                    self.root / texture_slat_model.checkpoint_path,
+                    texture_slat_config,
+                    hr_selection.coordinates,
+                    shape_hr_features_for_texture,
+                    conditioning={
+                        "global": texture_conditioning.global_tokens,
+                        "proj": texture_projected,
+                    },
+                    steps=config.texture_slat_sampler.steps,
+                    rescale_t=config.texture_slat_sampler.rescale_t,
+                    guidance_strength=config.texture_slat_sampler.guidance_strength,
+                    guidance_rescale=config.texture_slat_sampler.guidance_rescale,
+                    guidance_interval=config.texture_slat_sampler.guidance_interval,
+                    sigma_min=config.texture_slat_sampler.sigma_min,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "texture-slat-sampling",
+                    "run Pixal3D 1024 texture SLat FlowEuler cascade",
+                    str(error),
+                    {
+                        "config_path": texture_slat_model.config_path,
+                        "checkpoint_path": texture_slat_model.checkpoint_path,
+                    },
+                    metadata=metadata,
+                    artifacts=(
+                        projection_artifact.path,
+                        sparse_structure_artifact.path,
+                        shape_slat_artifact.path,
+                        shape_hr_coordinates_artifact.path,
+                        shape_hr_slat_artifact.path,
+                    ),
+                )
+
+            metadata["texture_slat"].update(
+                {
+                    "coordinate_shape": texture_probe.coordinate_shape,
+                    "shape_feature_shape": texture_probe.shape_feature_shape,
+                    "noise_feature_shape": texture_probe.noise_feature_shape,
+                    "concat_feature_shape": texture_probe.concat_feature_shape,
+                    "sampled_feature_shape": texture_probe.sampled_feature_shape,
+                    "completed_blocks": texture_probe.completed_blocks,
+                    "blocker_operation": texture_probe.blocker_operation,
+                    "blocker_detail": texture_probe.blocker_detail,
+                }
+            )
+            if texture_probe.sampled_features is None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "texture-slat-sampling",
+                    texture_probe.blocker_operation,
+                    texture_probe.blocker_detail,
+                    {
+                        "config_path": texture_slat_model.config_path,
+                        "checkpoint_path": texture_slat_model.checkpoint_path,
+                    },
+                    metadata=metadata,
+                    artifacts=(
+                        projection_artifact.path,
+                        sparse_structure_artifact.path,
+                        shape_slat_artifact.path,
+                        shape_hr_coordinates_artifact.path,
+                        shape_hr_slat_artifact.path,
+                    ),
+                )
+
+            texture_features = _apply_pixal3d_slat_normalization(
+                texture_probe.sampled_features,
+                config.texture_slat_normalization,
+                name="texture_slat",
+            )
+            texture_slat_artifact = write_pixal3d_texture_slat_npz(
+                artifact_dir / "texture_slat.npz",
+                hr_selection.coordinates,
+                texture_features,
+                metadata={
+                    "pipeline_type": pipeline_type,
+                    "manual_fov": manual_fov,
+                    "seed": seed,
+                    "texture_slat_model": texture_slat_model.key,
+                    "texture_slat_config_path": texture_slat_model.config_path,
+                    "texture_slat_checkpoint_path": texture_slat_model.checkpoint_path,
+                    "shape_slat_hr_artifact": str(shape_hr_slat_artifact.path),
+                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
+                    "blocker_next_target": "latent-decoding",
+                },
+            )
+            completed.append("texture-slat-sampling:1024")
+            completed.append("artifact:texture_slat")
+            metadata["artifact_paths"] = [
+                projection_artifact.path,
+                sparse_structure_artifact.path,
+                shape_slat_artifact.path,
+                shape_hr_coordinates_artifact.path,
+                shape_hr_slat_artifact.path,
+                texture_slat_artifact.path,
+            ]
+            metadata["texture_slat_artifact"] = texture_slat_artifact
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
             metadata["timings_sec"] = timings
             return self._blocked(
@@ -951,16 +1142,18 @@ class Pixal3DInferencePipeline:
                 seed,
                 max_num_tokens,
                 output_path,
-                "texture-projection-conditioning",
-                "build Pixal3D texture projected features",
-                "HR shape SLat completed; Pixal3D texture projection still needs an MLX NAF feature path",
+                "latent-decoding",
+                "decode Pixal3D shape and texture SLat into mesh/PBR payload",
+                "texture SLat completed; Pixal3D full shape/texture decode and GLB export are not wired into this runtime yet",
                 {
-                    "coordinates_shape": shape_hr_probe.coordinate_shape,
-                    "features_shape": tuple(int(dim) for dim in shape_hr_features.shape),
-                    "artifact_path": str(shape_hr_slat_artifact.path),
+                    "shape_coordinates_shape": shape_hr_probe.coordinate_shape,
+                    "shape_features_shape": tuple(int(dim) for dim in shape_hr_features.shape),
+                    "texture_coordinates_shape": texture_probe.coordinate_shape,
+                    "texture_features_shape": tuple(int(dim) for dim in texture_features.shape),
+                    "artifact_path": str(texture_slat_artifact.path),
                     "actual_hr_resolution": hr_selection.actual_hr_resolution,
                     "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
-                    "next_target": "wire Pixal3D texture projection conditioning and texture SLat sampler",
+                    "next_target": "wire Pixal3D shape/texture decode and GLB export",
                 },
                 metadata=metadata,
                 artifacts=(
@@ -969,6 +1162,7 @@ class Pixal3DInferencePipeline:
                     shape_slat_artifact.path,
                     shape_hr_coordinates_artifact.path,
                     shape_hr_slat_artifact.path,
+                    texture_slat_artifact.path,
                 ),
             )
         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
@@ -1041,6 +1235,20 @@ def _apply_pixal3d_slat_normalization(features: mx.array, normalization: object,
     mean = mx.array(mean_values, dtype=mx.float32)[None, :]
     std = mx.array(std_values, dtype=mx.float32)[None, :]
     return features.astype(mx.float32) * std + mean
+
+
+def _remove_pixal3d_slat_normalization(features: mx.array, normalization: object, *, name: str) -> mx.array:
+    feature_width = int(features.shape[-1])
+    mean_values = tuple(float(value) for value in getattr(normalization, "mean"))
+    std_values = tuple(float(value) for value in getattr(normalization, "std"))
+    if len(mean_values) != feature_width or len(std_values) != feature_width:
+        raise ValueError(
+            f"{name} normalization width mismatch: expected {feature_width}, "
+            f"got mean={len(mean_values)} std={len(std_values)}"
+        )
+    mean = mx.array(mean_values, dtype=mx.float32)[None, :]
+    std = mx.array(std_values, dtype=mx.float32)[None, :]
+    return (features.astype(mx.float32) - mean) / std
 
 
 def _resolve_output_path(

@@ -9,6 +9,7 @@ from mlx_spatial.pixal3d_export import (
     write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_sparse_structure_npz,
+    write_pixal3d_texture_slat_npz,
 )
 from mlx_spatial.pixal3d_projection import Pixal3DProjectionConditioning, pixal3d_projection_stage_config
 
@@ -136,3 +137,23 @@ def test_write_pixal3d_shape_hr_coordinates_npz_records_resolution_guard(tmp_pat
     assert metadata["coordinate_order"] == "batch,z,y,x"
     assert metadata["raw_upsampled_shape"] == [4, 4]
     assert metadata["token_count"] == 2
+
+
+def test_write_pixal3d_texture_slat_npz_records_coordinates_features_and_metadata(tmp_path):
+    artifact = write_pixal3d_texture_slat_npz(
+        tmp_path / "texture_slat.npz",
+        mx.array([[0, 0, 1, 1], [0, 1, 0, 1]], dtype=mx.int32),
+        mx.ones((2, 32), dtype=mx.float32),
+        metadata={"pipeline_type": "1024_cascade"},
+    )
+
+    assert artifact.path.is_file()
+    assert artifact.coordinates_shape == (2, 4)
+    assert artifact.features_shape == (2, 32)
+    payload = np.load(artifact.path)
+    assert payload["coordinates"].tolist() == [[0, 0, 1, 1], [0, 1, 0, 1]]
+    assert payload["features"].shape == (2, 32)
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["stage"] == "texture_slat"
+    assert metadata["coordinate_order"] == "batch,z,y,x"
+    assert metadata["pipeline_type"] == "1024_cascade"

@@ -125,10 +125,11 @@ extracts sparse decoder coordinates when compatible sparse decoder assets are
 available, runs the 512 shape SLat probe when NAF-upsampled features are
 provided, upsamples guarded HR coordinates through the shared shape decoder
 helper, runs the 1024 shape SLat probe when HR NAF features are provided,
-records cascade stage plans, and writes trace/NPZ intermediate artifacts. Normal
-CLI runs still need the MLX NAF feature path before shape SLat can run; texture
-SLat, full shape/texture decode, PBR bake, mesh extraction, and textured GLB
-export are still blocked.
+runs the 1024 texture SLat probe when texture NAF features are provided, records
+cascade stage plans, and writes trace/NPZ intermediate artifacts. Normal CLI
+runs still need the MLX NAF feature path before shape SLat can run; full
+shape/texture decode, PBR bake, mesh extraction, and textured GLB export are
+still blocked.
 
 Main modules:
 
@@ -136,7 +137,7 @@ Main modules:
 - `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
 - `pixal3d_camera.py`: upstream-compatible manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
 - `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and NAF blocker.
-- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, and shape-SLat NPZ artifact writers.
+- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, and texture-SLat NPZ artifact writers.
 - `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, and blockers.
 - `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
 

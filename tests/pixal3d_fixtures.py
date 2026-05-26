@@ -251,6 +251,69 @@ def write_fake_pixal3d_shape_hr_root(
     return root
 
 
+def write_fake_pixal3d_texture_slat_root(
+    root: Path,
+    *,
+    proj_in_channels: int = 3,
+    sparse_steps: int = 1,
+    shape_steps: int = 1,
+    texture_steps: int = 1,
+) -> Path:
+    write_fake_pixal3d_shape_hr_root(
+        root,
+        proj_in_channels=proj_in_channels,
+        sparse_steps=sparse_steps,
+        shape_steps=shape_steps,
+    )
+    (root / "pipeline.json").write_text(
+        json.dumps(
+            minimal_pixal3d_pipeline(
+                sparse_steps=sparse_steps,
+                shape_steps=shape_steps,
+                texture_steps=texture_steps,
+            )
+        ),
+        encoding="utf-8",
+    )
+    (root / "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json").write_text(
+        json.dumps(
+            {
+                "name": "ElasticSLatFlowModel",
+                "args": {
+                    "resolution": 64,
+                    "in_channels": 64,
+                    "out_channels": 32,
+                    "model_channels": 6,
+                    "cond_channels": proj_in_channels,
+                    "num_blocks": 1,
+                    "num_heads": 1,
+                    "mlp_ratio": 2.0,
+                    "pe_mode": "rope",
+                    "share_mod": True,
+                    "initialization": "scaled",
+                    "qk_rms_norm": True,
+                    "qk_rms_norm_cross": True,
+                    "image_attn_mode": "proj",
+                    "proj_in_channels": proj_in_channels * 2,
+                    "dtype": "bfloat16",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        _tiny_slat_checkpoint(
+            model_channels=6,
+            in_channels=64,
+            out_channels=32,
+            cond_channels=proj_in_channels,
+            proj_in_channels=proj_in_channels * 2,
+        ),
+        root / "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors",
+    )
+    return root
+
+
 def minimal_pixal3d_pipeline(*, sparse_steps: int = 12, shape_steps: int = 12, texture_steps: int = 12):
     return {
         "args": {
