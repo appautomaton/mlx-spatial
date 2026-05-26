@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-texture-slat-boundary",
+  "active_change": "2026-05-26-pixal3d-latent-decode-boundary",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-texture-slat-boundary/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-texture-slat-boundary/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-latent-decode-boundary/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-latent-decode-boundary/PLAN.md"
 }

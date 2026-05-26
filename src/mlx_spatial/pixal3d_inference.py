@@ -16,9 +16,11 @@ from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, 
 from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_select_hr_coordinates, pixal3d_stage_plan
 from .pixal3d_export import (
     write_pixal3d_projection_npz,
+    write_pixal3d_shape_decoder_npz,
     write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_sparse_structure_npz,
+    write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
 )
 from .pixal3d_projection import (
@@ -28,7 +30,12 @@ from .pixal3d_projection import (
     pixal3d_stage_with_grid_resolution,
     select_pixal3d_projected_features_at_coordinates,
 )
-from .trellis2_decode import read_structured_latent_decoder_config, run_shape_decoder_upsample_coordinates
+from .trellis2_decode import (
+    read_structured_latent_decoder_config,
+    run_shape_decoder_to_fields,
+    run_shape_decoder_upsample_coordinates,
+    run_texture_decoder_to_representation,
+)
 from .trellis2_dinov3 import (
     DINOv3_ACCESS_NOTE,
     DINOv3_VITL16_REPO_ID,
@@ -1132,6 +1139,184 @@ class Pixal3DInferencePipeline:
                 texture_slat_artifact.path,
             ]
             metadata["texture_slat_artifact"] = texture_slat_artifact
+            texture_slat_artifacts = (
+                projection_artifact.path,
+                sparse_structure_artifact.path,
+                shape_slat_artifact.path,
+                shape_hr_coordinates_artifact.path,
+                shape_hr_slat_artifact.path,
+                texture_slat_artifact.path,
+            )
+
+            try:
+                shape_decode = run_shape_decoder_to_fields(
+                    self.root / shape_decoder_model.checkpoint_path,
+                    shape_decoder_config,
+                    hr_selection.coordinates,
+                    shape_hr_features,
+                    decoder_token_limit=max_num_tokens,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "shape-decoder",
+                    "decode Pixal3D HR shape SLat into FlexiDualGrid fields",
+                    str(error),
+                    {
+                        "config_path": shape_decoder_model.config_path,
+                        "checkpoint_path": shape_decoder_model.checkpoint_path,
+                        "decoder_token_limit": max_num_tokens,
+                        "shape_coordinates_shape": tuple(int(dim) for dim in hr_selection.coordinates.shape),
+                        "shape_features_shape": tuple(int(dim) for dim in shape_hr_features.shape),
+                    },
+                    metadata=metadata,
+                    artifacts=texture_slat_artifacts,
+                )
+
+            metadata["shape_decoder"] = {
+                "shape_decoder_model": shape_decoder_model.key,
+                "shape_decoder_config_path": shape_decoder_model.config_path,
+                "shape_decoder_checkpoint_path": shape_decoder_model.checkpoint_path,
+                "coordinate_shape": shape_decode.probe.coordinate_shape,
+                "feature_shape": shape_decode.probe.feature_shape,
+                "decoder_output_coordinate_shape": shape_decode.probe.decoder_output_coordinate_shape,
+                "decoder_output_shape": shape_decode.probe.decoder_output_shape,
+                "completed_levels": shape_decode.probe.completed_levels,
+                "subdivision_shapes": shape_decode.probe.subdivision_shapes,
+                "decoder_token_limit": shape_decode.probe.reference_token_limit,
+            }
+            shape_decoder_artifact = write_pixal3d_shape_decoder_npz(
+                artifact_dir / "shape_decoder_fields.npz",
+                shape_decode.coordinates,
+                shape_decode.fields,
+                subdivisions=shape_decode.subdivisions,
+                metadata={
+                    "pipeline_type": pipeline_type,
+                    "manual_fov": manual_fov,
+                    "seed": seed,
+                    "shape_decoder_model": shape_decoder_model.key,
+                    "shape_decoder_config_path": shape_decoder_model.config_path,
+                    "shape_decoder_checkpoint_path": shape_decoder_model.checkpoint_path,
+                    "shape_slat_hr_artifact": str(shape_hr_slat_artifact.path),
+                    "texture_slat_artifact": str(texture_slat_artifact.path),
+                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
+                    "decoder_token_limit": shape_decode.probe.reference_token_limit,
+                    "blocker_next_target": "texture-decoder",
+                },
+            )
+            completed.append("shape-decoder")
+            completed.append("artifact:shape_decoder_fields")
+            shape_decode_artifacts = (*texture_slat_artifacts, shape_decoder_artifact.path)
+            metadata["artifact_paths"] = list(shape_decode_artifacts)
+            metadata["shape_decoder_artifact"] = shape_decoder_artifact
+
+            texture_decoder_model = None
+            try:
+                texture_decoder_model = _pixal3d_model_asset(config.models, "tex_slat_decoder")
+                texture_decoder_config = read_structured_latent_decoder_config(
+                    self.root, texture_decoder_model.config_path
+                )
+                texture_decode = run_texture_decoder_to_representation(
+                    self.root / texture_decoder_model.checkpoint_path,
+                    texture_decoder_config,
+                    hr_selection.coordinates,
+                    texture_features,
+                    guide_subdivisions=shape_decode.subdivisions,
+                    decoder_token_limit=max_num_tokens,
+                    decode_resolution=hr_selection.actual_hr_resolution,
+                    shape_decoder_coordinates=shape_decode.coordinates,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as error:
+                decoder_metadata = {
+                    "decoder_token_limit": max_num_tokens,
+                    "texture_coordinates_shape": tuple(int(dim) for dim in hr_selection.coordinates.shape),
+                    "texture_features_shape": tuple(int(dim) for dim in texture_features.shape),
+                    "guide_subdivision_shapes": tuple(
+                        tuple(int(dim) for dim in subdivision.shape) for subdivision in shape_decode.subdivisions
+                    ),
+                }
+                if texture_decoder_model is not None:
+                    decoder_metadata.update(
+                        {
+                            "config_path": texture_decoder_model.config_path,
+                            "checkpoint_path": texture_decoder_model.checkpoint_path,
+                        }
+                    )
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "texture-decoder",
+                    "decode Pixal3D texture SLat into guided PBR voxels",
+                    str(error),
+                    decoder_metadata,
+                    metadata=metadata,
+                    artifacts=shape_decode_artifacts,
+                )
+
+            metadata["texture_decoder"] = {
+                "texture_decoder_model": texture_decoder_model.key,
+                "texture_decoder_config_path": texture_decoder_model.config_path,
+                "texture_decoder_checkpoint_path": texture_decoder_model.checkpoint_path,
+                "coordinate_shape": texture_decode.probe.coordinate_shape,
+                "feature_shape": texture_decode.probe.feature_shape,
+                "decoder_output_coordinate_shape": texture_decode.probe.decoder_output_coordinate_shape,
+                "decoder_output_shape": texture_decode.probe.decoder_output_shape,
+                "completed_levels": texture_decode.probe.completed_levels,
+                "subdivision_shapes": texture_decode.probe.subdivision_shapes,
+                "guide_subdivision_shapes": texture_decode.guide_subdivision_shapes,
+                "spatial_shape": texture_decode.spatial_shape,
+                "batch_size": texture_decode.batch_size,
+                "decode_resolution": texture_decode.decode_resolution,
+                "voxel_size": texture_decode.voxel_size,
+                "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
+                "decoder_token_limit": texture_decode.probe.reference_token_limit,
+            }
+            texture_decoder_artifact = write_pixal3d_texture_decoder_npz(
+                artifact_dir / "texture_decoder_pbr.npz",
+                texture_decode.coordinates,
+                texture_decode.attributes,
+                spatial_shape=texture_decode.spatial_shape,
+                batch_size=texture_decode.batch_size,
+                decode_resolution=texture_decode.decode_resolution,
+                voxel_size=texture_decode.voxel_size,
+                metadata={
+                    "pipeline_type": pipeline_type,
+                    "manual_fov": manual_fov,
+                    "seed": seed,
+                    "texture_decoder_model": texture_decoder_model.key,
+                    "texture_decoder_config_path": texture_decoder_model.config_path,
+                    "texture_decoder_checkpoint_path": texture_decoder_model.checkpoint_path,
+                    "shape_decoder_artifact": str(shape_decoder_artifact.path),
+                    "texture_slat_artifact": str(texture_slat_artifact.path),
+                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
+                    "decoder_token_limit": texture_decode.probe.reference_token_limit,
+                    "guide_subdivision_shapes": texture_decode.guide_subdivision_shapes,
+                    "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
+                    "blocker_next_target": "mesh-extraction",
+                },
+            )
+            completed.append("texture-decoder")
+            completed.append("artifact:texture_decoder_pbr")
+            decode_artifacts = (*shape_decode_artifacts, texture_decoder_artifact.path)
+            metadata["artifact_paths"] = list(decode_artifacts)
+            metadata["texture_decoder_artifact"] = texture_decoder_artifact
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
             metadata["timings_sec"] = timings
             return self._blocked(
@@ -1142,28 +1327,22 @@ class Pixal3DInferencePipeline:
                 seed,
                 max_num_tokens,
                 output_path,
-                "latent-decoding",
-                "decode Pixal3D shape and texture SLat into mesh/PBR payload",
-                "texture SLat completed; Pixal3D full shape/texture decode and GLB export are not wired into this runtime yet",
+                "mesh-extraction",
+                "extract Pixal3D FlexiDualGrid mesh and GLB/PBR payload",
+                "decoded shape fields and texture PBR voxels completed; Pixal3D mesh extraction, PBR baking, and GLB export are not wired into this runtime yet",
                 {
-                    "shape_coordinates_shape": shape_hr_probe.coordinate_shape,
-                    "shape_features_shape": tuple(int(dim) for dim in shape_hr_features.shape),
-                    "texture_coordinates_shape": texture_probe.coordinate_shape,
-                    "texture_features_shape": tuple(int(dim) for dim in texture_features.shape),
-                    "artifact_path": str(texture_slat_artifact.path),
+                    "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
+                    "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
+                    "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
+                    "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
+                    "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
+                    "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
                     "actual_hr_resolution": hr_selection.actual_hr_resolution,
                     "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
-                    "next_target": "wire Pixal3D shape/texture decode and GLB export",
+                    "next_target": "wire Pixal3D FlexiDualGrid mesh extraction, PBR baking, and GLB export",
                 },
                 metadata=metadata,
-                artifacts=(
-                    projection_artifact.path,
-                    sparse_structure_artifact.path,
-                    shape_slat_artifact.path,
-                    shape_hr_coordinates_artifact.path,
-                    shape_hr_slat_artifact.path,
-                    texture_slat_artifact.path,
-                ),
+                artifacts=decode_artifacts,
             )
         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
         metadata["timings_sec"] = timings

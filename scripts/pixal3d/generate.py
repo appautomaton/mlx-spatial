@@ -13,8 +13,9 @@ Output:
     A textured GLB once the MLX model/export path is implemented. Until then,
     the script writes trace.json and completed intermediate NPZ artifacts such
     as sparse_projection.npz, sparse_structure.npz, shape_slat_lr.npz,
-    shape_slat_hr_coordinates.npz, shape_slat_hr.npz, and texture_slat.npz next
-    to the trace as each boundary becomes available.
+    shape_slat_hr_coordinates.npz, shape_slat_hr.npz, texture_slat.npz,
+    shape_decoder_fields.npz, and texture_decoder_pbr.npz next to the trace as
+    each boundary becomes available.
 
 Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,

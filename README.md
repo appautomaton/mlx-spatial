@@ -20,7 +20,7 @@ The package covers six model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace plus sparse/shape intermediate NPZ while implementation is in progress | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace plus sparse/shape/texture/decode intermediate NPZ while implementation is in progress | downloaded safetensors directly |
 
 Choose by job:
 
@@ -55,10 +55,11 @@ Honest status:
   projection attention, sparse FlowEuler probing, sparse decoder coordinates,
   512/1024 shape SLat probing when explicit NAF features are supplied, shape
   decoder HR coordinate upsample, texture SLat probing when explicit texture
-  NAF features are supplied, cascade planning, trace output, and sparse/shape/
-  texture NPZ artifacts are implemented. The normal CLI still needs MLX NAF
-  features before it can reach shape SLat; full decode, PBR bake, and textured
-  GLB export remain blocked.
+  NAF features are supplied, shared shape/texture decoder execution, cascade
+  planning, trace output, and sparse/shape/texture/decode NPZ artifacts are
+  implemented. The normal CLI still needs MLX NAF features before it can reach
+  shape SLat; mesh extraction, PBR baking, and textured GLB export remain
+  blocked.
 
 ## Install
 
@@ -299,8 +300,10 @@ also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. The
 normal CLI then reports the missing MLX NAF feature boundary. The lower-level
 runtime can write `shape_slat_lr.npz`, `shape_slat_hr_coordinates.npz`, and
 `shape_slat_hr.npz` after explicit LR/HR NAF features are supplied, and
-`texture_slat.npz` after explicit texture NAF features are supplied; the next
-structured blocker is latent decode/export.
+`texture_slat.npz` after explicit texture NAF features are supplied. When
+compatible decoder assets are present, it also writes `shape_decoder_fields.npz`
+and `texture_decoder_pbr.npz`; the next structured blocker is Pixal3D mesh
+extraction, PBR baking, and GLB export.
 
 ## Repository Layout
 

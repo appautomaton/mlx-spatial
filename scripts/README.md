@@ -193,7 +193,8 @@ Pixal3D inputs:
   `sparse_projection.npz`, after sparse decoding `sparse_structure.npz`, and
   after explicit NAF feature boundaries `shape_slat_lr.npz`,
   `shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and
-  `texture_slat.npz` next to the trace
+  `texture_slat.npz`; compatible decoder assets then write
+  `shape_decoder_fields.npz` and `texture_decoder_pbr.npz` next to the trace
 
 Script defaults:
 
@@ -203,8 +204,8 @@ Script defaults:
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
 - current blocker: normal script runs stop at the missing MLX NAF feature path
   before shape SLat; lower-level runtime tests can pass explicit NAF features
-  and reach the 512/1024 shape SLat and 1024 texture SLat probes before the
-  latent decode/export boundary
+  and reach the 512/1024 shape SLat, 1024 texture SLat, shared shape decoder,
+  and shared texture decoder before the mesh extraction/export boundary
 
 ### LiTo
 

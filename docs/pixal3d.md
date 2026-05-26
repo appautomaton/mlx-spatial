@@ -25,16 +25,20 @@ Implemented now:
   features are supplied to the lower-level runtime
 - coordinate-indexed 1024 texture SLat probing when explicit texture
   NAF-upsampled features are supplied to the lower-level runtime
+- shared FlexiDualGrid shape decoder execution after HR shape SLat, writing
+  decoded 7-channel shape fields
+- shared guided texture decoder execution after texture SLat, writing decoded
+  6-channel PBR voxel attributes
 - cascade stage planning for `1024_cascade` and `1536_cascade`
 - trace output, `sparse_projection.npz`, `sparse_structure.npz`, and
-  shape/texture SLat intermediate artifacts as each MLX boundary completes
+  shape/texture/decode intermediate artifacts as each MLX boundary completes
 
 Still blocked:
 
 - normal CLI runs still need an MLX NAF-equivalent feature path before shape
   SLat can run without explicit lower-level test features
-- full shape/texture decode, PBR baking, mesh extraction, and textured GLB
-  export are not release-ready
+- Pixal3D mesh extraction, PBR baking, and textured GLB export are not
+  release-ready
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
 
 ## Assets
@@ -95,6 +99,8 @@ outputs/pixal3d/sample/
   shape_slat_hr_coordinates.npz # written after compatible shape decoder upsample
   shape_slat_hr.npz             # written only after HR NAF features are supplied
   texture_slat.npz              # written only after texture NAF features are supplied
+  shape_decoder_fields.npz      # written after shared FlexiDualGrid shape decode
+  texture_decoder_pbr.npz       # written after guided texture PBR voxel decode
 ```
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
@@ -107,7 +113,9 @@ explicit lower-level NAF features, the runtime can probe 512 shape SLat, write
 `shape_slat_lr.npz`, upsample guarded HR coordinates with the shared shape
 decoder helper, write `shape_slat_hr_coordinates.npz`, optionally probe 1024
 shape SLat and write `shape_slat_hr.npz`, optionally probe 1024 texture SLat
-and write `texture_slat.npz`, then stop at the latent decode/export boundary.
+and write `texture_slat.npz`, run the shared shape and texture decoders, write
+`shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, then stop at the
+Pixal3D mesh extraction/export boundary.
 
 ## Settings
 
@@ -133,13 +141,15 @@ Runtime modules are Torch-free:
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
   coordinate-indexed feature selection, and NAF blocker
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR
-  coordinate, shape SLat, and texture SLat NPZ artifact writing
+  coordinate, shape SLat, texture SLat, shape decoder, and texture decoder NPZ
+  artifact writing
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction
 - `trellis2_sparse_structure.py`: shared sparse FlowEuler probing, sparse
   decoder boundary checks, and config-gated Pixal3D projection attention
-- `trellis2_decode.py`: shared shape decoder coordinate upsample boundary
+- `trellis2_decode.py`: shared shape decoder coordinate upsample plus
+  full shape/texture decoder execution
 - `trellis2_slat.py`: shared SLat flow boundary with config-gated Pixal3D
   projection attention
 

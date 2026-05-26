@@ -191,14 +191,18 @@ from .pixal3d_camera import (
 )
 from .pixal3d_export import (
     Pixal3DProjectionArtifact,
+    Pixal3DShapeDecoderArtifact,
     Pixal3DShapeHRCoordinatesArtifact,
     Pixal3DShapeSLatArtifact,
+    Pixal3DTextureDecoderArtifact,
     Pixal3DTextureSLatArtifact,
     Pixal3DSparseStructureArtifact,
+    write_pixal3d_shape_decoder_npz,
     write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_projection_npz,
     write_pixal3d_sparse_structure_npz,
+    write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
 )
 from .pixal3d_parity import (
@@ -702,9 +706,11 @@ __all__ = [
     "Pixal3DProjectionStageConfig",
     "Pixal3DProbeGroup",
     "Pixal3DSamplerConfig",
+    "Pixal3DShapeDecoderArtifact",
     "Pixal3DShapeHRCoordinatesArtifact",
     "Pixal3DShapeSLatArtifact",
     "Pixal3DStagePlan",
+    "Pixal3DTextureDecoderArtifact",
     "Pixal3DTextureSLatArtifact",
     "scatter_sparse_features",
     "sparse_conv_map",
@@ -1051,8 +1057,10 @@ __all__ = [
     "write_mapanything_scene_npz",
     "write_pixal3d_parity_bundle",
     "write_pixal3d_projection_npz",
+    "write_pixal3d_shape_decoder_npz",
     "write_pixal3d_shape_hr_coordinates_npz",
     "write_pixal3d_shape_slat_npz",
     "write_pixal3d_sparse_structure_npz",
+    "write_pixal3d_texture_decoder_npz",
     "write_pixal3d_texture_slat_npz",
 ]
