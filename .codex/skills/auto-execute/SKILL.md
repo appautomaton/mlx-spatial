@@ -9,13 +9,13 @@ metadata:
 
 Implementation controller. Executes approved plan slices without reopening product scope.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
 auto-execute owns execute-stage orchestration, route selection, state, and scope. Direct implementation and subagent implementation are two routes inside this skill. It does not reopen product scope or modify the approved plan's intent. Execute and verify one approved slice at a time inside the selected execution window. Continuation is the default after a verified slice; checkpoints and STOP conditions are the exceptions. An execution window is a context-management batch, not a completion boundary.
 
-Loading discipline: keep the active slice, execution-window metadata, acceptance criteria, route metadata, verification commands, and active files in context. Load linked detail files and traceability IDs for the active slice only; read wider project files only when implementation correctness requires it.
+Loading discipline: keep the active slice, execution-window metadata, acceptance criteria, route metadata, verification commands, and active files in context. Load linked detail files and traceability IDs for the active slice only; read wider project files only when implementation correctness requires it. Read `.agent/.automaton/references/CONTEXT-BUDGET.md` when wider reads threaten context pressure.
 
 ## Quality Gate
 
@@ -23,16 +23,18 @@ Before marking a slice complete:
 - Keep edits inside the active slice.
 - Investigate root cause before fixing bugs; read `references/debug-protocol.md` only when bounded diagnosis needs more structure.
 - Record verification evidence before advancing or selecting the next slice.
-- Read `references/quality.md` (~37 lines) when the diff looks clever, defensive, or broader than the plan requires.
-
-## Prerequisites
-
-Before using this skill:
-- `canonical_plan` in `.agent/.automaton/state/current.json` must point to an approved `PLAN.md`.
-- The next executable slice must have an objective, acceptance criteria, and verification command.
-- If `engineering_review` is `needs_correction`, stop and return to `auto-plan`.
+- Read `references/quality.md` when the diff looks clever, defensive, or broader than the plan requires.
 
 ## Do
+
+<GATE>
+
+Do NOT write code unless:
+- `PLAN.md` is approved and `canonical_plan` in `.agent/.automaton/state/current.json` is set.
+- The next executable slice has an objective, acceptance criteria, and verification command.
+- `engineering_review` is not `needs_correction` (otherwise stop and return to `auto-plan`).
+- The route is direct, or the subagent route has passed its host capability check.
+</GATE>
 
 ### Load State
 
@@ -44,7 +46,7 @@ If the current slice involves prose, read `references/content-execution.md`. If 
 
 ### Mark Execute Stage
 
-After the canonical `PLAN.md` resolves and before changing code or project artifacts, run `node .agent/.automaton/scripts/sync-status.mjs --stage execute` from the project root. This records that the active change has entered execution while preserving the existing `canonical_plan`. Do not edit `current.json` by hand.
+After the canonical `PLAN.md` resolves and before changing code or project artifacts, run `node .agent/.automaton/scripts/sync-status.mjs --stage execute` from the project root. This records that the active change has entered execution while preserving the existing `canonical_plan`.
 
 ### Select Execution Window
 
@@ -114,10 +116,7 @@ Append-replace the evidence block. Do not paste transcripts, full command logs, 
 
 The next slice is selected from `PLAN.md`; do not invent slice cursor or checkpoint fields in `.agent/.automaton/state/current.json`. Change state only through `node .agent/.automaton/scripts/sync-status.mjs` when stage, active change, review state, or canonical artifact pointers change.
 
-If the completed slice has a checkpoint, validate that it actually requires human input:
-- `human-verify` is valid only when available commands, tests, host tools, and local inspection cannot verify the result.
-- `decision` is valid only when the checkpoint reason names a concrete question and options whose answer changes the next slice, architecture, design, product scope, or risk posture.
-- `human-action` is valid only when progress requires an external action the agent cannot perform.
+If the completed slice has a checkpoint, validate that it actually requires human input per the checkpoint definitions (`human-verify`, `decision`, `human-action`) in `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` (Checkpoint Semantics): a checkpoint holds only when its defined condition is met.
 
 Do not pause for checkpoint text that only records verification findings, implementation caveats, downstream consequences, known limitations, or a recommendation for the next already-approved slice. Record a plan correction, keep the evidence, and continue when normal continuation conditions pass.
 
@@ -127,7 +126,7 @@ Continue within the selected execution window only when verification passed, dep
 
 When the selected execution window is complete but `PLAN.md` still has uncompleted approved slices, return to **Select Execution Window** immediately. "N slices remain" is progress state, not a stop reason. Remaining approved slices require another execution-window pass unless a valid checkpoint, STOP condition, context-pressure tier, or unavailable host capability prevents continuing.
 
-If all slices are complete and no STOP condition applies, ensure slice evidence is recorded, then continue into `auto-verify`'s contract in the same session when safe. Do not make the user run `auto-verify` manually just because execution finished. When continuing, re-read the canonical `PLAN.md`, collect every acceptance criterion, run or derive verification commands, and produce the verification report. Do not trust execute's own slice evidence as final verification.
+If all slices are complete and no STOP condition applies, ensure slice evidence is recorded, then continue inline into `auto-verify`'s contract when safe. Do not make the user run `auto-verify` manually just because execution finished. When continuing, re-read the canonical `PLAN.md`, collect every acceptance criterion, run or derive verification commands, and produce the verification report. Do not trust execute's own slice evidence as final verification.
 
 ### Record Corrections
 
@@ -143,16 +142,9 @@ Halt immediately and report to the user when:
 5. The user asks for work outside the current slice.
 6. Context pressure reaches DEGRADING or EMERGENCY.
 7. The plan requires subagents but the host cannot dispatch them.
+
+Read `references/stop-examples.md` when uncertain whether a situation qualifies for STOP.
 </STOP>
-
-<GATE>
-
-Do NOT write code unless:
-- `PLAN.md` is approved and `canonical_plan` is set.
-- The current slice has explicit acceptance criteria.
-- The route is direct, or the subagent route has passed its host capability check.
-- If the user asks for a quick fix outside the plan, reframe through `auto-frame`; do not bypass the plan.
-</GATE>
 
 ## Output
 
@@ -163,7 +155,6 @@ Do NOT write code unless:
 - Slice evidence updated in place: inline slice in `PLAN.md`, or linked detail file plus compact `PLAN.md` pointer.
 - Execute stage recorded through `sync-status.mjs` when execution begins; no slice cursor field is added to current.json.
 - Execution window checkpoint or stop reason when continuation pauses; if approved slices remain, name the valid blocker that prevents continuing.
-- Diagnostic handling: error-level diagnostics block the slice; warning-level diagnostics surface to the user and the next stage.
 - Verification report when all slices complete and continuation is safe; otherwise recommended next skill: `auto-execute` (slices remain), `auto-verify` (execution complete but continuation blocked), or `auto-plan` (structural failure).
 
 ## Rules
@@ -172,15 +163,5 @@ Do NOT write code unless:
 - Build an execution window, but execute and verify one slice at a time.
 - Serial execution is the default; parallel cross-slice dispatch requires explicit plan approval and disjoint write sets.
 - Do not silently redefine the plan; record corrections transparently.
+- If the user asks for a quick fix outside the plan, reframe through `auto-frame`; do not bypass the plan.
 - Keep durable evidence in `PLAN.md` or linked `slices/slice-NNN.md`, not new evidence files by default.
-- Before fixing, investigate. No fixes without root cause.
-
-## Deep
-
-- Read `.agent/.automaton/references/SUBAGENT-PROTOCOL.md` only when subagent route is selected.
-- Read `references/HOST-TOOLS.md` only when dispatching subagents.
-- Read `references/implementer-prompt.md`, `references/spec-reviewer-prompt.md`, and `references/code-quality-reviewer-prompt.md` for subagent role prompts.
-- Read `references/stop-examples.md` when deciding whether to halt or push through uncertainty.
-- Read `references/debug-protocol.md` for root-cause patterns after bounded diagnosis.
-- Read `.agent/.automaton/references/CONTEXT-BUDGET.md` for context pressure tiers.
-- Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` when state pointer conflicts or progressive disclosure rules need clarification.

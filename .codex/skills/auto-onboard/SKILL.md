@@ -9,7 +9,7 @@ metadata:
 
 Repository discovery. Builds bounded project truth from evidence, not guessing.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
@@ -22,7 +22,7 @@ Before writing steering artifacts:
 - Cite paths for repo-shape claims.
 - Treat artifact writing as expensive: write only durable project truth and immediate blockers, not scratch notes.
 - Stop scanning once the next action is clear.
-- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when artifacts turn into broad inventory.
+- Read `references/quality.md` when artifacts turn into broad inventory.
 
 ## Do
 
@@ -33,7 +33,7 @@ Choose the smallest valid path:
 - Real steering, no refresh requested: do not rewrite; report what exists and route active work to `auto-resume`, otherwise `auto-office-hours`.
 - Targeted refresh: read only evidence relevant to the requested steering update and rewrite only affected artifacts.
 
-ROADMAP.md stays restrained. Do not create roadmap phases on a first run. On refresh, write only `pending` phases when strong repo evidence shows an existing or ongoing roadmap and the user confirms importing or refreshing it in chat; then use `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
+ROADMAP.md stays restrained. Do not create roadmap phases on a first run. On refresh, write phases only when strong repo evidence shows an existing or ongoing roadmap and the user confirms importing or refreshing it in chat; then use `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
 
 ### Scan Top-Level Files
 
@@ -41,7 +41,7 @@ Read `README.md`, `package.json` or equivalent, and up to 3 config files (e.g., 
 
 ### Map Topology
 
-Read `references/topology-scan.md` (~56 lines: 7-layer read order, budget rules, REPO-MAP.md output requirements) for the scan protocol. Identify:
+Read `references/topology-scan.md` for the scan protocol. Identify:
 - Runtime surfaces (CLI, API, UI, worker)
 - Package boundaries (apps, packages, modules)
 - Stack (language, framework, build tool, test runner)
@@ -53,11 +53,11 @@ Ask only when ambiguity changes steering output. Read `references/question-patte
 
 ### Write Artifacts
 
-Use `templates/` as scaffolds:
+Apply `references/artifact-contract.md` for exact format and required sections. Use `templates/` as scaffolds:
 - `.agent/wiki/REPO-MAP.md`: bounded evidence index; no open-question parking, confidence verdict, or recommended next skill
 - `.agent/steering/PROJECT.md`: compact identity record; what this repo owns and why
 - `.agent/steering/REQUIREMENTS.md`: durable constraints only; no generic unknown parking
-- `.agent/steering/ROADMAP.md`: compact placeholder on first run; refresher-only `pending` phase updates when strong roadmap evidence exists and the user confirms in chat
+- `.agent/steering/ROADMAP.md`: compact placeholder on first run; refresher-only phase updates when strong roadmap evidence exists and the user confirms in chat
 
 ### Update State
 
@@ -90,8 +90,8 @@ Do not guess. Do not proceed.
 
 - Steering artifacts: `.agent/wiki/REPO-MAP.md`, `.agent/steering/PROJECT.md`, `.agent/steering/REQUIREMENTS.md`, `.agent/steering/ROADMAP.md`
 - `.agent/.automaton/state/current.json` is initialized by install/scaffold when missing; auto-onboard does not overwrite an existing `active_change` or `stage`
-- Diagnostic handling: `error`-level diagnostics block the onboard; `warning`-level findings surface to the steering artifacts
-- Recommended next skill: `auto-office-hours` (when scale or shape is undefined) or `auto-frame` (when the user already has a bounded goal). The user or host invokes the next skill; auto-onboard does not chain.
+- Warning-level findings surface to the steering artifacts.
+- Orient and stop (utility skill): recommend `auto-office-hours` (when scale or shape is undefined) or `auto-frame` (bounded goal already in hand). auto-onboard reports and stops rather than continuing, so the user picks the direction.
 
 ## Rules
 
@@ -100,17 +100,3 @@ Do not guess. Do not proceed.
 - Delete empty template sections; templates are prompts, not required headings.
 - Keep durable artifacts free of speculative questions, confidence labels, and routing chatter.
 - Never create roadmap phases on first-time onboarding. On refresh, change roadmap phases only when evidence and user confirmation justify it.
-
-## Deep
-
-### Scan Protocol
-
-Read `references/topology-scan.md` for runtime surfaces, package boundaries, stack conventions. (~56 lines: 7-layer read order from existing Automaton state through delivery surfaces, budget rules, REPO-MAP.md output requirements.)
-
-### Artifact Contract
-
-Read `references/artifact-contract.md` for exact format and required sections. (~92 lines: progressive disclosure structure for 5 artifacts, writing standard, confidence model with Observed/Inferred/Needs Confirmation, per-artifact expectations and required sections.)
-
-### Question Patterns
-
-Read `references/question-patterns.md` for good and bad follow-up questions. (~39 lines: 4 good patterns with evidence→assumption→decision structure, 3 bad open-ended anti-patterns, escalation rule.)

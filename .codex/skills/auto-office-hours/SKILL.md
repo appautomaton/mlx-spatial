@@ -9,7 +9,7 @@ metadata:
 
 Pre-frame conversation. Turns a vague idea into a sharp objective before framing begins.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts. Then detect mode, work scale, and work shape from the user's language.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
@@ -26,7 +26,7 @@ Before presenting alternatives, recommending an approach, or writing `INTAKE.md`
 - Verify the objective reflects the user's current intent, not the initial framing.
 - Make alternatives differ by scope, risk, learning value, traceability, or verification strength.
 - Evaluate evidence directly: name what is supported, what is missing, and what evidence would change the assessment.
-- Read `references/quality.md` (~36 lines) when the conversation sounds encouraging but non-decisive.
+- Read `references/quality.md` when the conversation sounds encouraging but non-decisive.
 
 ## Do
 
@@ -37,18 +37,18 @@ Determine three internal axes:
 - **Work scale:** bug-sized, feature-sized, capability-sized, or roadmap-sized. Do not equate "large" with roadmap-sized. Capability-sized work remains one spec when it serves one coherent outcome; roadmap-sized means multiple independently valuable outcomes that need decomposition through `ROADMAP.md`.
 - **Work shape:** feature, refactor, parity, audit, migration, coverage, content, or mixed.
 
-Hold this classification internally to steer questioning. Confirm the read in plain language grounded in the user's words, not by naming the taxonomy. If the user corrects any dimension, adjust before continuing. For bug-sized goals with a known fix, consider whether `auto-frame` is the better entry point. For Content mode, read `references/content-intake.md`; for roadmap-sized goals, read `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
+Hold this classification internally to steer questioning. Confirm the read in plain language grounded in the user's words, not by naming the taxonomy. If the user corrects any dimension, adjust before continuing. For bug-sized goals with a known fix, consider whether `auto-frame` is the better entry point. For Startup or Builder mode, read `references/operating-principles.md` for doctrine; for Content mode, read `references/content-intake.md`; for roadmap-sized goals, read `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
 
 ### Run Diagnostic
 
 Ask only questions that make the objective frameable. Use the active reference:
-- Startup Mode: read `references/startup-diagnostic.md` when demand, user, market, or customer evidence matters.
+- Startup Mode: read `references/startup-diagnostic.md` when demand, user, market, or customer evidence matters; read `references/landscape-awareness.md` when market, ecosystem, competitor, or current-state evidence would change the frame.
 - Builder Mode: read `references/builder-diagnostic.md` when the work is personal, exploratory, open-source, or design-partner shaped.
 - Content Mode: read `references/content-intake.md` when the deliverable is writing, article, brief, deck, newsletter, documentation, or other prose.
 
 When the shape is not feature, shape-specific questions take priority: parity needs a reference system and gap-closure target; audit needs questions and decision use; refactor needs invariants and blast radius; migration needs source/target state and rollback; coverage needs risk areas and verification target; mixed work needs the highest-priority question from each shape.
 
-Follow up when an answer changes scope, reveals a constraint, contradicts earlier context, or stays abstract. Ask for a concrete correction or choice, not a generic reaction. If the answer is polished but vague, push until it names concrete evidence, a specific stakeholder, or an observable workaround.
+Follow up when an answer changes scope, reveals a constraint, contradicts earlier context, or stays abstract. Ask for a concrete correction or choice, not a generic reaction. If the answer is polished but vague, push until it names concrete evidence, a specific stakeholder, or an observable workaround. Read `references/diagnostic-calibration.md` when the diagnostic feels soft or agreeable rather than evidence-backed.
 
 ### Request Coverage
 
@@ -72,24 +72,19 @@ Recommend one approach and explain what evidence supports it, what it does not p
 
 After approval, derive a date-prefixed change slug: `YYYY-MM-DD-<kebab-case-objective>` using today's date. Reuse `active_change` only when it already matches this discussion. Write `.agent/work/<change>/INTAKE.md` using `references/intake-template.md`; Content mode includes the required content fields from `references/content-intake.md`.
 
-Apply `.agent/.automaton/references/ROADMAP-CONTRACT.md` before touching `.agent/steering/ROADMAP.md`: reset inactive roadmaps to the empty shape, and when scale is roadmap, replace the file with the approved decomposition.
+When scale is roadmap, replace `.agent/steering/ROADMAP.md` with the approved decomposition per `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
 
-Run `node .agent/.automaton/scripts/sync-status.mjs --active-change "<change>" --stage frame` from the project root. This records `active_change` and `stage` through the shared state validator. Do not edit `current.json` by hand.
+Run `node .agent/.automaton/scripts/sync-status.mjs --active-change "<change>" --stage frame` from the project root. This records `active_change` and `stage` through the shared state validator.
 
 ### Continue To Frame When Ready
 
-After `INTAKE.md` is written, continue into `auto-frame` in the same session when all are true:
+After `INTAKE.md` is written, continue inline into `auto-frame` when all are true:
 - The approved intake states the objective in one sentence.
 - Scope coverage has no unresolved `Needs decision` item that would change scope, approach, or verification.
 - The target stakeholder or artifact, desired outcome, constraints, anti-goals, and key risks are clear enough to produce acceptance criteria.
 - The host/session can write `SPEC.md` without dropping material request context.
 
 If those conditions pass, load and follow `auto-frame`'s contract, write `.agent/work/<change>/SPEC.md`, and let auto-frame record `canonical_spec`. If any condition fails, stop after intake with the blocker or focused question.
-
-<MODE-DETECTION>
-
-If the user's language shifts mid-session, reclassify mode, scale, or shape and state the change in plain language. If the user says "just do it" or expresses impatience, ask the two most critical unresolved questions; if they push back again, present alternatives with explicit assumptions.
-</MODE-DETECTION>
 
 <GATE>
 
@@ -117,7 +112,6 @@ Approved path:
 - Deferred scope is named for `ROADMAP.md` or later work.
 - `stage: frame` and `active_change` are recorded through `sync-status.mjs`.
 - `.agent/steering/ROADMAP.md` is updated when scale is roadmap.
-- Diagnostic handling: error-level diagnostics block the intake; warning-level diagnostics surface to `auto-frame`.
 - Approved, complete intake should flow into `auto-frame` without another user prompt when frame-ready.
 
 The INTAKE.md is a decision record, not a transcript. It is a faithful record of what the user approved, not the agent's editorial rewrite.
@@ -126,16 +120,9 @@ If the user does not approve an approach, output a short discussion summary, why
 
 ## Rules
 
-- Conversational only until approval: no code, no scaffolding, no file writes before the user picks an approach.
 - Do not drop request context silently; every material ask, context detail, perspective, or worry is included, deferred with reason, marked as an anti-goal, or turned into a focused question.
 - Ask follow-up questions when they matter; do not bank them for a later checklist.
 - State the decision basis; name what evidence supports, what it does not support, and what would change the recommendation.
 - Keep INTAKE compact; omit empty sections and analysis nobody downstream needs.
-
-## Deep
-
-- Read `references/operating-principles.md` for Startup and Builder doctrine.
-- Read `references/diagnostic-calibration.md` when questions drift soft or generic, answers stay vague, or the response risks agreeable validation instead of evidence-backed assessment.
-- Read `references/alternatives-format.md` before presenting approaches.
-- Read `references/landscape-awareness.md` when market, ecosystem, competitor, or current-state evidence would change the frame.
-- Read `references/intake-template.md` before writing INTAKE.md.
+- If the user's language shifts from exploration to urgency, or from technical to business framing, reclassify mode, scale, or shape and state the change in plain language.
+- If the user expresses impatience, ask the two most critical unresolved questions; if they push back again, present alternatives with explicit assumptions.

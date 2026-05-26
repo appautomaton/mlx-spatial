@@ -9,13 +9,13 @@ metadata:
 
 Planning controller. Turns approved framing into ordered slices with verification commands.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
 auto-plan builds the smallest plan that makes execution safe while preserving the approved scope. It does not write code or broaden scope beyond the approved spec.
 
-Loading discipline: hold SPEC.md, review state, and source files needed for accurate slices. Read wider project files when understanding existing code informs slice boundaries or verification commands.
+Loading discipline: hold SPEC.md, review state, and source files needed for accurate slices. Read wider project files when understanding existing code informs slice boundaries or verification commands. Read `.agent/.automaton/references/CONTEXT-BUDGET.md` when wider reads threaten context pressure.
 
 Artifact discipline: `PLAN.md` is the reloadable execution index, not the whole implementation dossier. Keep PLAN.md compact enough to re-read. For large coherent work, summarize slices in PLAN.md and link optional detail files under `.agent/work/<change>/slices/`. Split only for independent outcomes, not because one coherent plan has many requirements.
 
@@ -26,7 +26,7 @@ Before finalizing `PLAN.md`:
 - Attach a verification command to every material slice.
 - Name the execution topology: default continuation path, explicit checkpoints, subagent routes, and any parallel-safe groups.
 - Remove vague tasks that do not define done.
-- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when the plan leaves execution decisions to the implementer.
+- Read `references/quality.md` when the plan leaves execution decisions to the implementer.
 
 ## Do
 
@@ -51,6 +51,8 @@ Break work into ordered execution units, not topic buckets. Each slice must be:
 - Bounded: it can be executed and verified without loading unrelated slices.
 - Independent: it can be executed without loading slices that come after it.
 - Checkpointed only for human input: it marks a pause only when a human must act or choose before the next approved slice can start.
+
+Read `references/slice-examples.md` when uncertain whether a slice is well-designed.
 
 For content slices, also name the artifact target, allowed sources, factual-risk gate, and format constraint so `auto-execute` does not invent missing context.
 
@@ -80,15 +82,13 @@ Include when useful:
 ```
 
 Rules:
-- Every material slice must have a verification command.
+- Every material slice must have a verification command. Verify the exact behavior, not the absence of errors. Include rollback verification for migrations.
 - Every material slice must have acceptance criteria; execution cannot verify vibes.
 - Omitted `Execution` means `direct`. Use `subagent recommended` for broad, cross-subsystem, interface, schema, or review-risk work. Use `subagent required` only for user-requested multi-agent execution or security-critical, production-data, or irreversible-state changes.
 - Omitted `Depends on` means `none`.
 - Continuation is the default. Omitted `Checkpoint after` means `none`, so the next slice may start after verification passes.
 - Verification findings, implementation caveats, downstream consequences, and next-slice recommendations are not checkpoints when the approved plan already names the next slice. Record them as slice evidence or risks and continue.
-- Use `human-verify` only when the result cannot be verified by available commands, tests, host tools, or local inspection.
-- Use `decision` only when the user must choose among named product, architecture, design, or scope options before the next slice can start. The checkpoint reason must include the concrete question and options. Do not use `decision` for reversible engineering judgment, known limitations, validation results, or "next slice should be..." notes.
-- Use `human-action` when progress requires an external action the agent cannot perform, such as 2FA, account approval, or off-machine access.
+- Checkpoint types (`human-verify`, `decision`, `human-action`) are defined once in `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` (Checkpoint Semantics). Assign a checkpoint only when its definition holds; default to `none`.
 - Keep slices small enough for one session. Move extended instructions to `slices/slice-NNN.md`; split only for independent outcomes.
 
 ### Write PLAN.md
@@ -124,15 +124,14 @@ If any of these are true, recommend `auto-frame` and stop.
 
 ### Update State
 
-Run `node .agent/.automaton/scripts/sync-status.mjs --canonical-plan ".agent/work/<change>/PLAN.md" --stage plan` from the project root. Add `--canonical-design ".agent/work/<change>/DESIGN.md"` when DESIGN.md was written. Do not edit `current.json` by hand.
+Run `node .agent/.automaton/scripts/sync-status.mjs --canonical-plan ".agent/work/<change>/PLAN.md" --stage plan` from the project root. Add `--canonical-design ".agent/work/<change>/DESIGN.md"` when DESIGN.md was written.
 
 ## Output
 
 - `PLAN.md`: written to `.agent/work/<change>/PLAN.md`
 - `DESIGN.md`: written to `.agent/work/<change>/DESIGN.md` (if needed)
 - `.agent/.automaton/state/current.json`: records `canonical_design` (when written), `canonical_plan`, and `stage: plan` through `sync-status.mjs`
-- Diagnostic handling: `error`-level diagnostics block the plan; `warning`-level diagnostics surface to the next stage
-- Recommended next skill: `auto-eng-review` or `auto-execute`. The user or host invokes the next skill; auto-plan does not chain.
+- Next handoff: stop and recommend `auto-eng-review` (optional engineering review) or `auto-execute`. `auto-plan` does not continue inline — the optional review is user-invoked, and entering `auto-execute` starts code changes a human authorizes.
 
 ## Rules
 
@@ -141,21 +140,3 @@ Run `node .agent/.automaton/scripts/sync-status.mjs --canonical-plan ".agent/wor
 - Do not broaden scope to cover hypothetical future work.
 - Preserve review sections on refresh unless the user explicitly requests consolidation.
 - Every material slice must have acceptance criteria and an explicit verification command.
-
-## Deep
-
-### Slice Design Examples
-
-Read `references/slice-examples.md` for well-designed vs. poorly-designed slices. (~103 lines: 2 good and 2 bad direct examples, 1 subagent-routed example with rationale, 1 topology section example with parallel-safe groups; rule of thumb: if you can't write the verification command before starting, the slice isn't defined.)
-
-### Verification Patterns
-
-Read `references/verification-patterns.md` for common verification commands by stack. (~47 lines: Node/Python/Rust/Go/General commands, 4 verification principles including "verify the exact behavior, not absence of errors.")
-
-### Context Loading Discipline
-
-Read `.agent/.automaton/references/CONTEXT-BUDGET.md` for progressive loading and context pressure tiers. (~76 lines: 4 principles, 6-step loading order, 4 pressure tiers with behavioral rules, no-re-read rule with exceptions.)
-
-### Artifact Lifecycle
-
-Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` when handoff rules or state pointer boundaries need clarification. (~105 lines: stage handoffs table, progressive disclosure layout with allowed paths, review verdict routing, STOP conditions.)

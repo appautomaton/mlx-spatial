@@ -9,13 +9,13 @@ metadata:
 
 Session recovery. Rebuilds context from durable artifacts, not memory or guessing.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root. If the command fails, briefly troubleshoot the invocation or runtime path. If it runs and returns error diagnostics, report them and stop before writing artifacts.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
 auto-resume rebuilds context from durable artifacts, not from the user's description or the agent's training data. It does not modify artifacts, advance the stage, or start new work. It loads canonical artifacts in dependency order (spec first, then design, then plan) and reports what it found, what was blocked, and what comes next.
 
-Loading discipline: start with artifacts needed for the current stage. Read project files when understanding the codebase helps rebuild accurate context for the next action.
+Loading discipline: start with artifacts needed for the current stage. Read project files when understanding the codebase helps rebuild accurate context for the next action. Read `.agent/.automaton/references/CONTEXT-BUDGET.md` when wider reads threaten context pressure.
 
 ## Quality Gate
 
@@ -23,13 +23,23 @@ Before producing the recovery summary:
 - Trust durable artifacts over memory.
 - Report stale pointers plainly.
 - Recommend a next skill only when recovered state has incomplete or blocked work. For verified completion, report no next lifecycle skill.
-- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when the summary becomes narrative recap.
+- Read `references/quality.md` when the summary becomes narrative recap.
 
 ## Do
 
 ### Load State
 
-Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` for recovery order, stale-pointer handling, and stage handoffs. If `.agent/` or `current.json` is missing, recommend `auto-onboard` and stop. If work is complete or absent, read `.agent/steering/ROADMAP.md` only to surface pending phases as context.
+Read `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` for recovery order, stale-pointer handling, and stage handoffs.
+
+<STOP>
+
+Halt and report when:
+- `.agent/` does not exist or `current.json` is missing.
+
+Recommend `auto-onboard` and stop. Do not attempt recovery without a state file.
+</STOP>
+
+If work is complete or absent, read `.agent/steering/ROADMAP.md` only to surface pending phases as context.
 
 ### Verify Artifact Integrity
 
@@ -71,8 +81,8 @@ Use `references/recovery-scenarios.md` for the full routing table. The invariant
 - Artifacts loaded
 - Review verdicts (if present)
 - `.agent/.automaton/state/current.json` is read-only for auto-resume; stale pointers are reported, not silently repaired
-- Diagnostic handling: missing or conflicting state surfaces as a `warning` in the summary; `error`-level diagnostics block the resume
-- Recommended next skill when recovered state is incomplete or blocked; none when the active change is verified complete. The user or host invokes the next skill; auto-resume does not chain.
+- Missing or conflicting state surfaces as a warning in the recovery summary.
+- Orient and stop (utility skill): recommend the next skill when recovered state is incomplete or blocked; none when the active change is verified complete. auto-resume reports and stops rather than continuing, so the user picks the direction.
 
 ## Rules
 
@@ -82,17 +92,3 @@ Use `references/recovery-scenarios.md` for the full routing table. The invariant
 - Load artifacts in dependency order: spec first, not plan first.
 - If steering is scaffold-only, report it plainly and recommend `auto-onboard`.
 - Do not turn a completed verified change into an automatic `auto-office-hours` handoff.
-
-## Deep
-
-### Recovery Scenarios
-
-Read `references/recovery-scenarios.md` for common recovery situations. (~31 lines: state→action pairs covering fresh session, no active change, stale pointers, review verdict blocks, scaffold-level steering, and multiple changes.)
-
-### Artifact Dependency Order
-
-Read `references/artifact-order.md` for the full artifact dependency graph. (~48 lines: ASCII dependency graph from REPO-MAP through PLAN, loading rules by stage in table form, 3 anti-patterns.)
-
-### Context Loading Discipline
-
-Read `.agent/.automaton/references/CONTEXT-BUDGET.md` for progressive loading and degradation tiers. (~76 lines: 4 principles, 6-step loading order, 4 degradation tiers with behavioral rules, no-re-read rule with exceptions.)
