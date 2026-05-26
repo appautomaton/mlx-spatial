@@ -20,7 +20,7 @@ The package covers six model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace and projection NPZ while implementation is in progress | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace plus sparse projection/structure NPZ while implementation is in progress | downloaded safetensors directly |
 
 Choose by job:
 
@@ -52,9 +52,10 @@ Honest status:
   `facebook/map-anything` weights. The supported artifact is a scene `.npz`
   tensor bundle, not a mesh or Gaussian splat export.
 - Pixal3D is partially wired: assets, manual camera, projection conditioning,
-  projection attention, cascade planning, trace output, and sparse projection
-  NPZ artifacts are implemented. Full DINOv3 image extraction, checkpoint
-  execution, and textured GLB export remain blocked.
+  projection attention, sparse FlowEuler probing, sparse decoder coordinates,
+  cascade planning, trace output, and sparse NPZ artifacts are implemented.
+  Shape SLat, texture SLat, high-resolution NAF features, and textured GLB
+  export remain blocked.
 
 ## Install
 
@@ -109,6 +110,7 @@ weights/rmbg2/
 weights/dinov3-vitl16-pretrain-lvd1689m/
 weights/hy-world-2/
 weights/map-anything/
+weights/pixal3d/
 ```
 
 SAM3D uses the converted `appautomaton/sam-3d-objects-mlx` runtime bundle:
@@ -288,10 +290,10 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --manual-fov 0.2
 ```
 
-Current expected output is `trace.json` plus `sparse_projection.npz` when local
-DINOv3 assets are available. When sparse-flow checkpoint assets are mapped, the
-runtime can also execute the sparse FlowEuler boundary; the remaining structured
-blocker is sparse decoder coordinate extraction or shape-SLat handoff.
+Current expected output starts with `trace.json` plus `sparse_projection.npz`.
+When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
+also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates; the next
+structured blocker is shape-SLat sampling.
 
 ## Repository Layout
 

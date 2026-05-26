@@ -1,4 +1,7 @@
+import json
+
 import mlx.core as mx
+import numpy as np
 from PIL import Image
 
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
@@ -7,6 +10,7 @@ from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_root,
+    write_fake_pixal3d_sparse_decoder_root,
     write_fake_pixal3d_sparse_flow_root,
 )
 
@@ -133,6 +137,48 @@ def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
     assert result.trace.metadata["sparse_flow"]["sampled_latent_shape"] == (1, 2, 16, 16, 16)
     assert result.trace.metadata["sparse_flow"]["completed_blocks"] == 1
     assert result.trace.blocker.metadata["config_path"] == "ckpts/ss_dec_conv3d_16l8_fp16.json"
+
+
+def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decoder(tmp_path):
+    root = write_fake_pixal3d_sparse_decoder_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    patch_grid = 32
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+    )
+
+    assert not result.ready
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+        "sparse-structure-flow",
+        "sparse-structure-decoding",
+        "artifact:sparse_structure",
+    )
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "shape-slat-sampling"
+    assert result.trace.blocker.metadata["coordinates_shape"] == (4096, 4)
+    assert len(result.artifacts) == 2
+    assert [path.name for path in result.artifacts] == ["sparse_projection.npz", "sparse_structure.npz"]
+    payload = np.load(result.artifacts[1])
+    assert payload["coordinates"].shape == (4096, 4)
+    assert payload["decoded_shape"].tolist() == [1, 1, 16, 16, 16]
+    assert int(payload["target_resolution"]) == 16
+    metadata = json.loads(payload["metadata_json"].item())
+    assert metadata["coordinate_order"] == "batch,z,y,x"
+    assert metadata["pipeline_type"] == "1024_cascade"
+    assert metadata["blocker_next_target"] == "shape-slat-sampling"
 
 
 def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():

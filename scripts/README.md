@@ -189,7 +189,9 @@ Pixal3D inputs:
 - root: `weights/pixal3d`
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
-- output: `trace.json`; completed MLX intermediate boundaries write NPZ artifacts next to the trace
+- output: `trace.json`; completed MLX intermediate boundaries write
+  `sparse_projection.npz` and, after sparse decoding, `sparse_structure.npz`
+  next to the trace
 
 Script defaults:
 
@@ -197,8 +199,9 @@ Script defaults:
 - seed: `42`
 - max tokens: `49152`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: after DINOv3 sparse projection conditioning and sparse FlowEuler probing,
-  sparse decoder coordinate extraction and shape-SLat handoff are still under implementation
+- current blocker: after DINOv3 sparse projection conditioning, sparse
+  FlowEuler probing, and sparse decoder coordinates, shape-SLat sampling is the
+  next missing MLX stage
 
 ### LiTo
 

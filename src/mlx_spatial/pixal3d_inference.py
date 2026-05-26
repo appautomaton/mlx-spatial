@@ -14,7 +14,7 @@ from .model_assets import DINOv3_VITL16_ASSETS
 from .mlx_memory import mlx_memory_snapshot
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
 from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_stage_plan
-from .pixal3d_export import write_pixal3d_projection_npz
+from .pixal3d_export import write_pixal3d_projection_npz, write_pixal3d_sparse_structure_npz
 from .pixal3d_projection import (
     PIXAL3D_DINOV3_EMBED_DIM,
     build_pixal3d_projection_conditioning,
@@ -510,10 +510,28 @@ class Pixal3DInferencePipeline:
             "blocker_operation": decoder_probe.blocker_operation,
             "blocker_detail": decoder_probe.blocker_detail,
         }
-        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-        metadata["timings_sec"] = timings
         if decoder_probe.coordinates is not None and decoder_probe.coordinates_shape is not None and decoder_probe.coordinates_shape[0] > 0:
             completed.append("sparse-structure-decoding")
+            sparse_structure_artifact = write_pixal3d_sparse_structure_npz(
+                artifact_dir / "sparse_structure.npz",
+                decoder_probe.coordinates,
+                decoded_shape=decoder_probe.decoded_shape or (),
+                target_resolution=decoder_probe.target_resolution or sparse_structure_target_resolution(pipeline_type),
+                metadata={
+                    "pipeline_type": pipeline_type,
+                    "manual_fov": manual_fov,
+                    "seed": seed,
+                    "sparse_flow_model": sparse_flow_model.key,
+                    "sparse_decoder_model": sparse_decoder_model.key,
+                    "sparse_latent_shape": decoder_probe.latent_shape,
+                    "blocker_next_target": "shape-slat-sampling",
+                },
+            )
+            completed.append("artifact:sparse_structure")
+            metadata["artifact_paths"] = [projection_artifact.path, sparse_structure_artifact.path]
+            metadata["sparse_structure_artifact"] = sparse_structure_artifact
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
             return self._blocked(
                 image_path,
                 completed,
@@ -527,11 +545,14 @@ class Pixal3DInferencePipeline:
                 "sparse decoder produced coordinates; Pixal3D shape SLat cascade is not wired into this runtime yet",
                 {
                     "coordinates_shape": decoder_probe.coordinates_shape,
+                    "artifact_path": str(sparse_structure_artifact.path),
                     "next_target": "wire Pixal3D shape SLat projection conditioning and sampler",
                 },
                 metadata=metadata,
-                artifacts=(projection_artifact.path,),
+                artifacts=(projection_artifact.path, sparse_structure_artifact.path),
             )
+        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+        metadata["timings_sec"] = timings
         return self._blocked(
             image_path,
             completed,

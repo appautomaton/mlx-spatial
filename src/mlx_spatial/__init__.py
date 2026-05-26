@@ -189,7 +189,9 @@ from .pixal3d_camera import (
 )
 from .pixal3d_export import (
     Pixal3DProjectionArtifact,
+    Pixal3DSparseStructureArtifact,
     write_pixal3d_projection_npz,
+    write_pixal3d_sparse_structure_npz,
 )
 from .pixal3d_parity import (
     PIXAL3D_PARITY_BUNDLE_VERSION,

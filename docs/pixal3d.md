@@ -15,14 +15,15 @@ Implemented now:
 - Pixal3D `image_attn_mode="proj"` block math in the shared sparse-structure
   and SLat flow boundaries
 - sparse-structure FlowEuler probing through the shared MLX sparse flow helper
+- sparse decoder coordinate extraction when a compatible sparse decoder
+  checkpoint/config is available
 - cascade stage planning for `1024_cascade` and `1536_cascade`
-- trace output and `sparse_projection.npz` intermediate artifacts when the
-  sparse projection boundary completes
+- trace output, `sparse_projection.npz`, and `sparse_structure.npz`
+  intermediate artifacts as each MLX boundary completes
 
 Still blocked:
 
-- sparse decoder coordinate extraction with real Pixal3D checkpoints,
-  shape/texture SLat execution, and textured GLB export are not release-ready
+- shape/texture SLat execution and textured GLB export are not release-ready
 - shape/texture high-resolution projection still needs an MLX NAF-equivalent
   feature path
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
@@ -80,13 +81,15 @@ When Pixal3D and DINOv3 assets are present, the current expected output is:
 outputs/pixal3d/sample/
   trace.json
   sparse_projection.npz
+  sparse_structure.npz    # written after sparse decoder coordinates are available
 ```
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
 blocker with the exact root and download command. If DINOv3 conditioning
 completes and sparse-flow assets are mapped, the runtime can execute the sparse
-FlowEuler boundary. The remaining blocker is then `sparse-structure-decoding`
-or `shape-slat-sampling`, depending on how far the local checkpoints get.
+FlowEuler boundary. If the sparse decoder also produces coordinates, the runtime
+writes `sparse_structure.npz` and the remaining blocker is
+`shape-slat-sampling`.
 
 ## Settings
 
@@ -111,7 +114,8 @@ Runtime modules are Torch-free:
 - `pixal3d_camera.py`: manual-FOV camera and cascade planning
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
   and NAF blocker
-- `pixal3d_export.py`: intermediate NPZ artifact writing
+- `pixal3d_export.py`: intermediate projection and sparse-coordinate NPZ
+  artifact writing
 - `pixal3d_inference.py`: staged orchestration, trace metadata, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction

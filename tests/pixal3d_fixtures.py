@@ -100,6 +100,37 @@ def write_fake_pixal3d_sparse_flow_root(
     return root
 
 
+def write_fake_pixal3d_sparse_decoder_root(
+    root: Path,
+    *,
+    proj_in_channels: int = 3,
+    sparse_steps: int = 1,
+) -> Path:
+    write_fake_pixal3d_sparse_flow_root(root, proj_in_channels=proj_in_channels, sparse_steps=sparse_steps)
+    (root / "ckpts/ss_dec_conv3d_16l8_fp16.json").write_text(
+        json.dumps(
+            {
+                "name": "SparseStructureDecoder",
+                "args": {
+                    "out_channels": 1,
+                    "latent_channels": 2,
+                    "num_res_blocks": 0,
+                    "channels": [2],
+                    "num_res_blocks_middle": 0,
+                    "norm_type": "layer",
+                    "use_fp16": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        _tiny_sparse_decoder_checkpoint(channels=2, latent_channels=2, out_channels=1),
+        root / "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+    )
+    return root
+
+
 def minimal_pixal3d_pipeline(*, sparse_steps: int = 12):
     return {
         "args": {
@@ -190,4 +221,20 @@ def _tiny_sparse_flow_checkpoint(
         f"{prefix}.mlp.mlp.0.bias": mx.zeros((model_channels * 2,), dtype=mx.float32),
         f"{prefix}.mlp.mlp.2.weight": mx.zeros((model_channels, model_channels * 2), dtype=mx.float32),
         f"{prefix}.mlp.mlp.2.bias": mx.zeros((model_channels,), dtype=mx.float32),
+    }
+
+
+def _tiny_sparse_decoder_checkpoint(
+    *,
+    channels: int,
+    latent_channels: int,
+    out_channels: int,
+) -> dict[str, mx.array]:
+    return {
+        "input_layer.weight": mx.zeros((channels, latent_channels, 3, 3, 3), dtype=mx.float32),
+        "input_layer.bias": mx.zeros((channels,), dtype=mx.float32),
+        "out_layer.0.weight": mx.ones((channels,), dtype=mx.float32),
+        "out_layer.0.bias": mx.zeros((channels,), dtype=mx.float32),
+        "out_layer.2.weight": mx.zeros((out_channels, channels, 3, 3, 3), dtype=mx.float32),
+        "out_layer.2.bias": mx.ones((out_channels,), dtype=mx.float32),
     }
