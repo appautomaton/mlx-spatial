@@ -12,7 +12,9 @@ inference job.
 - Scripts use recommended quality settings by default and do not expose
   quality-gate bypasses.
 
-## SAM3D
+## User-Facing Generation Scripts
+
+### SAM3D
 
 Run SAM 3D Objects reconstruction with MLX safetensors:
 
@@ -43,7 +45,7 @@ Inspect a trace:
 python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
 ```
 
-## TRELLIS.2
+### TRELLIS.2
 
 Run TRELLIS.2 textured GLB generation with MLX safetensors:
 
@@ -93,7 +95,7 @@ Script defaults:
 - texture bake backend: `kdtree`
 - trace output: `trace.json` next to the generated asset
 
-## HY-WorldMirror 2.0
+### HY-WorldMirror 2.0
 
 Run HY-WorldMirror scene reconstruction with MLX safetensors:
 
@@ -123,7 +125,47 @@ For frame directories, `large` preserves the official 952px path but can exceed
 the attention guard as frame count grows. Use `--memory-profile balanced` for a
 more reliable multi-frame run.
 
-## LiTo
+### MapAnything
+
+Run Meta MapAnything image-only multi-view scene generation with MLX
+safetensors:
+
+```bash
+uv run hf download facebook/map-anything \
+  --local-dir weights/map-anything
+```
+
+```bash
+python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
+  --output-dir outputs/mapanything/desk-script
+```
+
+MapAnything inputs:
+
+- input: a single image or a directory of related scene-view images
+- masks: not provided by the user; the model predicts final masks
+- root: `weights/map-anything`
+- output: `scene.npz` and `trace.json`
+
+No conversion step is required. The script expects Meta's downloaded
+`config.json` and `model.safetensors` under `weights/map-anything/`.
+
+Script defaults:
+
+- resize mode: `fixed_mapping`, matching the upstream image-only inference path
+- stride: `1`
+- patch size: read from `weights/map-anything/config.json`, normally `14`
+- normalization: DINOv2 image mean/std
+- postprocess: `apply_mask` and `mask_edges`
+- trace output: `trace.json` next to `scene.npz`
+- runtime Torch dependency: none
+
+The scene bundle contains `images`, `depth`, `confidence`, `masks`,
+`intrinsics`, `camera_poses`, `extrinsics`, and `world_points`. It is not a mesh
+or Gaussian Splat PLY. A colored point cloud or inline viewer can be derived
+from the bundle for inspection, but that is a downstream visualization step.
+
+### LiTo
 
 Run checkpoint-backed Apple LiTo image-to-3DGS generation:
 
@@ -137,9 +179,18 @@ python scripts/lito/generate.py inputs/lito/sample.png \
 
 The script uses the upstream-recorded LiTo defaults from `LITO_RECOMMENDED_*`
 and writes a 3D Gaussian Splat PLY plus a safetensors sidecar when `--format ply`
-is selected. Use `--memory-profile safe` only for lower-memory smoke/debug runs,
-and pair it with `--source-contract-smoke` when testing the synthetic framework
-probe path.
+is selected. Checkpoint-backed `--format splat` is not implemented; keep `ply`
+for real LiTo runs. Use `--memory-profile safe` only for lower-memory smoke/debug
+runs, and pair it with `--source-contract-smoke` when testing the synthetic
+framework probe path.
+
+## Quality-Inspection And Fixture Tools
+
+- `scripts/sam3d/inspect_trace.py`: inspect SAM3D trace JSON after a run.
+- `scripts/lito/inspect_quality.py`: inspect LiTo Gaussian PLY quality signals.
+- `scripts/lito/validate_fixtures.py`: validate LiTo fixture files used by tests.
+- `scripts/lito/write_contract_fixtures.py`: write synthetic LiTo contract
+  fixtures for maintainer checks.
 
 ## Packaging
 
@@ -157,7 +208,7 @@ Check generated/local files in git status:
 python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
-## Deferred Scripts
+## Deferred Maintainer Scripts
 
 - Full source-vs-converted SAM3D weight audit: useful, but it requires the
   original gated checkpoints and PyTorch. Keep the current audit output with the

@@ -8,6 +8,7 @@ Start with the page that matches the job:
 | Run TRELLIS.2 object image-to-3D | [trellis2.md](trellis2.md) |
 | Run HY-WorldMirror scene reconstruction | [hyworld2.md](hyworld2.md) |
 | Run Apple LiTo image-to-3DGS research inference | [lito.md](lito.md) |
+| Run MapAnything multi-view scene generation | [mapanything.md](mapanything.md) |
 | Start from recommended runnable scripts | [scripts/README.md](../scripts/README.md) |
 | Understand module boundaries | [architecture.md](architecture.md) |
 | Contribute or verify changes locally | [development.md](development.md) |
@@ -35,6 +36,7 @@ mlx-spatial-sam3d --help
 mlx-spatial-trellis2 --help
 mlx-spatial-hyworld2 --help
 mlx-spatial-lito --help
+mlx-spatial-mapanything --help
 ```
 
 From a cloned repo, use `uv run <command>` for the same CLIs.

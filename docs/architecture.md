@@ -81,6 +81,36 @@ LiTo reuses `gs_rasterize.py`, `metal/gs_rasterize.metal`, `hyworld2_sh.py`, and
 
 Local source-contract fixtures under `tests/fixtures/lito/` are deterministic synthetic fixtures, not vendor numerical captures. They lock tensor contracts while keeping vendor checkouts, generated Apple samples, and converted weights out of package artifacts.
 
+## MapAnything Boundary
+
+Entry point: `mlx_spatial.mapanything:main`, exposed as `mlx-spatial-mapanything`.
+
+MapAnything is a checkpoint-backed multi-view scene geometry pipeline. The
+supported MLX runtime validates the local `facebook/map-anything` assets,
+preprocesses image-only scene views with fixed-mapping DINOv2 normalization,
+runs the full DINOv2 encoder, fusion normalization, alternating-attention
+info-sharing blocks, dense/pose/scale heads, and writes a scene `.npz` tensor
+bundle. Mesh and Gaussian-splat export are downstream visualization/export work,
+not part of the runtime contract.
+
+Main modules:
+
+- `mapanything.py`: CLI command routing for download, validate, inspect, and generation.
+- `mapanything_assets.py`: local HF asset validation, config parsing, checkpoint inspection, and component routing.
+- `mapanything_preprocess.py`: image discovery, fixed-mapping resize/crop, and DINOv2 normalization.
+- `mapanything_model.py`: DINOv2 encoder and info-sharing MLX forward path.
+- `mapanything_heads.py`: fusion norm plus dense, pose, and scale prediction heads.
+- `mapanything_geometry.py`: depth, confidence, masks, intrinsics, camera pose, and world-point postprocessing.
+- `mapanything_scene.py`: end-to-end scene orchestration, trace metadata, blockers, and `.npz` writing.
+- `mapanything_parity.py`: dev-only tensor bundle comparison against Torch reference captures.
+
+The MLX scene output intentionally uses clean top-level keys:
+`images`, `depth`, `confidence`, `masks`, `intrinsics`, `camera_poses`,
+`extrinsics`, and `world_points`. Torch reference captures from the vendored
+pipeline use `scene.*` prefixes for the same semantic tensors. Keep Torch,
+TorchVision, UniCeption, OpenCV, and vendor Python imports out of the runtime
+dependencies; they belong only to explicit `torch-ref` parity workflows.
+
 ## CLI And Script Split
 
 Package CLIs under `[project.scripts]` are the supported runtime surfaces. Repository scripts under `scripts/` are readable wrappers and maintenance tools that encode recommended settings for users and maintainers.

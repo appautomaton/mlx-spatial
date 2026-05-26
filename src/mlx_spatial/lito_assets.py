@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import shlex
 import shutil
 import tempfile
@@ -204,8 +205,8 @@ def _copy_file(source: Path, output: Path, *, overwrite: bool) -> None:
 
 def _convert_with_torch_fallback(source: Path, output: Path, *, converter_error: Exception) -> None:
     try:
-        import torch
-        from safetensors.torch import save_file as save_torch_safetensors
+        torch = importlib.import_module("torch")
+        save_torch_safetensors = importlib.import_module("safetensors.torch").save_file
     except ModuleNotFoundError as error:
         raise RuntimeError(
             "pt-safe-loader could not parse this LiTo checkpoint and torch is not installed "

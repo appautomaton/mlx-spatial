@@ -5,6 +5,10 @@ Input:
     A single RGB/RGBA image, or a directory of image frames. HY-WorldMirror is a
     scene/world reconstruction pipeline, so it does not take object masks.
 
+Output:
+    Camera JSON, depth maps, normal maps, point-cloud PLY, and trace JSON under
+    the output directory.
+
 Production defaults:
     real Tencent WorldMirror safetensors, large memory profile, official 952px
     target size, and the verified camera/depth/normal/points heads.
@@ -36,18 +40,26 @@ PRODUCTION_MEMORY_PROFILE = "large"
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input", type=Path, help="input scene image or directory of image frames")
-    parser.add_argument("--root", default="weights/hy-world-2", help="HY-WorldMirror 2.0 safetensors root")
-    parser.add_argument("--output-dir", type=Path, help="directory for camera/depth/normal/points outputs")
+    parser.add_argument(
+        "--root",
+        default="weights/hy-world-2",
+        help="HY-WorldMirror 2.0 safetensors root; default: %(default)s",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="directory for camera/depth/normal/points outputs; default: outputs/hyworld2/<input-stem>",
+    )
     parser.add_argument(
         "--memory-profile",
         choices=("safe", "balanced", "large"),
         default=PRODUCTION_MEMORY_PROFILE,
-        help="large matches the official 952px target size used by the verified run",
+        help="large is recommended and matches the official 952px target; balanced is a lower-memory fallback",
     )
     parser.add_argument(
         "--heads",
         default=PRODUCTION_HEADS,
-        help="comma-separated heads; default is the verified release path. Do not include gs for normal runs.",
+        help="comma-separated heads; default camera,depth,normal,points is the verified release path",
     )
     args = parser.parse_args(argv)
 

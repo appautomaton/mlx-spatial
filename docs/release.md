@@ -10,13 +10,14 @@ Required state:
 - Project name is `mlx-spatial`.
 - License metadata points at top-level `LICENSE`.
 - Repository URL points at `https://github.com/appautomaton/mlx-spatial`.
-- Package CLIs are present for SAM3D, TRELLIS.2, HY-World-2.0, and LiTo.
+- Package CLIs are present for SAM3D, TRELLIS.2, HY-World-2.0, LiTo, and MapAnything.
 - Hatch build config excludes local assets, vendors, caches, generated outputs, and agent state.
 
 ## Preflight
 
 ```bash
 uv run pytest -q
+rm -rf dist
 uv build
 python scripts/packaging/check_release_artifacts.py \
   dist/mlx_spatial-*.tar.gz \
@@ -33,10 +34,12 @@ uv run mlx-spatial-sam3d --help
 uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
+uv run mlx-spatial-mapanything --help
 python scripts/sam3d/reconstruct.py --help
 python scripts/trellis2/generate_textured.py --help
 python scripts/hyworld2/generate_scene.py --help
 python scripts/lito/generate.py --help
+python scripts/mapanything/generate_scene.py --help
 ```
 
 When local gated weights are available, run one documented SAM3D reconstruction and inspect the trace:
@@ -100,6 +103,7 @@ Install in a clean environment and run:
 ```bash
 python -c "import mlx_spatial; print(mlx_spatial.__name__)"
 mlx-spatial-sam3d --help
+mlx-spatial-mapanything --help
 ```
 
 ## Evidence

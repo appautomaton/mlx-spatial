@@ -96,15 +96,20 @@ The default PLY storage is `binary_little_endian`. Use `--ply-storage ascii` onl
 
 ## Runtime Options
 
-Common generation flags:
+Common package CLI generation flags. The repository script exposes the
+user-facing subset shown by `python scripts/lito/generate.py --help`.
 
 | Flag | Use |
 | --- | --- |
+| `--format {ply,splat,safetensors}` | Select output artifact format. Use `ply` for checkpoint-backed viewer output; checkpoint-backed `splat` export is not implemented. |
+| `--ply-storage {binary_little_endian,ascii}` | Select PLY storage. Use `binary_little_endian` for normal runs and `ascii` only for debugging or text diffs. |
 | `--memory-profile {safe,balanced,large}` | Select memory and init-coordinate defaults. |
-| `--max-init-coords-per-batch {profile,none,N}` | Use profile cap, upstream-style full occupied cells, or an explicit cap. |
+| `--max-init-coords-per-batch {profile,none,N}` | Package CLI only. Use profile cap, upstream-style full occupied cells, or an explicit cap. |
 | `--num-steps N` | Sampling steps; default follows `LITO_RECOMMENDED_NUM_STEPS`. |
 | `--cfg-scale X` | Classifier-free guidance scale. |
 | `--seed N` | Make local sampling reproducible. |
+| `--resolution N` | Square preprocessing resolution; the default follows `LITO_RECOMMENDED_RESOLUTION`. |
+| `--render-size N` | Source-contract smoke render size; checkpoint-backed PLY export ignores it. |
 | `--print-metrics` | Print per-stage timing and MLX memory metrics. |
 | `--source-contract-smoke` | Use synthetic contract output instead of checkpoint-backed inference. |
 

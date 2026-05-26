@@ -29,7 +29,7 @@ def test_base_dependencies_exclude_heavy_model_frameworks():
     assert "safetensors" in dependencies
     assert "torch" not in dependencies
     assert "transformers" not in dependencies
-    assert "huggingface" not in dependencies
+    assert "diffusers" not in dependencies
 
 
 def test_inspect_checkpoint_returns_deterministic_metadata(tmp_path):

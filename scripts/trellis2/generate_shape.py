@@ -35,15 +35,23 @@ PRODUCTION_PIPELINE_TYPE = "512"
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("image", type=Path, help="input RGB/RGBA image")
-    parser.add_argument("--root", default="weights/trellis2", help="TRELLIS.2 safetensors root")
-    parser.add_argument("--rmbg-root", default="weights/rmbg2", help="RMBG-2.0 safetensors root for RGB images")
+    parser.add_argument("--root", default="weights/trellis2", help="TRELLIS.2 safetensors root; default: %(default)s")
+    parser.add_argument(
+        "--rmbg-root",
+        default="weights/rmbg2",
+        help="RMBG-2.0 safetensors root for RGB images; default: %(default)s",
+    )
     parser.add_argument(
         "--dino-root",
         default="weights/dinov3-vitl16-pretrain-lvd1689m",
-        help="DINOv3 ViT-L/16 safetensors root",
+        help="DINOv3 ViT-L/16 safetensors root; default: %(default)s",
     )
-    parser.add_argument("--output-dir", type=Path, help="directory for model.obj and trace.json")
-    parser.add_argument("--output", type=Path, help="explicit OBJ path under outputs/")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="directory for model.obj and trace.json; default: outputs/trellis2/<image-stem>-shape",
+    )
+    parser.add_argument("--output", type=Path, help="explicit shape OBJ path under outputs/")
     parser.add_argument("--trace-output", type=Path, help="explicit trace JSON path under outputs/")
     parser.add_argument(
         "--pipeline-type",
@@ -51,14 +59,24 @@ def main(argv: list[str] | None = None) -> int:
         default=PRODUCTION_PIPELINE_TYPE,
         help="generation route; default 512 is the production-like Apple Silicon path",
     )
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=42, help="sampling seed; default: %(default)s")
     parser.add_argument(
         "--slat-steps",
         type=int,
         help="override all SLat sampler steps; omit for quality runs so the model config default is used",
     )
-    parser.add_argument("--max-num-tokens", type=int, default=49_152)
-    parser.add_argument("--decoder-token-limit", type=int, default=1_000_000)
+    parser.add_argument(
+        "--max-num-tokens",
+        type=int,
+        default=49_152,
+        help="sparse sampling token budget; default: %(default)s",
+    )
+    parser.add_argument(
+        "--decoder-token-limit",
+        type=int,
+        default=1_000_000,
+        help="decoder token guard for shape export; default: %(default)s",
+    )
     args = parser.parse_args(argv)
 
     from mlx_spatial.trellis2_inference import Trellis2InferencePipeline

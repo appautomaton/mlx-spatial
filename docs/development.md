@@ -22,6 +22,7 @@ python scripts/sam3d/inspect_trace.py --help
 Package checks:
 
 ```bash
+rm -rf dist
 uv build
 python scripts/packaging/check_release_artifacts.py \
   dist/mlx_spatial-*.tar.gz \
@@ -36,6 +37,7 @@ uv run mlx-spatial-sam3d --help
 uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
+uv run mlx-spatial-mapanything --help
 ```
 
 ## Local Assets
@@ -54,7 +56,7 @@ Tests should pass without downloading gated weights unless they are explicitly m
 ## Editing Constraints
 
 - Prefer existing module boundaries over new abstractions.
-- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, `hyworld2_*`, or `lito_*` modules.
+- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, `hyworld2_*`, `lito_*`, or `mapanything_*` modules.
 - Keep shared primitives model-neutral.
 - Do not add generated outputs, converted weights, vendor checkouts, or agent state to package artifacts.
 - Use structured parsers for model metadata and safetensors; avoid ad hoc parsing when a local helper exists.
