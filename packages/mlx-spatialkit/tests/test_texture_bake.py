@@ -143,7 +143,14 @@ def test_bake_pbr_texture_metal_supports_provided_uv_scan_path() -> None:
         decode_resolution=2,
     )
 
-    assert baked.stats["backend"] == "metal-uv-nearest"
+    assert baked.stats["backend"] == "metal-uv-binned-nearest"
+    assert baked.stats["uv_bin_cols"] >= 4
+    assert baked.stats["uv_bin_rows"] >= 4
+    assert baked.stats["uv_bin_count"] == baked.stats["uv_bin_cols"] * baked.stats["uv_bin_rows"]
+    assert baked.stats["uv_bin_face_reference_count"] > 0
+    assert baked.stats["uv_bin_max_candidate_faces"] >= 1
+    assert baked.stats["uv_bin_max_candidate_faces"] < baked.stats["uv_bin_face_reference_count"]
+    assert baked.stats["uv_bin_guard_passed"] is True
     assert baked.stats["sampled_texel_count"] >= 1
     np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([255, 0, 0, 255], dtype=np.uint8))
 
@@ -196,6 +203,8 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
     assert baked.stats["uv_surface_final_visible_coverage_ratio"] > baked.stats["uv_surface_exact_coverage_ratio"]
     assert baked.stats["fallback_radius"] == 12
     assert baked.stats["dilation_max_passes"] == 8
+    assert baked.stats["backend"] == "metal-uv-binned-nearest"
+    assert baked.stats["uv_bin_max_candidate_faces"] < baked.stats["uv_bin_face_reference_count"]
 
 
 def test_bake_pbr_texture_uses_adaptive_dilation_budget_for_atlas_textures() -> None:
@@ -225,6 +234,85 @@ def test_bake_pbr_texture_uses_adaptive_dilation_budget_for_atlas_textures() -> 
     assert baked.stats["dilation_pass_count"] <= baked.stats["dilation_max_passes"]
     assert baked.stats["fallback_radius"] == 24
     assert baked.stats["dilation_max_passes"] == 64
+    assert baked.stats["uv_bin_count"] == 0
+    assert baked.stats["uv_bin_face_reference_count"] == 0
+
+
+def test_bake_pbr_texture_binned_uv_path_bounds_large_candidate_sets() -> None:
+    side = 34
+    coords = np.stack(
+        np.meshgrid(
+            np.linspace(0.0, 1.0, side, dtype=np.float32),
+            np.linspace(0.0, 1.0, side, dtype=np.float32),
+            indexing="xy",
+        ),
+        axis=-1,
+    ).reshape(-1, 2)
+    vertices = np.column_stack([coords[:, 0], coords[:, 1], np.zeros(coords.shape[0], dtype=np.float32)]).astype(np.float32)
+    faces = []
+    for y in range(side - 1):
+        for x in range(side - 1):
+            a = y * side + x
+            b = a + 1
+            c = a + side
+            d = c + 1
+            faces.append([a, b, c])
+            faces.append([b, d, c])
+    mesh = NativeUvMesh(
+        vertices=vertices,
+        faces=np.asarray(faces, dtype=np.int64),
+        uvs=coords.astype(np.float32),
+        stats={"backend": "provided"},
+    )
+    coordinates, attributes = _texture_fields()
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    baked = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=16,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+    )
+
+    total_faces = int(mesh.faces.shape[0])
+    assert baked.stats["backend"] == "metal-uv-binned-nearest"
+    assert baked.stats["uv_bin_cols"] == 16
+    assert baked.stats["uv_bin_rows"] == 16
+    assert baked.stats["uv_bin_max_candidate_faces"] < total_faces // 10
+    assert baked.stats["uv_bin_face_reference_count"] < total_faces * 8
+    assert baked.stats["sampled_texel_count"] > 0
+
+
+def test_bake_pbr_texture_binned_uv_path_rejects_reference_explosion() -> None:
+    face_count = 20_000
+    vertices = np.zeros((face_count * 3, 3), dtype=np.float32)
+    vertices[1::3, 0] = 1.0
+    vertices[2::3, 1] = 1.0
+    uvs = np.zeros((face_count * 3, 2), dtype=np.float32)
+    uvs[1::3, 0] = 1.0
+    uvs[2::3, 1] = 1.0
+    mesh = NativeUvMesh(
+        vertices=vertices,
+        faces=np.arange(face_count * 3, dtype=np.int64).reshape(face_count, 3),
+        uvs=uvs,
+        stats={"backend": "provided"},
+    )
+    coordinates, attributes = _texture_fields()
+
+    with pytest.raises(ValueError, match="UV bin face references exceed guard"):
+        bake_pbr_texture(
+            mesh,
+            coordinates,
+            attributes,
+            texture_size=64,
+            origin=(0.0, 0.0, 0.0),
+            voxel_size=1.0,
+            decode_resolution=2,
+        )
 
 
 def test_bake_pbr_texture_rejects_unsafe_texture_size_before_metal_allocation() -> None:

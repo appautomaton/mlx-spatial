@@ -21,6 +21,8 @@ struct BakeConfig {
   int grid_y;
   int grid_x;
   uint fallback_radius;
+  uint uv_bin_cols;
+  uint uv_bin_rows;
 };
 
 static inline bool barycentric_uv(float2 p, float2 a, float2 b, float2 c, thread float3 &weights) {
@@ -130,6 +132,8 @@ kernel void mlx_spatialkit_bake_pbr_texture(
     device uchar *base_color_rgba [[buffer(6)]],
     device uchar *metallic_roughness [[buffer(7)]],
     device uchar *coverage [[buffer(8)]],
+    device const uint *uv_bin_offsets [[buffer(9)]],
+    device const int *uv_bin_faces [[buffer(10)]],
     uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= config.texture_size || gid.y >= config.texture_size) {
     return;
@@ -169,6 +173,28 @@ kernel void mlx_spatialkit_bake_pbr_texture(
       }
       if (barycentric_uv(local_uv, a, b, c, weights)) {
         face_index = int(candidate);
+        break;
+      }
+    }
+  } else if (config.uv_bin_cols > 0 && config.uv_bin_rows > 0) {
+    uint col = min(uint(floor(uv.x * float(config.uv_bin_cols))), config.uv_bin_cols - 1);
+    uint row = min(uint(floor(uv.y * float(config.uv_bin_rows))), config.uv_bin_rows - 1);
+    uint bin_index = row * config.uv_bin_cols + col;
+    uint start = uv_bin_offsets[bin_index];
+    uint end = uv_bin_offsets[bin_index + 1];
+    for (uint ref = start; ref < end; ++ref) {
+      int i = uv_bin_faces[ref];
+      if (i < 0 || uint(i) >= config.face_count) {
+        continue;
+      }
+      int ia = faces[uint(i) * 3 + 0];
+      int ib = faces[uint(i) * 3 + 1];
+      int ic = faces[uint(i) * 3 + 2];
+      float2 a = float2(uvs[ia * 2 + 0], uvs[ia * 2 + 1]);
+      float2 b = float2(uvs[ib * 2 + 0], uvs[ib * 2 + 1]);
+      float2 c = float2(uvs[ic * 2 + 0], uvs[ic * 2 + 1]);
+      if (barycentric_uv(uv, a, b, c, weights)) {
+        face_index = i;
         break;
       }
     }

@@ -27,6 +27,7 @@ namespace mlx_spatialkit {
 namespace {
 
 constexpr int64_t kMaxTextureDimension = 8192;
+constexpr uint64_t kMaxUvBinFaceReferences = 64ull * 1024ull * 1024ull;
 
 struct BakeConfig {
   uint32_t texture_size;
@@ -47,11 +48,23 @@ struct BakeConfig {
   int32_t grid_y;
   int32_t grid_x;
   uint32_t fallback_radius;
+  uint32_t uv_bin_cols;
+  uint32_t uv_bin_rows;
 };
 
 struct VoxelRecord {
   uint64_t key;
   std::array<float, 6> attributes;
+};
+
+struct UvBins {
+  uint32_t cols = 0;
+  uint32_t rows = 0;
+  std::vector<uint32_t> offsets;
+  std::vector<int32_t> faces;
+  uint64_t reference_count = 0;
+  uint32_t max_candidates = 0;
+  uint32_t non_empty_bins = 0;
 };
 
 NSString *texture_bake_metallib_path() {
@@ -165,6 +178,100 @@ std::vector<float> load_uvs_flat(nb::object uvs_object, int64_t vertex_count) {
     values.push_back(v);
   }
   return values;
+}
+
+int64_t resolve_uv_bin_side(int64_t texture_size, int64_t face_count) {
+  const double face_side = std::ceil(std::sqrt(static_cast<double>(std::max<int64_t>(1, face_count)) / 4.0));
+  const int64_t resolved = std::max<int64_t>(4, static_cast<int64_t>(face_side));
+  return std::min<int64_t>({resolved, std::max<int64_t>(4, texture_size), 256});
+}
+
+UvBins build_uv_bins(
+    const mesh_common::MeshData &mesh,
+    const std::vector<float> &uvs,
+    int64_t texture_size,
+    bool enabled) {
+  UvBins bins;
+  if (!enabled) {
+    bins.offsets = {0, 0};
+    bins.faces = {0};
+    return bins;
+  }
+  const int64_t side = resolve_uv_bin_side(texture_size, static_cast<int64_t>(mesh.faces.size()));
+  bins.cols = checked_u32(static_cast<uint64_t>(side), "UV bin columns");
+  bins.rows = checked_u32(static_cast<uint64_t>(side), "UV bin rows");
+  const uint64_t bin_count64 = checked_mul(static_cast<uint64_t>(bins.cols), static_cast<uint64_t>(bins.rows), "UV bin count");
+  const size_t bin_count = checked_size(bin_count64, "UV bin count");
+  std::vector<uint32_t> counts(bin_count, 0);
+
+  auto bin_range = [](float min_value, float max_value, uint32_t bins_per_axis) {
+    const float clamped_min = std::clamp(min_value, 0.0f, 1.0f);
+    const float clamped_max = std::clamp(max_value, 0.0f, 1.0f);
+    const float lo = std::min(clamped_min, clamped_max);
+    const float hi = std::max(clamped_min, clamped_max);
+    uint32_t first = std::min<uint32_t>(static_cast<uint32_t>(std::floor(lo * static_cast<float>(bins_per_axis))), bins_per_axis - 1);
+    uint32_t last = std::min<uint32_t>(static_cast<uint32_t>(std::floor(hi * static_cast<float>(bins_per_axis))), bins_per_axis - 1);
+    return std::array<uint32_t, 2>{first, last};
+  };
+
+  for (const auto &face : mesh.faces) {
+    const float u0 = uvs[static_cast<size_t>(face[0]) * 2 + 0];
+    const float v0 = uvs[static_cast<size_t>(face[0]) * 2 + 1];
+    const float u1 = uvs[static_cast<size_t>(face[1]) * 2 + 0];
+    const float v1 = uvs[static_cast<size_t>(face[1]) * 2 + 1];
+    const float u2 = uvs[static_cast<size_t>(face[2]) * 2 + 0];
+    const float v2 = uvs[static_cast<size_t>(face[2]) * 2 + 1];
+    const auto x_range = bin_range(std::min({u0, u1, u2}), std::max({u0, u1, u2}), bins.cols);
+    const auto y_range = bin_range(std::min({v0, v1, v2}), std::max({v0, v1, v2}), bins.rows);
+    const uint64_t refs_for_face = checked_mul(
+        static_cast<uint64_t>(x_range[1] - x_range[0] + 1),
+        static_cast<uint64_t>(y_range[1] - y_range[0] + 1),
+        "UV bin face reference");
+    bins.reference_count += refs_for_face;
+    if (bins.reference_count > kMaxUvBinFaceReferences) {
+      std::ostringstream message;
+      message << "UV bin face references exceed guard " << kMaxUvBinFaceReferences;
+      throw nb::value_error(message.str().c_str());
+    }
+    for (uint32_t y = y_range[0]; y <= y_range[1]; ++y) {
+      for (uint32_t x = x_range[0]; x <= x_range[1]; ++x) {
+        const size_t bin = static_cast<size_t>(y) * bins.cols + x;
+        counts[bin] += 1;
+      }
+    }
+  }
+
+  bins.offsets.resize(bin_count + 1, 0);
+  for (size_t index = 0; index < bin_count; ++index) {
+    bins.offsets[index + 1] = bins.offsets[index] + counts[index];
+    bins.max_candidates = std::max(bins.max_candidates, counts[index]);
+    if (counts[index] > 0) {
+      bins.non_empty_bins += 1;
+    }
+  }
+  bins.faces.assign(checked_size(bins.reference_count, "UV bin face references"), 0);
+  std::vector<uint32_t> cursors = bins.offsets;
+  for (size_t face_index = 0; face_index < mesh.faces.size(); ++face_index) {
+    const auto &face = mesh.faces[face_index];
+    const float u0 = uvs[static_cast<size_t>(face[0]) * 2 + 0];
+    const float v0 = uvs[static_cast<size_t>(face[0]) * 2 + 1];
+    const float u1 = uvs[static_cast<size_t>(face[1]) * 2 + 0];
+    const float v1 = uvs[static_cast<size_t>(face[1]) * 2 + 1];
+    const float u2 = uvs[static_cast<size_t>(face[2]) * 2 + 0];
+    const float v2 = uvs[static_cast<size_t>(face[2]) * 2 + 1];
+    const auto x_range = bin_range(std::min({u0, u1, u2}), std::max({u0, u1, u2}), bins.cols);
+    const auto y_range = bin_range(std::min({v0, v1, v2}), std::max({v0, v1, v2}), bins.rows);
+    for (uint32_t y = y_range[0]; y <= y_range[1]; ++y) {
+      for (uint32_t x = x_range[0]; x <= x_range[1]; ++x) {
+        const size_t bin = static_cast<size_t>(y) * bins.cols + x;
+        bins.faces[static_cast<size_t>(cursors[bin]++)] = static_cast<int32_t>(face_index);
+      }
+    }
+  }
+  if (bins.faces.empty()) {
+    bins.faces = {0};
+  }
+  return bins;
 }
 
 std::vector<VoxelRecord> load_voxels(
@@ -452,6 +559,8 @@ nb::dict bake_pbr_texture_metal(
   std::vector<float> vertices = flatten_vertices(mesh);
   std::vector<int32_t> faces = flatten_faces_i32(mesh);
   std::vector<float> uvs = load_uvs_flat(uvs_object, static_cast<int64_t>(mesh.vertices.size()));
+  const bool use_uv_bins = atlas_cols == 0 && atlas_rows == 0;
+  UvBins uv_bins = build_uv_bins(mesh, uvs, texture_size, use_uv_bins);
   std::array<float, 3> origin = parse_origin(origin_object);
   float resolved_voxel_size = std::isfinite(voxel_size) ? static_cast<float>(voxel_size) : std::numeric_limits<float>::quiet_NaN();
   int32_t grid_z = 0;
@@ -483,6 +592,8 @@ nb::dict bake_pbr_texture_metal(
   checked_u32(vertices.size(), "vertex buffer");
   checked_u32(faces.size(), "face buffer");
   checked_u32(uvs.size(), "uv buffer");
+  checked_u32(uv_bins.offsets.size(), "UV bin offset buffer");
+  checked_u32(uv_bins.faces.size(), "UV bin face buffer");
   checked_u32(keys.size(), "voxel key buffer");
   checked_u32(attributes.size(), "voxel attribute buffer");
   checked_u32(pixel_count, "texture pixel count");
@@ -536,6 +647,8 @@ nb::dict bake_pbr_texture_metal(
         grid_y,
         grid_x,
         checked_u32(static_cast<uint64_t>(fallback_radius), "fallback_radius"),
+        uv_bins.cols,
+        uv_bins.rows,
     };
 
     id<MTLBuffer> vertex_buffer = make_buffer(device, vertices.data(), vertices.size() * sizeof(float), @"mlx-spatialkit vertices");
@@ -547,6 +660,16 @@ nb::dict bake_pbr_texture_metal(
     id<MTLBuffer> base_buffer = make_output_buffer(device, base_bytes, @"mlx-spatialkit base color");
     id<MTLBuffer> mr_buffer = make_output_buffer(device, mr_bytes, @"mlx-spatialkit metallic roughness");
     id<MTLBuffer> coverage_buffer = make_output_buffer(device, coverage_bytes, @"mlx-spatialkit coverage");
+    id<MTLBuffer> uv_bin_offsets_buffer = make_buffer(
+        device,
+        uv_bins.offsets.data(),
+        uv_bins.offsets.size() * sizeof(uint32_t),
+        @"mlx-spatialkit UV bin offsets");
+    id<MTLBuffer> uv_bin_faces_buffer = make_buffer(
+        device,
+        uv_bins.faces.data(),
+        uv_bins.faces.size() * sizeof(int32_t),
+        @"mlx-spatialkit UV bin faces");
 
     id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
     if (command_buffer == nil) {
@@ -566,6 +689,8 @@ nb::dict bake_pbr_texture_metal(
     [encoder setBuffer:base_buffer offset:0 atIndex:6];
     [encoder setBuffer:mr_buffer offset:0 atIndex:7];
     [encoder setBuffer:coverage_buffer offset:0 atIndex:8];
+    [encoder setBuffer:uv_bin_offsets_buffer offset:0 atIndex:9];
+    [encoder setBuffer:uv_bin_faces_buffer offset:0 atIndex:10];
     const NSUInteger thread_width = std::min<NSUInteger>(16, [pipeline threadExecutionWidth]);
     const NSUInteger thread_height = std::max<NSUInteger>(1, std::min<NSUInteger>(16, [pipeline maxTotalThreadsPerThreadgroup] / thread_width));
     MTLSize threads_per_group = MTLSizeMake(thread_width, thread_height, 1);
@@ -636,7 +761,7 @@ nb::dict bake_pbr_texture_metal(
     const double surface_denominator = surface > 0 ? static_cast<double>(surface) : 1.0;
 
     nb::dict stats;
-    stats["backend"] = atlas_cols > 0 && atlas_rows > 0 ? "metal-face-atlas-nearest" : "metal-uv-nearest";
+    stats["backend"] = atlas_cols > 0 && atlas_rows > 0 ? "metal-face-atlas-nearest" : "metal-uv-binned-nearest";
     stats["metal_device"] = metal_device_name();
     stats["texture_size"] = texture_size;
     stats["texture_pixel_count"] = static_cast<int64_t>(pixel_count);
@@ -663,6 +788,17 @@ nb::dict bake_pbr_texture_metal(
     stats["atlas_cols"] = atlas_cols;
     stats["atlas_rows"] = atlas_rows;
     stats["atlas_faces_per_tile"] = atlas_faces_per_tile;
+    stats["uv_bin_cols"] = uv_bins.cols;
+    stats["uv_bin_rows"] = uv_bins.rows;
+    stats["uv_bin_count"] = static_cast<int64_t>(static_cast<uint64_t>(uv_bins.cols) * static_cast<uint64_t>(uv_bins.rows));
+    stats["uv_bin_face_reference_count"] = static_cast<int64_t>(uv_bins.reference_count);
+    stats["uv_bin_max_candidate_faces"] = static_cast<int64_t>(uv_bins.max_candidates);
+    stats["uv_bin_non_empty_count"] = static_cast<int64_t>(uv_bins.non_empty_bins);
+    stats["uv_bin_average_candidate_faces"] = uv_bins.cols > 0 && uv_bins.rows > 0
+        ? static_cast<double>(uv_bins.reference_count) / static_cast<double>(static_cast<uint64_t>(uv_bins.cols) * static_cast<uint64_t>(uv_bins.rows))
+        : 0.0;
+    stats["uv_bin_face_reference_guard"] = static_cast<int64_t>(kMaxUvBinFaceReferences);
+    stats["uv_bin_guard_passed"] = true;
     stats["fallback_radius"] = config.fallback_radius;
     stats["dilation_max_passes"] = dilation_max_passes;
 

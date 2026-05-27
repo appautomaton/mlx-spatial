@@ -110,6 +110,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate/SPEC.md`
 - exit signal: Real reference-target export under `/tmp` reports GLB viewer compatibility ready with normals and uint16-only primitives while xatlas chart parity remains deferred.
 
+## Phase 12: UV Raster Binning Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-uv-raster-binning-gate`
+- objective: Make arbitrary chart UV texture baking production-viable by replacing the non-atlas all-faces-per-pixel scan with a bounded UV-space face-bin Metal path and diagnostics.
+- why now: The remaining xatlas/chart parity boundary cannot be closed honestly while arbitrary UV meshes would fall back to an O(texture_pixels * faces) scan.
+- likely outputs: CPU UV bin construction, Metal binned UV raster lookup, bin diagnostics and guards, focused/stress tests, real fixture regression, docs.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/SPEC.md`
+- exit signal: Non-atlas UV bake reports `metal-uv-binned-nearest` with bounded candidate counts, while existing face-atlas and heavy Pixal3D gates still pass and xatlas chart parity remains explicit.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

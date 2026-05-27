@@ -52,6 +52,13 @@ faces share one atlas tile in complementary halves. This is still not xatlas
 charting, but it reduces atlas waste and lets the Metal texture bake report
 `atlas_faces_per_tile=2`.
 
+For arbitrary non-atlas UV meshes, the Metal texture bake path now builds a
+bounded UV-space face-bin index before dispatch. Those bakes report
+`backend=metal-uv-binned-nearest` plus bin grid, face-reference, max-candidate,
+and guard diagnostics, so future chart UVs do not fall back to an
+O(texture_pixels * faces) scan. This is the raster-bake scalability prerequisite
+for xatlas-like charting, not native chart generation itself.
+
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures
 scale `fallback_radius` within `12..24` and `dilation_max_passes` within

@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-uv-raster-binning-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/PLAN.md"
 }

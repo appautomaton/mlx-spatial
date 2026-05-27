@@ -245,6 +245,11 @@ Script defaults:
   exports report a separate `quality.upstream_export_settings` gate; passing
   that gate removes only the 1M-face setting deferral. This is not full upstream
   xatlas charting or CUDA/cuMesh remesh parity.
+  Arbitrary non-atlas UV bakes now use `metal-uv-binned-nearest`, a bounded
+  UV-space face-bin Metal lookup that reports bin grid and candidate diagnostics
+  instead of scanning every face per texel. The current Pixal3D export still
+  uses the paired-triangle face-atlas fast path; native chart generation remains
+  a later parity boundary.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,
