@@ -266,6 +266,9 @@ Script defaults:
   also report `quality.xatlas_chart_parity` with reference chart count and
   utilization, native chart occupancy, ratios, and `parity_ready=false`; this
   measures the gap without adding xatlas to the spatialkit package runtime.
+  The bounded low-fill splitter uses a higher fill target and one extra split
+  depth to improve native chart fill toward those xatlas metrics without
+  claiming xatlas equivalence.
   Non-atlas UV bakes also use bounded native UV-surface fill and
   report raw exact coverage, surface-filled texels, and final visible coverage
   separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;

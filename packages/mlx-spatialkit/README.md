@@ -112,6 +112,10 @@ setting parity.
 The current large-chart splitter, low-fill splitter, bounded rotation search,
 shelf packer, tighter native-chart padding, and UV-surface fill improve the real
 fixture chart candidate versus the older fixed-axis/equal-grid chart path.
+The bounded low-fill splitter now uses a slightly higher fill target and one
+extra split depth, improving the reference-target fixture's measured native
+chart fill and xatlas utilization ratio while keeping
+`quality.xatlas_chart_parity.parity_ready=false`.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

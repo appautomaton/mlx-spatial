@@ -725,11 +725,11 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   constexpr int64_t projection_rotation_candidates = 19;
   constexpr double projection_rotation_step_degrees = 5.0;
   constexpr double pi = 3.14159265358979323846;
-  constexpr double low_fill_rect_fill_threshold = 0.65;
+  constexpr double low_fill_rect_fill_threshold = 0.70;
   constexpr double low_fill_split_min_improvement = 0.02;
   constexpr int64_t low_fill_split_min_faces = 6;
   constexpr int64_t low_fill_split_min_child_faces = 3;
-  constexpr int64_t low_fill_split_max_depth = 2;
+  constexpr int64_t low_fill_split_max_depth = 3;
 
   struct ChartFillEvaluation {
     double triangle_area = 0.0;

@@ -250,6 +250,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-xatlas-parity-diagnostics-gate/SPEC.md`
 - exit signal: Native-chart diagnostics report reference xatlas chart count/utilization, native chart metrics/ratios, and an explicit non-ready parity status.
 
+## Phase 26: Native Chart Fill Target Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-fill-target-gate`
+- objective: Improve native-chart UV fill toward the measured xatlas reference by tuning bounded low-fill splitting.
+- why now: Phase 25 quantified the xatlas gap and an angle sweep showed the public chart angle is not the blocker.
+- likely outputs: Bounded low-fill split tuning, updated diagnostics assertions, real-fixture fill gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-fill-target-gate/SPEC.md`
+- exit signal: Native-chart reference-target export improves chart fill or xatlas-utilization ratio while keeping xatlas parity explicitly false.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

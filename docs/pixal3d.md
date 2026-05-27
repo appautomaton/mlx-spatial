@@ -288,6 +288,9 @@ native chart count/UV-surface occupancy, ratio fields, checks, and
 `parity_ready=false`. This makes the remaining boundary measurable without
 adding xatlas as a `mlx-spatialkit` runtime dependency or claiming chart
 equivalence.
+The native low-fill splitter now uses a higher bounded fill target and one
+extra split depth, which improves the reference-target fixture's chart fill and
+xatlas-utilization ratio while keeping xatlas parity explicitly false.
 `native_chart_uv_candidate` separates `artifact_ready` from `quality_ready`:
 the current chart path writes a valid GLB and clears the scalar native-chart
 coverage checks after UV-surface fill, while preserving `xatlas_chart_parity=false`
