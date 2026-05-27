@@ -660,6 +660,67 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     }
   }
 
+  constexpr int64_t chart_split_max_faces = 512;
+  const int64_t source_chart_count = static_cast<int64_t>(charts.size());
+  int64_t oversized_source_chart_count = 0;
+  std::vector<std::vector<int64_t>> split_charts;
+  split_charts.reserve(charts.size());
+  auto face_centroid_axis = [&mesh](int64_t face_index, int axis) {
+    const auto &face = mesh.faces[static_cast<size_t>(face_index)];
+    return (static_cast<double>(mesh.vertices[static_cast<size_t>(face[0])][static_cast<size_t>(axis)]) +
+            static_cast<double>(mesh.vertices[static_cast<size_t>(face[1])][static_cast<size_t>(axis)]) +
+            static_cast<double>(mesh.vertices[static_cast<size_t>(face[2])][static_cast<size_t>(axis)])) /
+           3.0;
+  };
+  for (const auto &chart : charts) {
+    if (static_cast<int64_t>(chart.size()) <= chart_split_max_faces) {
+      split_charts.push_back(chart);
+      continue;
+    }
+    oversized_source_chart_count += 1;
+    std::array<double, 3> min_centroid{
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+    };
+    std::array<double, 3> max_centroid{
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+    for (int64_t face_index : chart) {
+      for (int axis = 0; axis < 3; ++axis) {
+        const double value = face_centroid_axis(face_index, axis);
+        min_centroid[static_cast<size_t>(axis)] = std::min(min_centroid[static_cast<size_t>(axis)], value);
+        max_centroid[static_cast<size_t>(axis)] = std::max(max_centroid[static_cast<size_t>(axis)], value);
+      }
+    }
+    int split_axis = 0;
+    double best_extent = max_centroid[0] - min_centroid[0];
+    for (int axis = 1; axis < 3; ++axis) {
+      const double extent = max_centroid[static_cast<size_t>(axis)] - min_centroid[static_cast<size_t>(axis)];
+      if (extent > best_extent + 1e-12) {
+        split_axis = axis;
+        best_extent = extent;
+      }
+    }
+    std::vector<int64_t> sorted_chart = chart;
+    std::stable_sort(sorted_chart.begin(), sorted_chart.end(), [&](int64_t left, int64_t right) {
+      const double left_value = face_centroid_axis(left, split_axis);
+      const double right_value = face_centroid_axis(right, split_axis);
+      if (std::fabs(left_value - right_value) > 1e-12) {
+        return left_value < right_value;
+      }
+      return left < right;
+    });
+    for (size_t begin = 0; begin < sorted_chart.size(); begin += static_cast<size_t>(chart_split_max_faces)) {
+      const size_t end = std::min(sorted_chart.size(), begin + static_cast<size_t>(chart_split_max_faces));
+      split_charts.emplace_back(sorted_chart.begin() + static_cast<std::ptrdiff_t>(begin),
+                                sorted_chart.begin() + static_cast<std::ptrdiff_t>(end));
+    }
+  }
+  charts = std::move(split_charts);
+
   struct ChartData {
     int64_t original_index = 0;
     std::vector<int64_t> source_vertices;
@@ -679,6 +740,7 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   constexpr int64_t projection_rotation_candidates = 7;
   constexpr double pi = 3.14159265358979323846;
   const int64_t chart_count = static_cast<int64_t>(charts.size());
+  const int64_t chart_split_count = chart_count - source_chart_count;
   std::vector<ChartData> chart_data;
   chart_data.reserve(charts.size());
   std::vector<float> chart_vertices;
@@ -968,7 +1030,11 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["source_faces"] = face_count;
   stats["output_vertices"] = static_cast<int64_t>(output_vertices);
   stats["output_faces"] = face_count;
+  stats["source_chart_count"] = source_chart_count;
   stats["chart_count"] = chart_count;
+  stats["chart_split_max_faces"] = chart_split_max_faces;
+  stats["chart_split_count"] = chart_split_count;
+  stats["oversized_source_chart_count"] = oversized_source_chart_count;
   stats["max_chart_faces"] = max_chart_faces;
   stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
   stats["chart_angle_degrees"] = chart_angle_degrees;

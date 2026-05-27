@@ -133,6 +133,12 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert uv_stats["projection"] == "local-frame-pca"
     assert uv_stats["projection_rotation_candidates"] == 7
     assert uv_stats["chart_rect_fill_ratio"] > 0.50
+    assert uv_stats["source_chart_count"] > 0
+    assert uv_stats["chart_count"] >= uv_stats["source_chart_count"]
+    assert uv_stats["chart_split_max_faces"] == 512
+    assert uv_stats["chart_split_count"] > 0
+    assert uv_stats["oversized_source_chart_count"] > 0
+    assert uv_stats["max_chart_faces"] <= uv_stats["chart_split_max_faces"]
     assert uv_stats["packing"] == "aspect-shelf-charts"
     assert uv_stats["chart_count"] > 0
     assert uv_stats["output_faces"] == diagnostics["stages"]["simplify_mesh"]["simplified_faces"]
@@ -160,8 +166,9 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert candidate["uv_surface_occupancy_ratio"] == pytest.approx(
         texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     )
-    assert candidate["global_coverage_ratio"] > 0.20439910888671875
-    assert candidate["uv_surface_occupancy_ratio"] > 0.3310232162475586
+    assert candidate["global_coverage_ratio"] > 0.24212932586669922
+    assert candidate["uv_surface_occupancy_ratio"] > 0.38708019256591797
+    assert candidate["uv_bin_max_candidate_faces"] <= 512
     assert candidate["uv_surface_occupancy_ratio"] < 0.50
     assert candidate["checks"]["global_coverage_floor"]["passed"] is False
     assert candidate["checks"]["uv_surface_occupancy_floor"]["passed"] is False

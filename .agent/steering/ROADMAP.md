@@ -170,6 +170,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-local-projection-gate/SPEC.md`
 - exit signal: Real chart export improves UV-surface occupancy above the Phase 16 shelf-packing baseline while readiness diagnostics remain honest.
 
+## Phase 18: Chart UV Large Chart Split Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-uv-large-chart-split-gate`
+- objective: Add deterministic oversized-chart splitting to native chart UV generation and prove the real Pixal3D chart boundary advances.
+- why now: Local projection improved occupancy, but angle sweeps barely moved the blocker and diagnostics still show `max_chart_faces=6220`.
+- likely outputs: Native large-chart splitting, split diagnostics, focused oversized-chart test, real fixture boundary gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-large-chart-split-gate/SPEC.md`
+- exit signal: Real chart export either improves occupancy above the Phase 17 baseline or proves oversized charts are no longer the active bounded-quality blocker.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

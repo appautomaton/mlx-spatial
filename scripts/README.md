@@ -253,8 +253,9 @@ Script defaults:
   decoded-NPZ conversion can pass `uv_backend="native-chart"` to
   `mlx_spatialkit.export_pixal3d_glb`. The script default remains face-atlas,
   and xatlas chart parity remains a later parity boundary. Native chart UVs use
-  deterministic local-frame/PCA projection plus aspect-aware shelves and report
-  chart rect fill and packing efficiency. Chart
+  deterministic oversized-chart splitting, local-frame/PCA projection, and
+  aspect-aware shelves; they report split counts, chart rect fill, and packing
+  efficiency. Chart
   diagnostics separate `artifact_ready` from `quality_ready`, so a valid chart
   GLB can still report `quality_blocked` when coverage or UV occupancy is not
   production-ready.

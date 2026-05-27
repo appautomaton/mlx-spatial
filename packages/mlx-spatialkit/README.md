@@ -71,16 +71,17 @@ bounded UV-space face-bin index before dispatch. Those bakes report
 and guard diagnostics, so chart UVs do not fall back to an
 O(texture_pixels * faces) scan. `make_native_chart_uvs` is available as an
 opt-in native chart candidate: it groups edge-connected smooth faces by a
-normal-angle threshold, duplicates vertices at chart boundaries, packs charts
-through deterministic local-frame/PCA projection plus aspect-aware shelf
-packing, and feeds this binned Metal path. Existing Pixal3D exports still use
-the paired-triangle face atlas by default, and this chart candidate is not
-xatlas chart parity.
+normal-angle threshold, splits oversized charts into deterministic spatial
+chunks, duplicates vertices at chart boundaries, packs charts through
+deterministic local-frame/PCA projection plus aspect-aware shelf packing, and
+feeds this binned Metal path. Existing Pixal3D exports still use the
+paired-triangle face atlas by default, and this chart candidate is not xatlas
+chart parity.
 `export_pixal3d_glb(...,
 uv_backend="native-chart")` wires the same candidate into the real decoded
 Pixal3D export path and records chart count, duplicate ratio, UV-bin
-diagnostics, chart rect fill, shelf packing efficiency, and
-`xatlas_chart_parity=false`.
+diagnostics, large-chart split counts, chart rect fill, shelf packing
+efficiency, and `xatlas_chart_parity=false`.
 
 Chart exports report separate artifact and quality readiness under
 `quality.native_chart_uv_candidate`. A chart export can be artifact-ready when
@@ -90,10 +91,10 @@ too low. In that case `result.quality_warnings` includes
 `native_chart_uv_candidate_quality_blocked`, and the failed checks identify the
 specific coverage/utilization blocker.
 
-The current local projection and shelf packer improve the real fixture chart
-candidate versus the older fixed-axis/equal-grid chart path, but it can still
-report `quality_blocked` until global texture coverage and UV-surface occupancy
-clear the readiness floors.
+The current large-chart splitter, local projection, and shelf packer improve
+the real fixture chart candidate versus the older fixed-axis/equal-grid chart
+path. It can still report `quality_blocked` until global texture coverage and
+UV-surface occupancy clear the readiness floors.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

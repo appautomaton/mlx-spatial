@@ -115,7 +115,10 @@ def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> No
     assert mesh.stats["source_faces"] == 2
     assert mesh.stats["output_vertices"] == 4
     assert mesh.stats["output_faces"] == 2
+    assert mesh.stats["source_chart_count"] == 1
     assert mesh.stats["chart_count"] == 1
+    assert mesh.stats["chart_split_count"] == 0
+    assert mesh.stats["oversized_source_chart_count"] == 0
     assert mesh.stats["max_chart_faces"] == 2
     assert mesh.stats["projection"] == "local-frame-pca"
     assert mesh.stats["projection_rotation_candidates"] == 7
@@ -158,7 +161,9 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
 
     assert mesh.stats["backend"] == "native-chart-atlas"
     assert mesh.stats["packing"] == "aspect-shelf-charts"
+    assert mesh.stats["source_chart_count"] == 2
     assert mesh.stats["chart_count"] == 2
+    assert mesh.stats["chart_split_count"] == 0
     assert mesh.stats["source_vertices"] == 6
     assert mesh.stats["output_vertices"] == 8
     assert mesh.stats["output_faces"] == 4
@@ -212,6 +217,41 @@ def test_make_native_chart_uvs_local_projection_fills_rotated_rectangle() -> Non
     assert mesh.stats["packed_height"] == pytest.approx(0.25)
     assert np.ptp(mesh.uvs[:, 0]) == pytest.approx(0.92, abs=1e-6)
     assert np.ptp(mesh.uvs[:, 1]) == pytest.approx(0.23, abs=1e-6)
+
+
+def test_make_native_chart_uvs_splits_oversized_coplanar_chart() -> None:
+    columns = 34
+    rows = 18
+    vertices = []
+    for y in range(rows):
+        for x in range(columns):
+            vertices.append([float(x), float(y), 0.0])
+    faces = []
+    for y in range(rows - 1):
+        for x in range(columns - 1):
+            v0 = y * columns + x
+            v1 = v0 + 1
+            v2 = v0 + columns
+            v3 = v2 + 1
+            faces.append([v0, v1, v2])
+            faces.append([v2, v1, v3])
+    vertices_array = np.asarray(vertices, dtype=np.float32)
+    faces_array = np.asarray(faces, dtype=np.int64)
+
+    mesh = make_native_chart_uvs(vertices_array, faces_array, chart_angle_degrees=1.0, tile_padding=0.04)
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["source_chart_count"] == 1
+    assert mesh.stats["chart_count"] > 1
+    assert mesh.stats["chart_split_count"] == mesh.stats["chart_count"] - mesh.stats["source_chart_count"]
+    assert mesh.stats["oversized_source_chart_count"] == 1
+    assert mesh.stats["chart_split_max_faces"] == 512
+    assert mesh.stats["max_chart_faces"] <= mesh.stats["chart_split_max_faces"]
+    assert mesh.stats["output_faces"] == faces_array.shape[0]
+    assert mesh.faces.shape == faces_array.shape
+    assert mesh.uvs.shape[0] == mesh.vertices.shape[0]
+    assert np.all(mesh.uvs >= 0.0)
+    assert np.all(mesh.uvs <= 1.0)
 
 
 def test_make_native_chart_uvs_rejects_non_finite_parameters() -> None:
