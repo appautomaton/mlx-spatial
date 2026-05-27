@@ -50,12 +50,22 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-small-loop-fill-balance/SPEC.md`
 - exit signal: Reference-target export keeps `boundary_loop_count=1872 < 2594` and improves xatlas-utilization ratio to `0.6828063257125282`, above the cap-4 repair baseline.
 
+## Phase 36: Repair Policy Contract
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-repair-policy-contract`
+- objective: Expose the verified small-loop repair cap as a native/Python/export setting instead of a hidden constant.
+- why now: The cap-3 policy is a measured geometry/UV tradeoff and must be reproducible from diagnostics and caller settings.
+- likely outputs: Native/Python parameter, export setting, disable path, focused tests, docs.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-repair-policy-contract/SPEC.md`
+- exit signal: Default cap `3` remains verified, value `0` disables repair, and diagnostics make the policy explicit.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-small-loop-fill-balance`.
+- Last verified change: `2026-05-27-mlx-spatialkit-repair-policy-contract`.
 - Phases 1-30 are consolidated into the current verified native export line: Pixal3D decoded fixtures can export GLB through the spatialkit native path with geometry readiness, texture coverage, viewer compatibility, memory telemetry, browser visual proof, and native-chart UV/Metal bake gates.
 - Remaining measured boundary: xatlas chart parity is still false. Latest reference-target native-chart xatlas-utilization ratio before geometry repair was `0.6941716645020964`, with UV-surface occupancy `0.5768346786499023`.
-- Active geometry repair evidence: bounded triangular loop fill reduces final closed boundary loops from `2594` to `1872` with `nonmanifold_edges=0`; UV utilization remains below xatlas parity and is tracked separately.
+- Current geometry repair evidence: bounded triangular loop fill reduces final closed boundary loops from `2594` to `1872` with `nonmanifold_edges=0`; the cap is exposed as `small_boundary_loop_fill_max_edges=3`, and `0` disables it for comparison runs. UV utilization remains below xatlas parity and is tracked separately.
 - Explicit 1M/4096 native-chart exports are upstream-setting ready, with xatlas parity still the open quality-equivalence gap.
 
 ## Deferred or Not Now

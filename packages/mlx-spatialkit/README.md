@@ -125,6 +125,9 @@ that would create degenerate, duplicate, or nonmanifold faces. Repair stats
 record the face budget, considered/filled/rejected loops, budget-limited loops,
 and faces added. This reduces small geometry holes; it does not claim full
 remesh, open-boundary repair, or xatlas UV parity.
+The Pixal3D export setting
+`small_boundary_loop_fill_max_edges=3` exposes that policy in diagnostics;
+set it to `0` to disable this repair for comparison runs.
 
 The current large-chart splitter, low-fill splitter, bounded rotation search,
 shelf packer, sub-texel native-chart padding, and UV-surface fill improve the real

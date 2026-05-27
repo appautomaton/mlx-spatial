@@ -217,6 +217,30 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert after["export_blocking_reasons"] == []
 
 
+def test_simplify_mesh_can_disable_small_boundary_loop_fill() -> None:
+    vertices, faces = _triangular_hole_mesh()
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 2,
+        min_component_faces=1,
+        backend="topology-aware",
+        small_boundary_loop_fill_max_edges=0,
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["small_boundary_loop_fill_enabled"] is False
+    assert stats["small_boundary_loop_fill_max_edges"] == 0
+    assert stats["small_boundary_loops_considered"] == 0
+    assert stats["small_boundary_loops_filled"] == 0
+    assert stats["small_boundary_loop_faces_added"] == 0
+    assert after["boundary_loop_count"] == before["boundary_loop_count"]
+    assert after["boundary_edges"] == before["boundary_edges"]
+    assert after["nonmanifold_edges"] == 0
+
+
 def test_simplify_mesh_topology_aware_preserves_four_edge_boundary_loop() -> None:
     vertices, faces = _grid_mesh_with_missing_cell(6, missing_x=3, missing_y=3)
     before = mesh_metrics(vertices, faces)
@@ -342,3 +366,10 @@ def test_simplify_mesh_rejects_invalid_backend() -> None:
 
     with pytest.raises(ValueError, match="simplifier backend"):
         simplify_mesh(vertices, faces, target_faces=4, backend="bad-backend")
+
+
+def test_simplify_mesh_rejects_negative_small_boundary_loop_fill_cap() -> None:
+    vertices, faces = _messy_mesh()
+
+    with pytest.raises(ValueError, match="small_boundary_loop_fill_max_edges"):
+        simplify_mesh(vertices, faces, target_faces=4, small_boundary_loop_fill_max_edges=-1)

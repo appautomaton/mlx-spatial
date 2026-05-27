@@ -59,6 +59,7 @@ NB_MODULE(_native, module) {
              nb::arg("target_faces"),
              nb::arg("min_component_faces") = 32,
              nb::arg("backend") = "spatial-cluster",
+             nb::arg("small_boundary_loop_fill_max_edges") = 3,
              "Run the native-owned first-pass mesh simplification interface.");
 
   module.def("make_face_atlas_uvs",

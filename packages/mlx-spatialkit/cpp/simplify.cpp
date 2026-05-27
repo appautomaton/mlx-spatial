@@ -80,8 +80,6 @@ struct BackendSelection {
   bool topology_aware = false;
 };
 
-constexpr int64_t kSmallBoundaryLoopFillMaxEdges = 3;
-
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
   std::array<float, 3> min_bounds{
       std::numeric_limits<float>::infinity(),
@@ -472,9 +470,13 @@ void add_backend_stats(
   stats["backend_selection_reason"] = selection.topology_aware ? "topology_aware_backend_requested" : "preview_backend_requested";
 }
 
-void add_small_loop_fill_stats(nb::dict &stats, bool enabled, const SmallLoopFillResult &fill) {
+void add_small_loop_fill_stats(
+    nb::dict &stats,
+    bool enabled,
+    int64_t max_loop_edges,
+    const SmallLoopFillResult &fill) {
   stats["small_boundary_loop_fill_enabled"] = enabled;
-  stats["small_boundary_loop_fill_max_edges"] = kSmallBoundaryLoopFillMaxEdges;
+  stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
   stats["small_boundary_loop_fill_face_budget"] = fill.face_budget;
   stats["small_boundary_loops_considered"] = fill.loops_considered;
   stats["small_boundary_loops_filled"] = fill.loops_filled;
@@ -490,12 +492,16 @@ nb::dict simplify_mesh(
     nb::object faces,
     int64_t target_faces,
     int64_t min_component_faces,
-    const std::string &backend) {
+    const std::string &backend,
+    int64_t small_boundary_loop_fill_max_edges) {
   if (target_faces <= 0) {
     throw nb::value_error("target_faces must be positive");
   }
   if (min_component_faces <= 0) {
     throw nb::value_error("min_component_faces must be positive");
+  }
+  if (small_boundary_loop_fill_max_edges < 0) {
+    throw nb::value_error("small_boundary_loop_fill_max_edges must be non-negative");
   }
   const BackendSelection selection = resolve_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
@@ -505,10 +511,11 @@ nb::dict simplify_mesh(
     mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
     SmallLoopFillResult fill;
     fill.mesh = compact;
-    if (selection.topology_aware) {
+    const bool small_loop_fill_enabled = selection.topology_aware && small_boundary_loop_fill_max_edges > 0;
+    if (small_loop_fill_enabled) {
       fill = fill_small_boundary_loops(
           compact,
-          kSmallBoundaryLoopFillMaxEdges,
+          small_boundary_loop_fill_max_edges,
           target_faces - static_cast<int64_t>(compact.faces.size()));
       compact = fill.mesh;
     }
@@ -516,7 +523,7 @@ nb::dict simplify_mesh(
     nb::dict stats;
     const bool target_reached = static_cast<int64_t>(compact.faces.size()) <= target_faces;
     add_backend_stats(stats, selection, static_cast<int64_t>(compact.faces.size()), target_reached);
-    add_small_loop_fill_stats(stats, selection.topology_aware, fill);
+    add_small_loop_fill_stats(stats, small_loop_fill_enabled, small_boundary_loop_fill_max_edges, fill);
     stats["target_faces"] = target_faces;
     stats["source_faces"] = static_cast<int64_t>(input.faces.size());
     stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
@@ -568,10 +575,11 @@ nb::dict simplify_mesh(
   mesh_common::MeshData simplified = mesh_common::compact_mesh(best.mesh, &unreferenced_removed);
   SmallLoopFillResult fill;
   fill.mesh = simplified;
-  if (selection.topology_aware) {
+  const bool small_loop_fill_enabled = selection.topology_aware && small_boundary_loop_fill_max_edges > 0;
+  if (small_loop_fill_enabled) {
     fill = fill_small_boundary_loops(
         simplified,
-        kSmallBoundaryLoopFillMaxEdges,
+        small_boundary_loop_fill_max_edges,
         target_faces - static_cast<int64_t>(simplified.faces.size()));
     simplified = fill.mesh;
   }
@@ -579,7 +587,7 @@ nb::dict simplify_mesh(
   nb::dict stats;
   const bool target_reached = static_cast<int64_t>(simplified.faces.size()) <= target_faces;
   add_backend_stats(stats, selection, static_cast<int64_t>(simplified.faces.size()), target_reached);
-  add_small_loop_fill_stats(stats, selection.topology_aware, fill);
+  add_small_loop_fill_stats(stats, small_loop_fill_enabled, small_boundary_loop_fill_max_edges, fill);
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());

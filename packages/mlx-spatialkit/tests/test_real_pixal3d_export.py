@@ -169,6 +169,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
     assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
+    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 3
     assert diagnostics["result"]["artifact_ready"] is True
     assert "native_chart_uv_candidate_quality_blocked" not in diagnostics["result"]["quality_warnings"]
     uv_stats = diagnostics["stages"]["uv"]["stats"]
@@ -368,6 +369,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert diagnostics["settings"]["target_faces"] == 212_542
     assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
+    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 3
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
     assert diagnostics["result"]["quality_warnings"] == []
@@ -673,6 +675,9 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="max_texture_pixels must be positive"):
         export_pixal3d_glb(decoded_dir, tmp_path / "out", max_texture_pixels=0)
+
+    with pytest.raises(ValueError, match="small_boundary_loop_fill_max_edges"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", small_boundary_loop_fill_max_edges=-1)
 
 
 def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:

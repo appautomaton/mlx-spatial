@@ -318,6 +318,9 @@ rejects patches that would introduce degenerate, duplicate, or nonmanifold
 faces. Diagnostics report the repair budget, loop counts, rejected loops, and
 faces added. This addresses small geometry holes separately from xatlas chart
 parity or open-boundary remeshing.
+The public export parameter `small_boundary_loop_fill_max_edges` defaults to
+`3` for this measured policy; use `0` to disable the fill when comparing
+geometry repair against the unpatched simplifier output.
 When the same opt-in native-chart backend is run with explicit upstream-style
 `target_faces=1000000`, `texture_size=4096`, the real fixture passes both
 `quality.upstream_export_settings` and `quality.native_chart_uv_candidate`

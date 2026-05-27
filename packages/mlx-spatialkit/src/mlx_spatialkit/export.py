@@ -43,6 +43,7 @@ PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN = 0.50
 PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
 PIXAL3D_FACE_ATLAS_TILE_PADDING = 0.08
 PIXAL3D_NATIVE_CHART_TILE_PADDING = 0.001
+PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES = 3
 PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN = 0.95
 
 
@@ -221,6 +222,7 @@ def export_pixal3d_glb(
     uv_backend: str = "face-atlas",
     chart_angle_degrees: float = 45.0,
     tile_padding: float | None = None,
+    small_boundary_loop_fill_max_edges: int = PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES,
     max_texture_pixels: int | None = None,
     diagnostics_path: str | Path | None = None,
 ) -> Pixal3DGlbExportResult:
@@ -237,6 +239,9 @@ def export_pixal3d_glb(
         raise ValueError("grid_size must be positive")
     if min_component_faces <= 0:
         raise ValueError("min_component_faces must be positive")
+    resolved_small_boundary_loop_fill_max_edges = int(small_boundary_loop_fill_max_edges)
+    if resolved_small_boundary_loop_fill_max_edges < 0:
+        raise ValueError("small_boundary_loop_fill_max_edges must be non-negative")
     if max_texture_pixels is not None and max_texture_pixels <= 0:
         raise ValueError("max_texture_pixels must be positive")
     resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
@@ -255,7 +260,6 @@ def export_pixal3d_glb(
     resolved_quality_preset = str(export_settings["quality_preset"])
     resolved_target_faces = int(export_settings["target_faces"])
     requested_simplifier_backend = _simplifier_backend_for_quality_preset(resolved_quality_preset)
-
     diagnostics: dict[str, Any] = {
         "stage": "pixal3d_glb_export",
         "source_dir": str(source_dir),
@@ -275,6 +279,7 @@ def export_pixal3d_glb(
             "reference_xatlas_face_guard": reference.get("xatlas_face_guard") if reference is not None else None,
             "grid_size": int(grid_size) if grid_size is not None else None,
             "min_component_faces": int(min_component_faces),
+            "small_boundary_loop_fill_max_edges": resolved_small_boundary_loop_fill_max_edges,
             "requested_uv_backend": str(uv_backend),
             "uv_backend": resolved_uv_backend,
             "chart_angle_degrees": resolved_chart_angle_degrees,
@@ -377,6 +382,7 @@ def export_pixal3d_glb(
             target_faces=resolved_target_faces,
             min_component_faces=min_component_faces,
             backend=requested_simplifier_backend,
+            small_boundary_loop_fill_max_edges=resolved_small_boundary_loop_fill_max_edges,
         ),
         memory_monitor=memory_monitor,
     )
