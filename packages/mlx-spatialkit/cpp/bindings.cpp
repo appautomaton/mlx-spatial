@@ -1,6 +1,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
+#include "flexi_dual_grid.hpp"
 #include "metal_probe.hpp"
 #include "pixal3d_contracts.hpp"
 
@@ -27,4 +28,11 @@ NB_MODULE(_native, module) {
   module.def("validate_pixal3d_texture_attributes",
              &mlx_spatialkit::validate_pixal3d_texture_attributes,
              "Validate Pixal3D decoded texture coordinate and attribute arrays.");
+
+  module.def("extract_flexi_dual_grid",
+             &mlx_spatialkit::extract_flexi_dual_grid,
+             nb::arg("coordinates"),
+             nb::arg("fields"),
+             nb::arg("grid_size"),
+             "Extract a triangle mesh from Pixal3D FlexiDualGrid fields.");
 }

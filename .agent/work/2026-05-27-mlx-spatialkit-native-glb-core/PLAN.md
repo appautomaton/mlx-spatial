@@ -93,6 +93,10 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 
 **Touches:** `packages/mlx-spatialkit/cpp/flexi_dual_grid.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/mesh.py`, `packages/mlx-spatialkit/tests`
 
+**Status:** complete
+**Evidence:** Added native C++ FlexiDualGrid extraction with the current `ovoxel.py` coordinate order, `2*sigmoid - 0.5` vertex transform, strict positive intersection flags, softplus split weights, tie-to-split2 behavior, and no-quad empty mesh result; `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_flexi_dual_grid.py -q` passed with `6 passed`, full package tests passed with `19 passed`, and wheel/sdist artifact-clean build passed after adding the extraction source.
+**Risks / next:** Slice 4 must add native diagnostics/cleanup around this mesh output before real export workloads are attempted.
+
 ### Slice 4: Native Mesh Metrics, Cleanup, And Simplification Interface
 
 **Objective:** Add native mesh diagnostics plus enough cleanup/simplification behavior to prepare extracted Pixal3D meshes for UV/export.
