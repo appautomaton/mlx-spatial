@@ -50,6 +50,7 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not heavy'"
 markers = [
     "heavy: opt-in tests that use real model outputs or large native workloads",
 ]
