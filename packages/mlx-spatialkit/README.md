@@ -116,6 +116,9 @@ The bounded low-fill splitter now uses a slightly higher fill target and one
 extra split depth, improving the reference-target fixture's measured native
 chart fill and xatlas utilization ratio while keeping
 `quality.xatlas_chart_parity.parity_ready=false`.
+Within that bounded policy, eligible low-fill charts now evaluate both local
+centroid split axes and accept the better improving split; diagnostics report
+the two-axis search counts so the extra work is visible.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

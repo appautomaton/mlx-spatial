@@ -730,6 +730,7 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   constexpr int64_t low_fill_split_min_faces = 6;
   constexpr int64_t low_fill_split_min_child_faces = 3;
   constexpr int64_t low_fill_split_max_depth = 3;
+  constexpr int64_t low_fill_split_axis_candidates = 2;
 
   struct ChartFillEvaluation {
     double triangle_area = 0.0;
@@ -913,6 +914,7 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     pre_low_fill_rect_area += evaluation.rect_area;
   }
   int64_t low_fill_split_candidate_count = 0;
+  int64_t low_fill_split_axis_candidate_count = 0;
   int64_t low_fill_source_chart_count = 0;
   int64_t low_fill_split_accepted_count = 0;
   int64_t low_fill_split_rejected_count = 0;
@@ -936,46 +938,63 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
                              parent.rect_fill < low_fill_rect_fill_threshold;
       if (can_split) {
         low_fill_split_candidate_count += 1;
-        std::vector<std::pair<double, int64_t>> sortable;
-        sortable.reserve(item.faces.size());
-        for (size_t index = 0; index < item.faces.size(); ++index) {
-          const auto &centroid = parent.face_centroids[index];
-          sortable.push_back({centroid[static_cast<size_t>(parent.split_axis)], item.faces[index]});
-        }
-        std::stable_sort(sortable.begin(), sortable.end(), [](const auto &left, const auto &right) {
-          if (std::fabs(left.first - right.first) > 1e-12) {
-            return left.first < right.first;
+        low_fill_split_axis_candidate_count += low_fill_split_axis_candidates;
+        const std::array<int, 2> split_axes{
+            parent.split_axis,
+            parent.split_axis == 0 ? 1 : 0,
+        };
+        double best_child_fill = -std::numeric_limits<double>::infinity();
+        std::vector<int64_t> best_left_faces;
+        std::vector<int64_t> best_right_faces;
+        for (int axis : split_axes) {
+          std::vector<std::pair<double, int64_t>> sortable;
+          sortable.reserve(item.faces.size());
+          for (size_t index = 0; index < item.faces.size(); ++index) {
+            const auto &centroid = parent.face_centroids[index];
+            sortable.push_back({centroid[static_cast<size_t>(axis)], item.faces[index]});
           }
-          return left.second < right.second;
-        });
-        const size_t midpoint_index = sortable.size() / 2;
-        std::vector<int64_t> left_faces;
-        std::vector<int64_t> right_faces;
-        left_faces.reserve(midpoint_index);
-        right_faces.reserve(sortable.size() - midpoint_index);
-        for (size_t index = 0; index < sortable.size(); ++index) {
-          const int64_t face_index = sortable[index].second;
-          if (index < midpoint_index) {
-            left_faces.push_back(face_index);
-          } else {
-            right_faces.push_back(face_index);
+          std::stable_sort(sortable.begin(), sortable.end(), [](const auto &left, const auto &right) {
+            if (std::fabs(left.first - right.first) > 1e-12) {
+              return left.first < right.first;
+            }
+            return left.second < right.second;
+          });
+          const size_t midpoint_index = sortable.size() / 2;
+          std::vector<int64_t> left_faces;
+          std::vector<int64_t> right_faces;
+          left_faces.reserve(midpoint_index);
+          right_faces.reserve(sortable.size() - midpoint_index);
+          for (size_t index = 0; index < sortable.size(); ++index) {
+            const int64_t face_index = sortable[index].second;
+            if (index < midpoint_index) {
+              left_faces.push_back(face_index);
+            } else {
+              right_faces.push_back(face_index);
+            }
           }
-        }
-        if (static_cast<int64_t>(left_faces.size()) >= low_fill_split_min_child_faces &&
-            static_cast<int64_t>(right_faces.size()) >= low_fill_split_min_child_faces) {
+          if (static_cast<int64_t>(left_faces.size()) < low_fill_split_min_child_faces ||
+              static_cast<int64_t>(right_faces.size()) < low_fill_split_min_child_faces) {
+            continue;
+          }
           const ChartFillEvaluation left = evaluate_chart_fill(left_faces);
           const ChartFillEvaluation right = evaluate_chart_fill(right_faces);
           const double child_rect_area = left.rect_area + right.rect_area;
           const double child_fill = child_rect_area > 0.0 ? (left.triangle_area + right.triangle_area) / child_rect_area : 0.0;
-          if (child_fill > parent.rect_fill + low_fill_split_min_improvement) {
-            if (!item.source_counted) {
-              low_fill_source_chart_count += 1;
-            }
-            low_fill_split_accepted_count += 1;
-            pending.push_back(LowFillWorkItem{std::move(right_faces), item.depth + 1, true});
-            pending.push_back(LowFillWorkItem{std::move(left_faces), item.depth + 1, true});
-            continue;
+          if (child_fill > best_child_fill + 1e-12) {
+            best_child_fill = child_fill;
+            best_left_faces = std::move(left_faces);
+            best_right_faces = std::move(right_faces);
           }
+        }
+        if (!best_left_faces.empty() && !best_right_faces.empty() &&
+            best_child_fill > parent.rect_fill + low_fill_split_min_improvement) {
+          if (!item.source_counted) {
+            low_fill_source_chart_count += 1;
+          }
+          low_fill_split_accepted_count += 1;
+          pending.push_back(LowFillWorkItem{std::move(best_right_faces), item.depth + 1, true});
+          pending.push_back(LowFillWorkItem{std::move(best_left_faces), item.depth + 1, true});
+          continue;
         }
         low_fill_split_rejected_count += 1;
       }
@@ -1303,7 +1322,9 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["low_fill_split_min_faces"] = low_fill_split_min_faces;
   stats["low_fill_split_min_child_faces"] = low_fill_split_min_child_faces;
   stats["low_fill_split_max_depth"] = low_fill_split_max_depth;
+  stats["low_fill_split_axis_candidates"] = low_fill_split_axis_candidates;
   stats["low_fill_split_candidate_count"] = low_fill_split_candidate_count;
+  stats["low_fill_split_axis_candidate_count"] = low_fill_split_axis_candidate_count;
   stats["low_fill_source_chart_count"] = low_fill_source_chart_count;
   stats["low_fill_split_accepted_count"] = low_fill_split_accepted_count;
   stats["low_fill_split_rejected_count"] = low_fill_split_rejected_count;

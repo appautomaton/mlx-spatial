@@ -291,6 +291,9 @@ equivalence.
 The native low-fill splitter now uses a higher bounded fill target and one
 extra split depth, which improves the reference-target fixture's chart fill and
 xatlas-utilization ratio while keeping xatlas parity explicitly false.
+Eligible low-fill charts also evaluate both local centroid split axes and accept
+the better improving split; `low_fill_split_axis_candidate_count` records the
+bounded two-axis search.
 `native_chart_uv_candidate` separates `artifact_ready` from `quality_ready`:
 the current chart path writes a valid GLB and clears the scalar native-chart
 coverage checks after UV-surface fill, while preserving `xatlas_chart_parity=false`
