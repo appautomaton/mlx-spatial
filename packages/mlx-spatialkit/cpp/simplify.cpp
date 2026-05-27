@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <numeric>
 #include <set>
@@ -68,6 +69,7 @@ struct ClusterResult {
 struct SmallLoopFillResult {
   mesh_common::MeshData mesh;
   int64_t face_budget = 0;
+  int64_t repair_pass_count = 0;
   int64_t loops_considered = 0;
   int64_t loops_filled = 0;
   int64_t loops_filled_by_ear_clipping = 0;
@@ -81,6 +83,10 @@ struct SmallLoopFillResult {
   int64_t loops_rejected_duplicate = 0;
   int64_t loops_rejected_nonmanifold = 0;
   int64_t loops_budget_limited = 0;
+  int64_t branched_cycle_candidates = 0;
+  int64_t branched_cycles_filled = 0;
+  int64_t branched_cycles_rejected = 0;
+  int64_t branched_cycles_budget_limited = 0;
   int64_t faces_added = 0;
 };
 
@@ -99,6 +105,8 @@ struct BackendSelection {
 constexpr const char *kSmallBoundaryLoopFillAlgorithm = "projected-ear-clipping";
 constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "centroid-fan";
 constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 6;
+constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 4;
+constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 2;
 
 enum class PatchRejectReason {
   none,
@@ -533,7 +541,131 @@ void record_patch_rejection(SmallLoopFillResult &result, PatchRejectReason reaso
   }
 }
 
-SmallLoopFillResult fill_small_boundary_loops(
+std::vector<int64_t> canonical_loop_key(const std::vector<int64_t> &loop) {
+  if (loop.empty()) {
+    return {};
+  }
+  auto rotate_min = [](const std::vector<int64_t> &values) {
+    const auto min_iter = std::min_element(values.begin(), values.end());
+    const size_t min_index = static_cast<size_t>(std::distance(values.begin(), min_iter));
+    std::vector<int64_t> rotated;
+    rotated.reserve(values.size());
+    for (size_t offset = 0; offset < values.size(); ++offset) {
+      rotated.push_back(values[(min_index + offset) % values.size()]);
+    }
+    return rotated;
+  };
+  std::vector<int64_t> forward = rotate_min(loop);
+  std::vector<int64_t> reversed = loop;
+  std::reverse(reversed.begin(), reversed.end());
+  reversed = rotate_min(reversed);
+  return std::lexicographical_compare(reversed.begin(), reversed.end(), forward.begin(), forward.end())
+      ? reversed
+      : forward;
+}
+
+std::vector<int64_t> bounded_path_without_edge(
+    const std::unordered_map<int64_t, std::vector<int64_t>> &adjacency,
+    int64_t start,
+    int64_t goal,
+    const mesh_common::EdgeKey &banned_edge,
+    int64_t max_path_edges) {
+  struct PathState {
+    int64_t vertex = 0;
+    std::vector<int64_t> path;
+  };
+
+  std::deque<PathState> queue;
+  queue.push_back(PathState{start, {start}});
+  while (!queue.empty()) {
+    PathState state = std::move(queue.front());
+    queue.pop_front();
+    if (static_cast<int64_t>(state.path.size()) - 1 >= max_path_edges) {
+      continue;
+    }
+    const auto found = adjacency.find(state.vertex);
+    if (found == adjacency.end()) {
+      continue;
+    }
+    for (const int64_t neighbor : found->second) {
+      const mesh_common::EdgeKey edge = mesh_common::edge_key(state.vertex, neighbor);
+      if (edge == banned_edge) {
+        continue;
+      }
+      if (neighbor == goal) {
+        std::vector<int64_t> result = state.path;
+        result.push_back(neighbor);
+        return result;
+      }
+      if (std::find(state.path.begin(), state.path.end(), neighbor) != state.path.end()) {
+        continue;
+      }
+      std::vector<int64_t> next_path = state.path;
+      next_path.push_back(neighbor);
+      queue.push_back(PathState{neighbor, std::move(next_path)});
+    }
+  }
+  return {};
+}
+
+std::vector<std::vector<int64_t>> branched_component_cycles(
+    const std::unordered_map<int64_t, std::vector<int64_t>> &adjacency,
+    const std::vector<int64_t> &component_vertices,
+    int64_t max_loop_edges) {
+  std::unordered_set<int64_t> component_set;
+  component_set.reserve(component_vertices.size());
+  for (const int64_t vertex : component_vertices) {
+    component_set.insert(vertex);
+  }
+
+  std::vector<mesh_common::EdgeKey> component_edges;
+  for (const int64_t vertex : component_vertices) {
+    const auto found = adjacency.find(vertex);
+    if (found == adjacency.end()) {
+      continue;
+    }
+    for (const int64_t neighbor : found->second) {
+      if (vertex < neighbor && component_set.contains(neighbor)) {
+        component_edges.push_back(mesh_common::edge_key(vertex, neighbor));
+      }
+    }
+  }
+  std::sort(component_edges.begin(), component_edges.end(), [](const auto &left, const auto &right) {
+    return left.a == right.a ? left.b < right.b : left.a < right.a;
+  });
+
+  std::set<std::vector<int64_t>> seen_cycles;
+  std::vector<std::vector<int64_t>> cycles;
+  for (const auto &edge : component_edges) {
+    std::vector<int64_t> path =
+        bounded_path_without_edge(adjacency, edge.b, edge.a, edge, std::max<int64_t>(1, max_loop_edges - 1));
+    if (path.empty()) {
+      continue;
+    }
+    std::vector<int64_t> loop;
+    loop.reserve(path.size());
+    loop.push_back(edge.a);
+    for (size_t index = 0; index + 1 < path.size(); ++index) {
+      loop.push_back(path[index]);
+    }
+    if (loop.size() < 3 || static_cast<int64_t>(loop.size()) > max_loop_edges) {
+      continue;
+    }
+    std::vector<int64_t> key = canonical_loop_key(loop);
+    if (seen_cycles.insert(key).second) {
+      cycles.push_back(std::move(loop));
+    }
+  }
+  std::sort(cycles.begin(), cycles.end(), [](const auto &left, const auto &right) {
+    if (left.size() != right.size()) {
+      return left.size() < right.size();
+    }
+    return canonical_loop_key(left) < canonical_loop_key(right);
+  });
+  return cycles;
+}
+
+SmallLoopFillResult fill_small_boundary_loops_single_pass(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
     int64_t face_budget) {
@@ -566,62 +698,28 @@ SmallLoopFillResult fill_small_boundary_loops(
     seen_faces.insert(face);
   }
 
-  std::unordered_set<int64_t> visited;
-  visited.reserve(adjacency.size());
-  std::vector<int64_t> stack;
-  stack.reserve(adjacency.size());
-  for (const auto &[seed, _] : adjacency) {
+  for (auto &[_, neighbors] : adjacency) {
     (void)_;
-    if (visited.contains(seed)) {
-      continue;
-    }
-    std::vector<int64_t> component_vertices;
-    stack.clear();
-    stack.push_back(seed);
-    visited.insert(seed);
-    int64_t edge_stubs = 0;
-    bool closed = true;
-    while (!stack.empty()) {
-      const int64_t vertex = stack.back();
-      stack.pop_back();
-      component_vertices.push_back(vertex);
-      const auto found = adjacency.find(vertex);
-      if (found == adjacency.end()) {
-        closed = false;
-        continue;
-      }
-      const auto &neighbors = found->second;
-      edge_stubs += static_cast<int64_t>(neighbors.size());
-      if (neighbors.size() != 2) {
-        closed = false;
-      }
-      for (int64_t neighbor : neighbors) {
-        if (!visited.contains(neighbor)) {
-          visited.insert(neighbor);
-          stack.push_back(neighbor);
-        }
-      }
-    }
+    std::sort(neighbors.begin(), neighbors.end());
+  }
 
-    const int64_t component_edges = edge_stubs / 2;
-    if (!closed || component_edges < 3 || component_edges > max_loop_edges) {
-      continue;
-    }
+  auto apply_loop_patch = [&](const std::vector<int64_t> &loop, bool branched_cycle) {
     result.loops_considered += 1;
-    const std::vector<int64_t> loop = ordered_closed_loop(adjacency, component_vertices);
-    if (loop.size() < 3 || static_cast<int64_t>(loop.size()) != component_edges) {
-      result.loops_rejected += 1;
-      result.loops_rejected_ordering += 1;
-      continue;
+    if (branched_cycle) {
+      result.branched_cycle_candidates += 1;
     }
+    const int64_t loop_edges = static_cast<int64_t>(loop.size());
 
     std::vector<std::array<int64_t, 3>> patch_faces = triangulate_loop_patch(result.mesh, loop);
     bool centroid_fan_patch = false;
     if (patch_faces.empty()) {
-      if (component_edges > kSmallBoundaryLoopFillFallbackMaxEdges) {
+      if (loop_edges > kSmallBoundaryLoopFillFallbackMaxEdges) {
         result.loops_rejected += 1;
         result.loops_rejected_fallback_cap += 1;
-        continue;
+        if (branched_cycle) {
+          result.branched_cycles_rejected += 1;
+        }
+        return;
       }
       result.loops_centroid_fan_attempted += 1;
       const int64_t center_vertex_id = static_cast<int64_t>(result.mesh.vertices.size());
@@ -629,7 +727,10 @@ SmallLoopFillResult fill_small_boundary_loops(
       if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
         result.loops_rejected += 1;
         result.loops_rejected_triangulation += 1;
-        continue;
+        if (branched_cycle) {
+          result.branched_cycles_rejected += 1;
+        }
+        return;
       }
       result.mesh.vertices.push_back(center);
       patch_faces = centroid_fan_loop_patch(result.mesh, loop, center_vertex_id);
@@ -638,9 +739,13 @@ SmallLoopFillResult fill_small_boundary_loops(
         result.mesh.vertices.pop_back();
         result.loops_rejected += 1;
         result.loops_rejected_triangulation += 1;
-        continue;
+        if (branched_cycle) {
+          result.branched_cycles_rejected += 1;
+        }
+        return;
       }
     }
+
     bool valid_patch = true;
     PatchRejectReason reject_reason = PatchRejectReason::none;
     std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> local_edge_adds;
@@ -687,14 +792,20 @@ SmallLoopFillResult fill_small_boundary_loops(
         result.mesh.vertices.pop_back();
       }
       record_patch_rejection(result, reject_reason);
-      continue;
+      if (branched_cycle) {
+        result.branched_cycles_rejected += 1;
+      }
+      return;
     }
     if (static_cast<int64_t>(patch_faces.size()) > result.face_budget - result.faces_added) {
       if (centroid_fan_patch) {
         result.mesh.vertices.pop_back();
       }
       result.loops_budget_limited += 1;
-      continue;
+      if (branched_cycle) {
+        result.branched_cycles_budget_limited += 1;
+      }
+      return;
     }
     for (const auto &face : patch_faces) {
       result.mesh.faces.push_back(face);
@@ -707,13 +818,133 @@ SmallLoopFillResult fill_small_boundary_loops(
     }
     result.faces_added += static_cast<int64_t>(patch_faces.size());
     result.loops_filled += 1;
+    if (branched_cycle) {
+      result.branched_cycles_filled += 1;
+    }
     if (centroid_fan_patch) {
       result.loops_filled_by_centroid_fan += 1;
     } else {
       result.loops_filled_by_ear_clipping += 1;
     }
+  };
+
+  std::unordered_set<int64_t> visited;
+  visited.reserve(adjacency.size());
+  std::vector<int64_t> stack;
+  stack.reserve(adjacency.size());
+  std::vector<int64_t> seeds;
+  seeds.reserve(adjacency.size());
+  for (const auto &[seed, _] : adjacency) {
+    (void)_;
+    seeds.push_back(seed);
+  }
+  std::sort(seeds.begin(), seeds.end());
+  for (const int64_t seed : seeds) {
+    if (visited.contains(seed)) {
+      continue;
+    }
+    std::vector<int64_t> component_vertices;
+    stack.clear();
+    stack.push_back(seed);
+    visited.insert(seed);
+    int64_t edge_stubs = 0;
+    bool closed = true;
+    while (!stack.empty()) {
+      const int64_t vertex = stack.back();
+      stack.pop_back();
+      component_vertices.push_back(vertex);
+      const auto found = adjacency.find(vertex);
+      if (found == adjacency.end()) {
+        closed = false;
+        continue;
+      }
+      const auto &neighbors = found->second;
+      edge_stubs += static_cast<int64_t>(neighbors.size());
+      if (neighbors.size() != 2) {
+        closed = false;
+      }
+      for (int64_t neighbor : neighbors) {
+        if (!visited.contains(neighbor)) {
+          visited.insert(neighbor);
+          stack.push_back(neighbor);
+        }
+      }
+    }
+
+    const int64_t component_edges = edge_stubs / 2;
+    if (component_edges < 3) {
+      continue;
+    }
+    if (closed) {
+      if (component_edges > max_loop_edges) {
+        continue;
+      }
+      const std::vector<int64_t> loop = ordered_closed_loop(adjacency, component_vertices);
+      if (loop.size() < 3 || static_cast<int64_t>(loop.size()) != component_edges) {
+        result.loops_considered += 1;
+        result.loops_rejected += 1;
+        result.loops_rejected_ordering += 1;
+        continue;
+      }
+      apply_loop_patch(loop, false);
+      continue;
+    }
+
+    std::vector<std::vector<int64_t>> cycles =
+        branched_component_cycles(adjacency, component_vertices, kSmallBoundaryBranchedCycleFillMaxEdges);
+    for (const auto &cycle : cycles) {
+      apply_loop_patch(cycle, true);
+    }
   }
   return result;
+}
+
+void accumulate_fill_pass(SmallLoopFillResult &total, SmallLoopFillResult &&pass) {
+  total.repair_pass_count += 1;
+  total.loops_considered += pass.loops_considered;
+  total.loops_filled += pass.loops_filled;
+  total.loops_filled_by_ear_clipping += pass.loops_filled_by_ear_clipping;
+  total.loops_centroid_fan_attempted += pass.loops_centroid_fan_attempted;
+  total.loops_filled_by_centroid_fan += pass.loops_filled_by_centroid_fan;
+  total.loops_rejected += pass.loops_rejected;
+  total.loops_rejected_ordering += pass.loops_rejected_ordering;
+  total.loops_rejected_triangulation += pass.loops_rejected_triangulation;
+  total.loops_rejected_fallback_cap += pass.loops_rejected_fallback_cap;
+  total.loops_rejected_degenerate += pass.loops_rejected_degenerate;
+  total.loops_rejected_duplicate += pass.loops_rejected_duplicate;
+  total.loops_rejected_nonmanifold += pass.loops_rejected_nonmanifold;
+  total.loops_budget_limited += pass.loops_budget_limited;
+  total.branched_cycle_candidates += pass.branched_cycle_candidates;
+  total.branched_cycles_filled += pass.branched_cycles_filled;
+  total.branched_cycles_rejected += pass.branched_cycles_rejected;
+  total.branched_cycles_budget_limited += pass.branched_cycles_budget_limited;
+  total.faces_added += pass.faces_added;
+  total.mesh = std::move(pass.mesh);
+}
+
+SmallLoopFillResult fill_small_boundary_loops(
+    const mesh_common::MeshData &input,
+    int64_t max_loop_edges,
+    int64_t face_budget) {
+  SmallLoopFillResult total;
+  total.mesh = input;
+  total.face_budget = std::max<int64_t>(0, face_budget);
+  if (total.face_budget <= 0 || total.mesh.faces.empty()) {
+    return total;
+  }
+  for (int64_t pass_index = 0; pass_index < kSmallBoundaryLoopRepairMaxPasses; ++pass_index) {
+    const int64_t remaining_budget = total.face_budget - total.faces_added;
+    if (remaining_budget <= 0) {
+      break;
+    }
+    SmallLoopFillResult pass = fill_small_boundary_loops_single_pass(total.mesh, max_loop_edges, remaining_budget);
+    const int64_t pass_faces_added = pass.faces_added;
+    accumulate_fill_pass(total, std::move(pass));
+    if (pass_faces_added <= 0) {
+      break;
+    }
+  }
+  return total;
 }
 
 int64_t initial_grid_resolution(int64_t target_faces) {
@@ -783,6 +1014,10 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loop_fill_fallback_algorithm"] = kSmallBoundaryLoopFillFallbackAlgorithm;
   stats["small_boundary_loop_fill_fallback_enabled"] = enabled;
   stats["small_boundary_loop_fill_fallback_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
+  stats["small_boundary_branched_cycle_fill_enabled"] = enabled;
+  stats["small_boundary_branched_cycle_fill_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
+  stats["small_boundary_loop_repair_max_passes"] = kSmallBoundaryLoopRepairMaxPasses;
+  stats["small_boundary_loop_repair_pass_count"] = fill.repair_pass_count;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
   stats["small_boundary_loop_fill_face_budget"] = fill.face_budget;
   stats["small_boundary_loops_considered"] = fill.loops_considered;
@@ -798,6 +1033,10 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loops_rejected_duplicate"] = fill.loops_rejected_duplicate;
   stats["small_boundary_loops_rejected_nonmanifold"] = fill.loops_rejected_nonmanifold;
   stats["small_boundary_loops_budget_limited"] = fill.loops_budget_limited;
+  stats["small_boundary_branched_cycle_candidates"] = fill.branched_cycle_candidates;
+  stats["small_boundary_branched_cycles_filled"] = fill.branched_cycles_filled;
+  stats["small_boundary_branched_cycles_rejected"] = fill.branched_cycles_rejected;
+  stats["small_boundary_branched_cycles_budget_limited"] = fill.branched_cycles_budget_limited;
   stats["small_boundary_loop_faces_added"] = fill.faces_added;
 }
 

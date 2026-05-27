@@ -293,8 +293,9 @@ Script defaults:
   The topology-aware simplifier also runs a bounded native small-loop fill for
   closed boundary loops up to 8 edges when target-face budget remains, using
   projected ear-clipping first and a guarded centroid-fan fallback capped at
-  6 edges. Diagnostics report method counts, rejection reasons, and faces
-  added. Direct decoded-NPZ exports expose this as
+  6 edges. It can also fill small simple cycles, capped at 4 edges, found
+  inside branched open-boundary components. Diagnostics report method counts,
+  branch-cycle counts, rejection reasons, and faces added. Direct decoded-NPZ exports expose this as
   `small_boundary_loop_fill_max_edges=8`; use `0` to disable the repair for
   comparison runs.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,

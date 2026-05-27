@@ -60,11 +60,21 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-open-boundary-diagnostics/SPEC.md`
 - exit signal: Focused and package tests pass, native build succeeds, and the real fixture records actionable open-boundary diagnostics without readiness regressions.
 
+## Phase 46: Branched-Cycle Repair
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-branched-cycle-repair`
+- objective: Fill small simple cycles found inside branched open-boundary components using existing native topology guards.
+- why now: Open-boundary diagnostics showed `808` branched components and no simple open chains, while a branch-cycle probe found bounded simple cycles that can be tested without endpoint-closing.
+- likely outputs: C++ branch-cycle extraction/fill, focused mesh tests, real-fixture topology evidence, docs, package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-branched-cycle-repair/SPEC.md`
+- exit signal: Focused and package tests pass, native build succeeds, and the real fixture reduces branched/open-boundary topology without readiness regressions.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-open-boundary-diagnostics`.
+- Last verified change: `2026-05-27-mlx-spatialkit-branched-cycle-repair`.
 - Diagnostics separate scalar reference-target quality from production equivalence.
-- Native geometry repair now uses bounded projected ear-clipping with an 8-edge public cap plus a conservative 6-edge centroid-fan fallback for rejected small closed loops.
+- Native geometry repair now uses bounded projected ear-clipping with an 8-edge public cap, a conservative 6-edge centroid-fan fallback, and guarded 4-edge branch-cycle repair for small cycles inside branched boundary components.
 - Native open-boundary diagnostics now distinguish simple open chains from branched open components; the current real fixture has branched open components, not simple open chains.
 - Native-chart xatlas-utilization ratio improved through bounded small-chart splitting and denser split-position search, not by changing padding defaults.
 - Metal texture bake now releases the Python GIL during command-buffer waits so Python monitor threads can sample during GPU execution.

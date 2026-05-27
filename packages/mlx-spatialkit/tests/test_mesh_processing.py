@@ -222,9 +222,11 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert stats["small_boundary_loop_fill_fallback_algorithm"] == "centroid-fan"
     assert stats["small_boundary_loop_fill_fallback_enabled"] is True
     assert stats["small_boundary_loop_fill_fallback_max_edges"] == 6
+    assert stats["small_boundary_loop_repair_max_passes"] == 2
+    assert stats["small_boundary_loop_repair_pass_count"] == 2
     assert stats["small_boundary_loop_fill_max_edges"] == 8
     assert stats["small_boundary_loop_fill_face_budget"] == 2
-    assert stats["small_boundary_loops_considered"] == 2
+    assert stats["small_boundary_loops_considered"] == 3
     assert stats["small_boundary_loops_filled"] == 1
     assert stats["small_boundary_loops_filled_by_ear_clipping"] == 1
     assert stats["small_boundary_loops_centroid_fan_attempted"] == 0
@@ -236,7 +238,7 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert stats["small_boundary_loops_rejected_degenerate"] == 0
     assert stats["small_boundary_loops_rejected_duplicate"] == 0
     assert stats["small_boundary_loops_rejected_nonmanifold"] == 0
-    assert stats["small_boundary_loops_budget_limited"] == 1
+    assert stats["small_boundary_loops_budget_limited"] == 2
     assert stats["small_boundary_loop_faces_added"] == 1
     assert stats["final_faces"] == faces.shape[0] + 1
     assert stats["target_reached"] is True
@@ -264,6 +266,8 @@ def test_simplify_mesh_can_disable_small_boundary_loop_fill() -> None:
     assert stats["small_boundary_loop_fill_fallback_algorithm"] == "centroid-fan"
     assert stats["small_boundary_loop_fill_fallback_enabled"] is False
     assert stats["small_boundary_loop_fill_fallback_max_edges"] == 6
+    assert stats["small_boundary_loop_repair_max_passes"] == 2
+    assert stats["small_boundary_loop_repair_pass_count"] == 0
     assert stats["small_boundary_loop_fill_max_edges"] == 0
     assert stats["small_boundary_loops_considered"] == 0
     assert stats["small_boundary_loops_filled"] == 0
@@ -330,6 +334,37 @@ def test_simplify_mesh_topology_aware_fills_eight_edge_concave_boundary_loop() -
     assert stats["final_faces"] == faces.shape[0] + 6
     assert after["boundary_loop_count"] == 1
     assert after["boundary_edges"] == 24
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
+def test_simplify_mesh_topology_aware_fills_branched_small_cycles() -> None:
+    vertices, faces = _pinched_triangular_hole_mesh()
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 2,
+        min_component_faces=1,
+        backend="topology-aware",
+        small_boundary_loop_fill_max_edges=8,
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_simple_open_chain_count"] == 0
+    assert before["boundary_branched_open_chain_count"] == 1
+    assert before["boundary_open_chain_branch_vertex_count"] == 1
+    assert stats["small_boundary_branched_cycle_fill_enabled"] is True
+    assert stats["small_boundary_branched_cycle_fill_max_edges"] == 4
+    assert stats["small_boundary_loop_repair_max_passes"] == 2
+    assert stats["small_boundary_loop_repair_pass_count"] == 1
+    assert stats["small_boundary_branched_cycle_candidates"] >= 2
+    assert stats["small_boundary_branched_cycles_filled"] == 2
+    assert stats["small_boundary_loop_faces_added"] == 2
+    assert stats["final_faces"] == faces.shape[0] + 2
+    assert after["boundary_branched_open_chain_count"] == 0
+    assert after["boundary_open_chain_count"] == 0
     assert after["nonmanifold_edges"] == 0
     assert after["export_blocking_reasons"] == []
 
@@ -408,6 +443,22 @@ def _triangular_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
         dtype=np.int64,
     )
     return vertices, faces
+
+
+def _pinched_triangular_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
+    first_vertices, first_faces = _triangular_hole_mesh()
+    second_vertices, second_faces = _triangular_hole_mesh()
+    second_vertices = second_vertices.copy()
+    second_vertices[:, 0] += 5.0
+    second_vertices[0] = first_vertices[0]
+
+    vertices = np.concatenate([first_vertices, second_vertices[1:]], axis=0)
+    remap = {0: 0}
+    for old_index in range(1, second_vertices.shape[0]):
+        remap[old_index] = first_vertices.shape[0] + old_index - 1
+    second_remapped = np.array([[remap[int(value)] for value in face] for face in second_faces], dtype=np.int64)
+    faces = np.concatenate([first_faces, second_remapped], axis=0)
+    return vertices.astype(np.float32), faces.astype(np.int64)
 
 
 def _grid_mesh_with_missing_cell(
