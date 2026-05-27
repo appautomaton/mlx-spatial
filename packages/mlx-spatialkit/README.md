@@ -55,9 +55,10 @@ charting, but it reduces atlas waste and lets the Metal texture bake report
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures
 scale `fallback_radius` within `12..24` and `dilation_max_passes` within
-`8..64`; non-atlas UVs keep the lower defaults. The 4096 reference-target gate
-now passes production coverage on the real Pixal3D decoded fixture while
-recording the resolved budgets, actual dilation passes, and stage RSS peaks.
+`8..64`, with a bounded 4096 floor for dense atlases; non-atlas UVs keep the
+lower defaults. The 4096 reference-target gate now passes production coverage
+on the real Pixal3D decoded fixture while recording the resolved budgets,
+actual dilation passes, and stage RSS peaks.
 
 `quality_preset="reference-target"` resolves the face target from the checked-in
 Pixal3D reference trace when available and records threshold checks for topology,
@@ -66,8 +67,11 @@ reference-target heavy fixture passes face-count, topology, and final global
 coverage thresholds, with final visible coverage around `0.602` versus the older
 one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
 gate with `production_quality_ready=true`. The 4096 heavy fixture separately
-passes production texture coverage, but this is not a claim of upstream xatlas
-charting or 1M-face export parity.
+passes production texture coverage. Explicit upstream-style
+`target_faces=1000000`, `texture_size=4096` export also has a separate
+`quality.upstream_export_settings` gate; when that gate passes, the 1M-face
+setting deferral is removed. This is still not a claim of upstream xatlas
+charting or CUDA/cuMesh remesh parity.
 
 When the checked-in reference GLB is available, reference-target export also
 writes a `visual_parity/` sidecar next to `model.glb`: `visual_parity.json`,
@@ -78,7 +82,8 @@ browser-rendered screenshot or xatlas chart-equivalence proof. When comparing a
 4096 candidate against the checked-in 1024 reference GLB, texture-resolution
 mismatch is expected and should stay visible in the report. Default deferred
 visual parity boundaries now stay limited to xatlas chart parity and 1M-face
-export-setting parity.
+export-setting parity; the 1M boundary is removed for explicit 1M/4096 exports
+only after upstream-setting readiness passes.
 
 Pixal3D export diagnostics also include a `memory` summary with observed process
 RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`

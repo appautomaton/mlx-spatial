@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate/PLAN.md"
 }

@@ -34,6 +34,9 @@ PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD = 0.50
 PIXAL3D_REFERENCE_FACE_RATIO_MIN = 0.80
 PIXAL3D_REFERENCE_FACE_RATIO_MAX = 1.25
 PIXAL3D_MEMORY_POLL_INTERVAL_SEC = 0.25
+PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES = 1_000_000
+PIXAL3D_UPSTREAM_EXPORT_TEXTURE_SIZE = 4096
+PIXAL3D_UPSTREAM_EXPORT_FACE_RETENTION_MIN = 0.60
 
 
 @dataclass(frozen=True)
@@ -398,6 +401,13 @@ def export_pixal3d_glb(
         reference,
         quality_preset=resolved_quality_preset,
     )
+    quality["upstream_export_settings"] = _upstream_export_settings_summary(
+        resolved_target_faces,
+        texture_size,
+        simplify_stats,
+        baked.stats,
+        quality,
+    )
     diagnostics["quality"] = quality
 
     glb = _timed_stage(
@@ -444,7 +454,10 @@ def export_pixal3d_glb(
                 ),
                 memory_monitor=memory_monitor,
             )
-            diagnostics["visual_comparison"] = _visual_comparison_summary(visual_report)
+            diagnostics["visual_comparison"] = _visual_comparison_summary(
+                visual_report,
+                quality.get("upstream_export_settings"),
+            )
 
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
@@ -1059,6 +1072,78 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
     return None
 
 
+def _upstream_export_settings_summary(
+    target_faces: int,
+    texture_size: int,
+    simplify_stats: dict[str, Any],
+    texture_stats: dict[str, Any],
+    quality: dict[str, Any],
+) -> dict[str, Any]:
+    final_faces = _maybe_int(simplify_stats.get("final_faces"))
+    face_retention = None
+    if final_faces is not None and PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES > 0:
+        face_retention = float(final_faces) / float(PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES)
+    final_coverage = _maybe_float(texture_stats.get("coverage_ratio", texture_stats.get("final_visible_coverage_ratio")))
+    backend_tier = str(simplify_stats.get("quality_tier", "unknown"))
+    target_reached = bool(simplify_stats.get("target_reached"))
+    artifact_ready = bool(quality.get("artifact_ready"))
+
+    checks = {
+        "target_faces": {
+            "passed": int(target_faces) == PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES,
+            "actual": int(target_faces),
+            "required": PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES,
+        },
+        "texture_size": {
+            "passed": int(texture_size) == PIXAL3D_UPSTREAM_EXPORT_TEXTURE_SIZE,
+            "actual": int(texture_size),
+            "required": PIXAL3D_UPSTREAM_EXPORT_TEXTURE_SIZE,
+        },
+        "backend_tier": {
+            "passed": backend_tier == "production",
+            "actual": backend_tier,
+            "required": "production",
+        },
+        "target_reached": {
+            "passed": target_reached,
+            "actual": target_reached,
+            "required": True,
+        },
+        "face_retention_ratio": {
+            "passed": face_retention is not None
+            and face_retention >= PIXAL3D_UPSTREAM_EXPORT_FACE_RETENTION_MIN
+            and face_retention <= 1.0,
+            "actual": face_retention,
+            "required_min": PIXAL3D_UPSTREAM_EXPORT_FACE_RETENTION_MIN,
+            "required_max": 1.0,
+            "final_faces": final_faces,
+        },
+        "artifact_ready": {
+            "passed": artifact_ready,
+            "actual": artifact_ready,
+            "required": True,
+        },
+        "final_coverage_ratio": {
+            "passed": final_coverage is not None and final_coverage >= PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD,
+            "actual": final_coverage,
+            "required_min": PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD,
+        },
+    }
+    return {
+        "all_passed": all(bool(check["passed"]) for check in checks.values()),
+        "reference": {
+            "source": "vendored_pixal3d_inference_defaults",
+            "decimation_target": PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES,
+            "texture_size": PIXAL3D_UPSTREAM_EXPORT_TEXTURE_SIZE,
+            "remesh": True,
+            "remesh_band": 1,
+            "remesh_project": 0,
+            "xatlas_chart_parity": False,
+        },
+        "checks": checks,
+    }
+
+
 def _reference_glb_path(reference: dict[str, Any]) -> Path | None:
     path = reference.get("model_glb_path")
     if path is None:
@@ -1067,12 +1152,20 @@ def _reference_glb_path(reference: dict[str, Any]) -> Path | None:
     return reference_glb if reference_glb.exists() else None
 
 
-def _visual_comparison_summary(report: dict[str, Any]) -> dict[str, Any]:
+def _visual_comparison_summary(
+    report: dict[str, Any],
+    upstream_export_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    deferred_boundaries = list(report["deferred_parity_boundaries"])
+    if upstream_export_settings is not None and bool(upstream_export_settings.get("all_passed")):
+        deferred_boundaries = [
+            item for item in deferred_boundaries if item != "not_1m_face_export_setting_parity"
+        ]
     return {
         "summary": report["summary"],
         "checks": report["checks"],
         "artifacts": report.get("artifacts", {}),
-        "deferred_parity_boundaries": report["deferred_parity_boundaries"],
+        "deferred_parity_boundaries": deferred_boundaries,
     }
 
 

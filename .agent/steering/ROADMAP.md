@@ -90,6 +90,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/SPEC.md`
 - exit signal: Visual-comparison diagnostics retain only xatlas chart parity and 1M-face export-setting parity as deferred boundaries, with focused/heavy tests and docs aligned.
 
+## Phase 10: Upstream Settings Readiness Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate`
+- objective: Make explicit Pixal3D upstream export settings (`target_faces=1000000`, `texture_size=4096`) artifact-ready and coverage-ready in spatialkit diagnostics without claiming xatlas chart parity.
+- why now: A `/tmp` 1M/4096 probe reaches `artifact_ready=true` and `target_reached=true`, but texture coverage is still below threshold and diagnostics do not separately prove upstream-setting readiness.
+- likely outputs: High-density native texture fill floor, upstream-setting readiness diagnostics, real 1M/4096 heavy gate, visual boundary filtering, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate/SPEC.md`
+- exit signal: Explicit 1M/4096 export under `/tmp` reports upstream-setting readiness true, removes only the 1M-face setting deferral, and keeps xatlas chart parity deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

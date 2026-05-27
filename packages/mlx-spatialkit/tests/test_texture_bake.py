@@ -223,6 +223,8 @@ def test_bake_pbr_texture_uses_adaptive_dilation_budget_for_atlas_textures() -> 
     assert baked.stats["dilation_max_passes"] > 8
     assert baked.stats["dilation_max_passes"] <= 64
     assert baked.stats["dilation_pass_count"] <= baked.stats["dilation_max_passes"]
+    assert baked.stats["fallback_radius"] == 24
+    assert baked.stats["dilation_max_passes"] == 64
 
 
 def test_bake_pbr_texture_rejects_unsafe_texture_size_before_metal_allocation() -> None:

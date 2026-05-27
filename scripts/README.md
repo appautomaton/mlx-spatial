@@ -241,15 +241,18 @@ Script defaults:
   details against the checked-in Pixal3D reference trace. The current
   reference-target heavy fixture passes the measured spatialkit production gate,
   and the 4096 texture-size gate passes after atlas-size-aware Metal fallback
-  and native dilation budgets are applied. This is not full upstream xatlas
-  charting or 1M-face setting parity.
+  and native dilation budgets are applied. Explicit 1M/4096 upstream-style
+  exports report a separate `quality.upstream_export_settings` gate; passing
+  that gate removes only the 1M-face setting deferral. This is not full upstream
+  xatlas charting or CUDA/cuMesh remesh parity.
   When the reference GLB is available, reference-target export also writes a
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
   plus extracted candidate/reference base-color PNG previews. The checked-in
   reference GLB is 1024, so a 4096 candidate is expected to report texture-size
   mismatch while still passing coverage. Default deferred visual parity
   boundaries are limited to xatlas chart parity and 1M-face export-setting
-  parity.
+  parity; the 1M boundary is removed for explicit 1M/4096 exports only after
+  upstream-setting readiness passes.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting.

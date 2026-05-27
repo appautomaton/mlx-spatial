@@ -11,6 +11,7 @@ from mlx_spatialkit.export import (
     _export_quality_summary,
     _resolve_pixal3d_export_settings,
     _simplifier_backend_for_quality_preset,
+    _upstream_export_settings_summary,
 )
 from glb_texture_utils import glb_image_payload, png_coverage
 
@@ -116,6 +117,8 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
     assert diagnostics["result"]["quality_warnings"] == []
+    assert diagnostics["quality"]["upstream_export_settings"]["all_passed"] is False
+    assert diagnostics["quality"]["upstream_export_settings"]["checks"]["target_faces"]["passed"] is False
     assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "candidate"
     assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_available"
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
@@ -211,6 +214,54 @@ def test_export_pixal3d_glb_reference_target_4096_texture_passes_coverage_gate()
     assert visual["checks"]["texture_resolution_match"]["passed"] is False
     assert visual["checks"]["texture_resolution_match"]["candidate"] == {"height": 4096, "width": 4096}
     assert visual["checks"]["texture_resolution_match"]["reference"] == {"height": 1024, "width": 1024}
+    _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-upstream-settings-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="reference-target",
+        target_faces=1_000_000,
+        texture_size=4096,
+        min_component_faces=32,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    upstream = diagnostics["quality"]["upstream_export_settings"]
+
+    assert diagnostics["settings"]["target_faces"] == 1_000_000
+    assert diagnostics["settings"]["target_faces_source"] == "explicit"
+    assert diagnostics["settings"]["texture_size"] == 4096
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is False
+    assert upstream["all_passed"] is True
+    for check in upstream["checks"].values():
+        assert check["passed"] is True
+    assert upstream["reference"]["decimation_target"] == 1_000_000
+    assert upstream["reference"]["texture_size"] == 4096
+    assert upstream["reference"]["remesh"] is True
+    assert upstream["reference"]["xatlas_chart_parity"] is False
+    assert simplify_stats["backend"] == "topology-aware"
+    assert simplify_stats["target_faces"] == 1_000_000
+    assert simplify_stats["target_reached"] is True
+    assert 600_000 <= simplify_stats["final_faces"] <= 1_000_000
+    assert texture_stats["texture_size"] == 4096
+    assert texture_stats["fallback_radius"] >= 24
+    assert texture_stats["dilation_max_passes"] >= 26
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    visual = diagnostics["visual_comparison"]
+    assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
+    assert "not_1m_face_export_setting_parity" not in visual["deferred_parity_boundaries"]
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
 
@@ -351,6 +402,30 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert thresholds["all_passed"] is True
     assert thresholds["checks"]["face_count_ratio"]["actual"] == pytest.approx(1.0)
     assert thresholds["checks"]["final_coverage_ratio"]["actual"] == pytest.approx(0.75)
+
+
+def test_upstream_export_settings_summary_separates_setting_readiness_from_reference_parity() -> None:
+    passing = _upstream_export_settings_summary(
+        1_000_000,
+        4096,
+        {"quality_tier": "production", "target_reached": True, "final_faces": 900_000},
+        {"final_visible_coverage_ratio": 0.55},
+        {"artifact_ready": True},
+    )
+    assert passing["all_passed"] is True
+    assert passing["reference"]["remesh"] is True
+    assert passing["reference"]["xatlas_chart_parity"] is False
+
+    failing = _upstream_export_settings_summary(
+        212_542,
+        1024,
+        {"quality_tier": "production", "target_reached": True, "final_faces": 212_542},
+        {"final_visible_coverage_ratio": 0.60},
+        {"artifact_ready": True},
+    )
+    assert failing["all_passed"] is False
+    assert failing["checks"]["target_faces"]["passed"] is False
+    assert failing["checks"]["texture_size"]["passed"] is False
 
 
 def _assert_memory_diagnostics(diagnostics: dict, *, required_stages: tuple[str, ...]) -> None:

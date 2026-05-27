@@ -243,6 +243,9 @@ of using a fixed low budget. Diagnostics report the resolved
 `fallback_radius`, `dilation_max_passes`, and actual `dilation_pass_count`. The
 real decoded Pixal3D fixture now passes the production final-coverage threshold
 at `texture_size=4096` while keeping generated artifacts under `/tmp`.
+Dense 4096 atlases use an additional bounded floor so explicit upstream-style
+`target_faces=1000000`, `texture_size=4096` export can fill enough visible
+texture coverage without changing decoded model outputs.
 
 The native UV path now uses paired-triangle face-atlas packing. Each atlas tile
 can hold two unrelated triangle faces in complementary halves, and diagnostics
@@ -260,8 +263,12 @@ reporting. Current reference-target diagnostics are expected to stay
 `artifact_ready=true`; on the current heavy fixture they also reach
 `production_quality_ready=true` because backend tier, face-count, topology,
 final coverage, raw coverage reporting, preset, and reference checks all pass.
-This closes the measured native spatialkit gate, not full upstream xatlas,
-charting or 1M-face export-setting parity.
+Explicit upstream-style `target_faces=1000000`, `texture_size=4096` export has
+a separate `quality.upstream_export_settings` section that checks target faces,
+texture size, backend tier, target reach, face retention, artifact readiness,
+and final coverage. This closes the 1M/4096 setting-readiness boundary when the
+check passes, but it is not full upstream xatlas charting or CUDA/cuMesh remesh
+parity.
 
 When the reference GLB is available, `mlx_spatialkit.export_pixal3d_glb` writes
 a `visual_parity/` directory next to the generated GLB. It contains
@@ -273,6 +280,9 @@ chart parity. The checked-in reference GLB is 1024, so a 4096 candidate should
 honestly report texture-resolution mismatch even when its production coverage
 gate passes. Default deferred visual parity boundaries now stay limited to
 xatlas chart parity and 1M-face export-setting parity.
+The 1M setting boundary is removed for explicit 1M/4096 exports only after
+`quality.upstream_export_settings.all_passed=true`; xatlas chart parity remains
+deferred.
 
 The same diagnostics JSON includes a `memory` summary for spatialkit exports.
 It records aggregate process RSS samples, observed per-stage RSS peaks, and
@@ -287,5 +297,5 @@ and run `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated
 `model.glb` and the checked-in reference GLB. The script writes
 `browser_render_report.json`, `comparison.png`, and `index.html` under
 `visual_parity/browser_render/` and augments `visual_parity.json` when requested.
-This still does not claim xatlas chart parity, 1M-face setting parity, or exact
-perceptual equivalence.
+This still does not claim xatlas chart parity, CUDA/cuMesh remesh parity, or
+exact perceptual equivalence.

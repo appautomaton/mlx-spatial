@@ -362,8 +362,9 @@ int64_t resolve_dilation_max_passes(int64_t texture_size, int64_t atlas_cols, in
   }
   const int64_t atlas_side = std::max<int64_t>(atlas_cols, atlas_rows);
   const double tile_pixels = static_cast<double>(texture_size) / static_cast<double>(std::max<int64_t>(1, atlas_side));
+  const int64_t high_res_floor = static_cast<int64_t>(std::ceil(static_cast<double>(texture_size) / 160.0));
   const int64_t passes = static_cast<int64_t>(std::ceil(tile_pixels * 2.0));
-  return std::clamp<int64_t>(passes, 8, 64);
+  return std::clamp<int64_t>(std::max<int64_t>(passes, high_res_floor), 8, 64);
 }
 
 int64_t resolve_fallback_radius(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
@@ -372,8 +373,9 @@ int64_t resolve_fallback_radius(int64_t texture_size, int64_t atlas_cols, int64_
   }
   const int64_t atlas_side = std::max<int64_t>(atlas_cols, atlas_rows);
   const double tile_pixels = static_cast<double>(texture_size) / static_cast<double>(std::max<int64_t>(1, atlas_side));
+  const int64_t high_res_floor = static_cast<int64_t>(std::ceil(static_cast<double>(texture_size) / 171.0));
   const int64_t radius = static_cast<int64_t>(std::ceil(tile_pixels * 2.0));
-  return std::clamp<int64_t>(radius, 12, 24);
+  return std::clamp<int64_t>(std::max<int64_t>(radius, high_res_floor), 12, 24);
 }
 
 }  // namespace
