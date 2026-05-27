@@ -282,6 +282,12 @@ The default remains `uv_backend="face-atlas"` for stability. If `tile_padding`
 is not supplied, face-atlas exports keep `0.08`; native-chart exports resolve
 to tighter `0.02` padding and record `settings.tile_padding_source` so the
 contract is visible.
+When the checked-in reference trace has xatlas unwrap metrics, spatialkit also
+records `quality.xatlas_chart_parity`: reference xatlas chart count/utilization,
+native chart count/UV-surface occupancy, ratio fields, checks, and
+`parity_ready=false`. This makes the remaining boundary measurable without
+adding xatlas as a `mlx-spatialkit` runtime dependency or claiming chart
+equivalence.
 `native_chart_uv_candidate` separates `artifact_ready` from `quality_ready`:
 the current chart path writes a valid GLB and clears the scalar native-chart
 coverage checks after UV-surface fill, while preserving `xatlas_chart_parity=false`

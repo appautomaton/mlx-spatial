@@ -445,6 +445,12 @@ def export_pixal3d_glb(
         resolved_uv_backend,
     )
     quality["native_chart_uv_candidate"] = chart_uv_candidate
+    quality["xatlas_chart_parity"] = _xatlas_chart_parity_summary(
+        reference,
+        uv_mesh.stats,
+        baked.stats,
+        resolved_uv_backend,
+    )
     if chart_uv_candidate.get("status") == "quality_blocked":
         quality["warnings"] = tuple([*quality["warnings"], "native_chart_uv_candidate_quality_blocked"])
     quality["upstream_export_settings"] = _upstream_export_settings_summary(
@@ -1172,6 +1178,154 @@ def _native_chart_uv_candidate_status(
     }
 
 
+def _xatlas_chart_parity_summary(
+    reference: dict[str, Any] | None,
+    uv_stats: dict[str, Any],
+    texture_stats: dict[str, Any],
+    uv_backend: str,
+) -> dict[str, Any]:
+    uv_stats_backend = str(uv_stats.get("backend", "unknown"))
+    deferred_boundary = "not_xatlas_chart_parity"
+    if uv_backend != "native-chart":
+        return {
+            "status": "not_requested",
+            "reason": "uv_backend_is_not_native_chart",
+            "parity_ready": None,
+            "xatlas_chart_parity": False,
+            "deferred_boundary": deferred_boundary,
+            "requested_uv_backend": uv_backend,
+            "native": {
+                "uv_backend": uv_stats_backend,
+            },
+            "reference": None,
+            "ratios": {},
+            "checks": {},
+        }
+
+    native_chart_count = _maybe_int(uv_stats.get("chart_count"))
+    native_texture_pixels = _maybe_int(texture_stats.get("texture_pixel_count"))
+    native_uv_surface_texels = _maybe_int(texture_stats.get("uv_surface_texel_count"))
+    native_uv_surface_occupancy = None
+    if native_texture_pixels not in (None, 0) and native_uv_surface_texels is not None:
+        native_uv_surface_occupancy = float(native_uv_surface_texels) / float(native_texture_pixels)
+
+    if reference is None:
+        checks = {
+            "reference_xatlas_available": {
+                "passed": False,
+                "actual": None,
+                "required": "reference trace with xatlas unwrap metrics",
+            },
+            "native_chart_backend": {
+                "passed": uv_stats_backend == "native-chart-atlas",
+                "actual": uv_stats_backend,
+                "required": "native-chart-atlas",
+            },
+        }
+        return {
+            "status": "reference_missing",
+            "reason": "reference_xatlas_metrics_missing",
+            "parity_ready": False,
+            "xatlas_chart_parity": False,
+            "deferred_boundary": deferred_boundary,
+            "requested_uv_backend": uv_backend,
+            "native": {
+                "uv_backend": uv_stats_backend,
+                "chart_count": native_chart_count,
+                "uv_surface_occupancy_ratio": native_uv_surface_occupancy,
+            },
+            "reference": None,
+            "ratios": {},
+            "checks": checks,
+        }
+
+    reference_backend = reference.get("unwrap_backend")
+    reference_chart_count = _maybe_int(reference.get("unwrap_chart_count"))
+    reference_utilization = _maybe_float(reference.get("unwrap_utilization"))
+    reference_texture_size = _maybe_int(reference.get("texture_size"))
+    reference_is_xatlas = isinstance(reference_backend, str) and reference_backend.startswith("xatlas")
+    chart_count_ratio = None
+    if native_chart_count is not None and reference_chart_count not in (None, 0):
+        chart_count_ratio = float(native_chart_count) / float(reference_chart_count)
+    utilization_ratio = None
+    if native_uv_surface_occupancy is not None and reference_utilization not in (None, 0.0):
+        utilization_ratio = native_uv_surface_occupancy / float(reference_utilization)
+
+    checks = {
+        "reference_xatlas_backend": {
+            "passed": reference_is_xatlas,
+            "actual": reference_backend,
+            "required": "xatlas*",
+        },
+        "reference_chart_count": {
+            "passed": reference_chart_count is not None and reference_chart_count > 0,
+            "actual": reference_chart_count,
+            "required": ">0",
+        },
+        "reference_utilization": {
+            "passed": reference_utilization is not None and reference_utilization > 0.0,
+            "actual": reference_utilization,
+            "required": ">0",
+        },
+        "native_chart_backend": {
+            "passed": uv_stats_backend == "native-chart-atlas",
+            "actual": uv_stats_backend,
+            "required": "native-chart-atlas",
+        },
+        "native_chart_count": {
+            "passed": native_chart_count is not None and native_chart_count > 0,
+            "actual": native_chart_count,
+            "required": ">0",
+        },
+        "native_uv_surface_occupancy": {
+            "passed": native_uv_surface_occupancy is not None and native_uv_surface_occupancy > 0.0,
+            "actual": native_uv_surface_occupancy,
+            "required": ">0",
+        },
+        "xatlas_backend_equivalence": {
+            "passed": False,
+            "actual": uv_stats_backend,
+            "required": reference_backend,
+        },
+    }
+    measurement_check_names = (
+        "reference_xatlas_backend",
+        "reference_chart_count",
+        "reference_utilization",
+        "native_chart_backend",
+        "native_chart_count",
+        "native_uv_surface_occupancy",
+    )
+    measurement_ready = all(bool(checks[name]["passed"]) for name in measurement_check_names)
+    return {
+        "status": "measured_not_equivalent" if measurement_ready else "measurement_incomplete",
+        "reason": "native_chart_backend_is_not_xatlas",
+        "measurement_ready": measurement_ready,
+        "parity_ready": False,
+        "xatlas_chart_parity": False,
+        "deferred_boundary": deferred_boundary,
+        "requested_uv_backend": uv_backend,
+        "reference": {
+            "unwrap_backend": reference_backend,
+            "unwrap_chart_count": reference_chart_count,
+            "unwrap_utilization": reference_utilization,
+            "texture_size": reference_texture_size,
+        },
+        "native": {
+            "uv_backend": uv_stats_backend,
+            "chart_count": native_chart_count,
+            "chart_rect_fill_ratio": _maybe_float(uv_stats.get("chart_rect_fill_ratio")),
+            "uv_surface_occupancy_ratio": native_uv_surface_occupancy,
+            "texture_size": _maybe_int(texture_stats.get("texture_size")),
+        },
+        "ratios": {
+            "chart_count_ratio": chart_count_ratio,
+            "uv_surface_occupancy_vs_reference_utilization": utilization_ratio,
+        },
+        "checks": checks,
+    }
+
+
 def _production_thresholds(
     simplify_stats: dict[str, Any],
     export_metrics: dict[str, Any],
@@ -1278,6 +1432,10 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
             "raw_coverage_ratio": _maybe_float(mesh_export.get("raw_coverage_ratio", artifact_metadata.get("raw_coverage_ratio"))),
             "coverage_ratio": _maybe_float(mesh_export.get("coverage_ratio", artifact_metadata.get("coverage_ratio"))),
             "unwrap_backend": mesh_export.get("unwrap_backend", artifact_metadata.get("unwrap_backend")),
+            "unwrap_chunks": _maybe_int(mesh_export.get("unwrap_chunks", artifact_metadata.get("unwrap_chunks"))),
+            "unwrap_chart_count": _maybe_int(
+                mesh_export.get("unwrap_chart_count", artifact_metadata.get("unwrap_chart_count"))
+            ),
             "bake_backend": mesh_export.get("bake_backend", artifact_metadata.get("bake_backend")),
             "texture_size": _maybe_int(mesh_export.get("texture_size", artifact_metadata.get("texture_size"))),
             "xatlas_face_guard": _maybe_int(mesh_export.get("xatlas_face_guard", artifact_metadata.get("xatlas_face_guard"))),

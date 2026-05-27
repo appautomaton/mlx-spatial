@@ -17,12 +17,39 @@ from mlx_spatialkit.export import (
     _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
     _upstream_export_settings_summary,
+    _xatlas_chart_parity_summary,
 )
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _assert_xatlas_parity_measured(diagnostics: dict, uv_stats: dict, texture_stats: dict) -> None:
+    parity = diagnostics["quality"]["xatlas_chart_parity"]
+    assert parity["status"] == "measured_not_equivalent"
+    assert parity["measurement_ready"] is True
+    assert parity["parity_ready"] is False
+    assert parity["xatlas_chart_parity"] is False
+    assert parity["deferred_boundary"] == "not_xatlas_chart_parity"
+    assert parity["reference"]["unwrap_backend"] == "xatlas-parallel-spatial"
+    assert parity["reference"]["unwrap_chart_count"] == 51_953
+    assert parity["reference"]["unwrap_utilization"] == pytest.approx(0.8309683442115784)
+    assert parity["native"]["uv_backend"] == "native-chart-atlas"
+    assert parity["native"]["chart_count"] == uv_stats["chart_count"]
+    assert parity["native"]["chart_rect_fill_ratio"] == pytest.approx(uv_stats["chart_rect_fill_ratio"])
+    expected_occupancy = texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
+    assert parity["native"]["uv_surface_occupancy_ratio"] == pytest.approx(expected_occupancy)
+    assert parity["ratios"]["chart_count_ratio"] == pytest.approx(uv_stats["chart_count"] / 51_953)
+    assert parity["ratios"]["uv_surface_occupancy_vs_reference_utilization"] == pytest.approx(
+        expected_occupancy / 0.8309683442115784
+    )
+    for name, check in parity["checks"].items():
+        if name == "xatlas_backend_equivalence":
+            assert check["passed"] is False
+        else:
+            assert check["passed"] is True
 
 
 @pytest.mark.heavy
@@ -358,6 +385,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert candidate["checks"]["uv_surface_visible_floor"]["passed"] is True
     assert candidate["quality_blockers"] == []
     assert candidate["xatlas_chart_parity"] is False
+    _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True
@@ -557,6 +585,7 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert candidate["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
     assert candidate["quality_blockers"] == []
     assert candidate["xatlas_chart_parity"] is False
+    _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is False
@@ -832,6 +861,64 @@ def test_native_chart_uv_candidate_status_reports_readiness_states() -> None:
     assert quality_ready["artifact_ready"] is True
     assert quality_ready["quality_ready"] is True
     assert quality_ready["quality_blockers"] == ()
+
+
+def test_xatlas_chart_parity_summary_reports_measured_native_chart_gap() -> None:
+    summary = _xatlas_chart_parity_summary(
+        {
+            "unwrap_backend": "xatlas-parallel-spatial",
+            "unwrap_chart_count": 100,
+            "unwrap_utilization": 0.80,
+            "texture_size": 1024,
+        },
+        {
+            "backend": "native-chart-atlas",
+            "chart_count": 50,
+            "chart_rect_fill_ratio": 0.60,
+        },
+        {
+            "texture_size": 1024,
+            "texture_pixel_count": 1000,
+            "uv_surface_texel_count": 500,
+        },
+        "native-chart",
+    )
+
+    assert summary["status"] == "measured_not_equivalent"
+    assert summary["measurement_ready"] is True
+    assert summary["parity_ready"] is False
+    assert summary["xatlas_chart_parity"] is False
+    assert summary["deferred_boundary"] == "not_xatlas_chart_parity"
+    assert summary["reference"]["unwrap_chart_count"] == 100
+    assert summary["reference"]["unwrap_utilization"] == pytest.approx(0.80)
+    assert summary["native"]["chart_count"] == 50
+    assert summary["native"]["uv_surface_occupancy_ratio"] == pytest.approx(0.50)
+    assert summary["ratios"]["chart_count_ratio"] == pytest.approx(0.50)
+    assert summary["ratios"]["uv_surface_occupancy_vs_reference_utilization"] == pytest.approx(0.625)
+    assert summary["checks"]["xatlas_backend_equivalence"]["passed"] is False
+
+    not_requested = _xatlas_chart_parity_summary(
+        {
+            "unwrap_backend": "xatlas-parallel-spatial",
+            "unwrap_chart_count": 100,
+            "unwrap_utilization": 0.80,
+        },
+        {"backend": "face-atlas"},
+        {},
+        "face-atlas",
+    )
+    assert not_requested["status"] == "not_requested"
+    assert not_requested["parity_ready"] is None
+
+    missing_reference = _xatlas_chart_parity_summary(
+        None,
+        {"backend": "native-chart-atlas", "chart_count": 50},
+        {"texture_pixel_count": 1000, "uv_surface_texel_count": 500},
+        "native-chart",
+    )
+    assert missing_reference["status"] == "reference_missing"
+    assert missing_reference["parity_ready"] is False
+    assert missing_reference["checks"]["reference_xatlas_available"]["passed"] is False
 
 
 def test_glb_viewer_compatibility_summary_checks_normals_and_uint16_chunks() -> None:

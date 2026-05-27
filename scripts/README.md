@@ -262,7 +262,11 @@ Script defaults:
   chart splitting, and aspect-aware shelves with a tighter backend default
   padding of `0.02`. They report oversized and low-fill split counts, projection
   candidate count and step, chart rect fill, padding source, and packing
-  efficiency. Non-atlas UV bakes also use bounded native UV-surface fill and
+  efficiency. When the Pixal3D xatlas reference trace is available, diagnostics
+  also report `quality.xatlas_chart_parity` with reference chart count and
+  utilization, native chart occupancy, ratios, and `parity_ready=false`; this
+  measures the gap without adding xatlas to the spatialkit package runtime.
+  Non-atlas UV bakes also use bounded native UV-surface fill and
   report raw exact coverage, surface-filled texels, and final visible coverage
   separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;
   the current real fixture clears scalar native-chart coverage while xatlas

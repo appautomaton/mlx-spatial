@@ -240,6 +240,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-upstream-settings-gate/SPEC.md`
 - exit signal: Explicit 1M/4096 native-chart export passes upstream-setting and native-chart quality gates, removes the 1M/4096 deferral, and keeps only xatlas chart parity deferred.
 
+## Phase 25: Xatlas Parity Diagnostics Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-xatlas-parity-diagnostics-gate`
+- objective: Make the remaining xatlas chart parity boundary quantitative in spatialkit diagnostics instead of only a boolean/deferred label.
+- why now: Native-chart reference-target and 1M/4096 gates pass, leaving xatlas chart parity as the main production-equivalence boundary.
+- likely outputs: Structured xatlas parity summary, focused helper tests, real-fixture assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-xatlas-parity-diagnostics-gate/SPEC.md`
+- exit signal: Native-chart diagnostics report reference xatlas chart count/utilization, native chart metrics/ratios, and an explicit non-ready parity status.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

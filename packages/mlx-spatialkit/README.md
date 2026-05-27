@@ -92,6 +92,11 @@ uv_backend="native-chart")` wires the same candidate into the real decoded
 Pixal3D export path and records chart count, duplicate ratio, UV-bin
 diagnostics, large-chart and low-fill split counts, chart rect fill, shelf
 packing efficiency, and `xatlas_chart_parity=false`.
+When the checked-in Pixal3D xatlas reference trace is available, diagnostics
+also include `quality.xatlas_chart_parity`. That section reports the reference
+xatlas chart count/utilization, native chart count/UV-surface occupancy, their
+ratios, and an explicit `parity_ready=false`. This measures the gap without
+adding xatlas as an `mlx-spatialkit` package dependency or claiming equivalence.
 
 Chart exports report separate artifact and quality readiness under
 `quality.native_chart_uv_candidate`. The current real fixture chart candidate is
