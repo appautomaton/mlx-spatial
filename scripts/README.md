@@ -254,11 +254,11 @@ Script defaults:
   `mlx_spatialkit.export_pixal3d_glb`. The script default remains face-atlas,
   and xatlas chart parity remains a later parity boundary. Native chart UVs use
   deterministic oversized-chart splitting, local-frame/PCA projection, and
-  aspect-aware shelves; they report split counts, chart rect fill, and packing
-  efficiency. Chart
-  diagnostics separate `artifact_ready` from `quality_ready`, so a valid chart
-  GLB can still report `quality_blocked` when coverage or UV occupancy is not
-  production-ready.
+  aspect-aware shelves with a tighter backend default padding of `0.02`.
+  They report split counts, chart rect fill, padding source, and packing
+  efficiency. Chart diagnostics separate `artifact_ready` from `quality_ready`,
+  so a valid chart GLB can still report `quality_blocked` when global coverage
+  is not production-ready.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,

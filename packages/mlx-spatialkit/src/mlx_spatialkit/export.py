@@ -41,6 +41,8 @@ PIXAL3D_UPSTREAM_EXPORT_FACE_RETENTION_MIN = 0.60
 PIXAL3D_CHART_UV_GLOBAL_COVERAGE_MIN = 0.50
 PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN = 0.50
 PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
+PIXAL3D_FACE_ATLAS_TILE_PADDING = 0.08
+PIXAL3D_NATIVE_CHART_TILE_PADDING = 0.02
 
 
 @dataclass(frozen=True)
@@ -217,7 +219,7 @@ def export_pixal3d_glb(
     min_component_faces: int = 32,
     uv_backend: str = "face-atlas",
     chart_angle_degrees: float = 45.0,
-    tile_padding: float = 0.08,
+    tile_padding: float | None = None,
     max_texture_pixels: int | None = None,
     diagnostics_path: str | Path | None = None,
 ) -> Pixal3DGlbExportResult:
@@ -238,6 +240,7 @@ def export_pixal3d_glb(
         raise ValueError("max_texture_pixels must be positive")
     resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
     resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
+    resolved_tile_padding, tile_padding_source = _resolve_tile_padding(tile_padding, resolved_uv_backend)
     glb_path, resolved_diagnostics_path = _resolve_pixal3d_export_paths(output, diagnostics_path)
     shape_path = source_dir / "shape_decoder_fields.npz"
     texture_path = source_dir / "texture_decoder_pbr.npz"
@@ -274,7 +277,8 @@ def export_pixal3d_glb(
             "requested_uv_backend": str(uv_backend),
             "uv_backend": resolved_uv_backend,
             "chart_angle_degrees": resolved_chart_angle_degrees,
-            "tile_padding": float(tile_padding),
+            "tile_padding": resolved_tile_padding,
+            "tile_padding_source": tile_padding_source,
             "max_texture_pixels": int(max_texture_pixels) if max_texture_pixels is not None else None,
         },
         "stages": {},
@@ -395,9 +399,9 @@ def export_pixal3d_glb(
                 simplified.vertices,
                 simplified.faces,
                 chart_angle_degrees=resolved_chart_angle_degrees,
-                tile_padding=tile_padding,
+                tile_padding=resolved_tile_padding,
             )
-        return make_face_atlas_uvs(simplified.vertices, simplified.faces, tile_padding=tile_padding)
+        return make_face_atlas_uvs(simplified.vertices, simplified.faces, tile_padding=resolved_tile_padding)
 
     uv_mesh = _timed_stage(diagnostics, "uv", build_uv_mesh, memory_monitor=memory_monitor)
     diagnostics["stages"]["uv"].update(_uv_shape(uv_mesh))
@@ -928,6 +932,18 @@ def _resolve_chart_angle_degrees(value: float) -> float:
     if not np.isfinite(angle) or angle < 0.0 or angle > 180.0:
         raise ValueError("chart_angle_degrees must be finite and in [0, 180]")
     return angle
+
+
+def _resolve_tile_padding(value: float | None, uv_backend: str) -> tuple[float, str]:
+    backend = _resolve_pixal3d_uv_backend(uv_backend)
+    if value is None:
+        if backend == "native-chart":
+            return PIXAL3D_NATIVE_CHART_TILE_PADDING, "backend_default:native-chart"
+        return PIXAL3D_FACE_ATLAS_TILE_PADDING, "backend_default:face-atlas"
+    padding = float(value)
+    if not np.isfinite(padding) or padding < 0.0 or padding >= 0.45:
+        raise ValueError("tile_padding must be finite and in [0, 0.45)")
+    return padding, "explicit"
 
 
 def _simplifier_backend_for_quality_preset(quality_preset: str) -> str:

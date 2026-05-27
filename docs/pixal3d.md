@@ -272,12 +272,15 @@ For direct decoded-NPZ conversion, `mlx_spatialkit.export_pixal3d_glb` accepts
 `uv_backend="native-chart"` and `chart_angle_degrees=45.0` as an opt-in chart
 candidate export. That path records `native_chart_uv_candidate` diagnostics,
 bakes through `metal-uv-binned-nearest`, and keeps `xatlas_chart_parity=false`.
-The default remains `uv_backend="face-atlas"` for stability.
+The default remains `uv_backend="face-atlas"` for stability. If `tile_padding`
+is not supplied, face-atlas exports keep `0.08`; native-chart exports resolve
+to tighter `0.02` padding and record `settings.tile_padding_source` so the
+contract is visible.
 `native_chart_uv_candidate` separates `artifact_ready` from `quality_ready`:
 the current chart path can write a valid GLB while reporting
-`status=quality_blocked` when global coverage or UV-surface occupancy is below
-the production-readiness floor. That warning is intentional evidence for the
-next chart-quality work, not a runtime failure.
+`status=quality_blocked` when global coverage remains below the
+production-readiness floor. That warning is intentional evidence for the next
+chart-quality work, not a runtime failure.
 
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from

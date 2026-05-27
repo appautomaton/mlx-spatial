@@ -180,6 +180,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-large-chart-split-gate/SPEC.md`
 - exit signal: Real chart export either improves occupancy above the Phase 17 baseline or proves oversized charts are no longer the active bounded-quality blocker.
 
+## Phase 19: Native Chart Padding Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-padding-gate`
+- objective: Make native-chart Pixal3D exports use backend-aware tighter tile padding and prove the real fixture clears the UV occupancy floor.
+- why now: A `/tmp` padding sweep shows native-chart padding `0.02` raises UV occupancy above `0.50`, while the generic export default still applies face-atlas padding `0.08`.
+- likely outputs: Tile-padding resolver, diagnostics source field, focused contract tests, real fixture occupancy gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-padding-gate/SPEC.md`
+- exit signal: Native-chart real fixture reports `uv_surface_occupancy_ratio > 0.50` with only truthful remaining quality blockers.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

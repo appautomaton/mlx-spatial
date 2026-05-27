@@ -43,6 +43,11 @@ result = export_pixal3d_glb(
 print(result.diagnostics["quality"]["native_chart_uv_candidate"])
 ```
 
+When `tile_padding` is not supplied, Pixal3D exports resolve padding by UV
+backend: `face-atlas` keeps `0.08`, while `native-chart` uses `0.02`.
+Diagnostics record both `settings.tile_padding` and
+`settings.tile_padding_source`; explicit caller padding is preserved.
+
 The real fixture test is opt-in with `pytest -m heavy` and writes generated
 GLB/diagnostic artifacts under `/tmp`.
 
@@ -91,10 +96,10 @@ too low. In that case `result.quality_warnings` includes
 `native_chart_uv_candidate_quality_blocked`, and the failed checks identify the
 specific coverage/utilization blocker.
 
-The current large-chart splitter, local projection, and shelf packer improve
-the real fixture chart candidate versus the older fixed-axis/equal-grid chart
-path. It can still report `quality_blocked` until global texture coverage and
-UV-surface occupancy clear the readiness floors.
+The current large-chart splitter, local projection, shelf packer, and tighter
+native-chart padding improve the real fixture chart candidate versus the older
+fixed-axis/equal-grid chart path. It can still report `quality_blocked` until
+global texture coverage clears the readiness floor.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

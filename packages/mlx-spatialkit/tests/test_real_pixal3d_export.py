@@ -13,6 +13,7 @@ from mlx_spatialkit.export import (
     _glb_viewer_compatibility_summary,
     _native_chart_uv_candidate_status,
     _resolve_pixal3d_export_settings,
+    _resolve_tile_padding,
     _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
     _upstream_export_settings_summary,
@@ -126,6 +127,8 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["requested_uv_backend"] == "native-chart"
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
     assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
+    assert diagnostics["settings"]["tile_padding"] == 0.02
+    assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
     assert "native_chart_uv_candidate_quality_blocked" in diagnostics["result"]["quality_warnings"]
     uv_stats = diagnostics["stages"]["uv"]["stats"]
@@ -167,13 +170,12 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
         texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     )
     assert candidate["global_coverage_ratio"] > 0.24212932586669922
-    assert candidate["uv_surface_occupancy_ratio"] > 0.38708019256591797
+    assert candidate["uv_surface_occupancy_ratio"] > 0.50
     assert candidate["uv_bin_max_candidate_faces"] <= 512
-    assert candidate["uv_surface_occupancy_ratio"] < 0.50
     assert candidate["checks"]["global_coverage_floor"]["passed"] is False
-    assert candidate["checks"]["uv_surface_occupancy_floor"]["passed"] is False
+    assert candidate["checks"]["uv_surface_occupancy_floor"]["passed"] is True
     assert candidate["checks"]["uv_surface_visible_floor"]["passed"] is True
-    assert candidate["quality_blockers"] == ["global_coverage_floor", "uv_surface_occupancy_floor"]
+    assert candidate["quality_blockers"] == ["global_coverage_floor"]
     assert candidate["xatlas_chart_parity"] is False
     assert "not_xatlas_chart_parity" in diagnostics["visual_comparison"]["deferred_parity_boundaries"]
     _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb"))
@@ -382,6 +384,9 @@ def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
     assert _resolve_pixal3d_uv_backend("face-atlas") == "face-atlas"
     assert _resolve_pixal3d_uv_backend("native_chart") == "native-chart"
     assert _resolve_chart_angle_degrees(45.0) == 45.0
+    assert _resolve_tile_padding(None, "face-atlas") == (0.08, "backend_default:face-atlas")
+    assert _resolve_tile_padding(None, "native-chart") == (0.02, "backend_default:native-chart")
+    assert _resolve_tile_padding(0.07, "native-chart") == (0.07, "explicit")
 
     with pytest.raises(ValueError, match="uv_backend"):
         _resolve_pixal3d_uv_backend("xatlas")
@@ -389,6 +394,10 @@ def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
         _resolve_chart_angle_degrees(float("nan"))
     with pytest.raises(ValueError, match="chart_angle_degrees"):
         _resolve_chart_angle_degrees(181.0)
+    with pytest.raises(ValueError, match="tile_padding"):
+        _resolve_tile_padding(float("nan"), "native-chart")
+    with pytest.raises(ValueError, match="tile_padding"):
+        _resolve_tile_padding(0.45, "face-atlas")
     with pytest.raises(ValueError, match="uv_backend"):
         export_pixal3d_glb(decoded_dir, tmp_path / "out", uv_backend="xatlas")
     with pytest.raises(ValueError, match="chart_angle_degrees"):
