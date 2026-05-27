@@ -118,10 +118,15 @@ setting parity.
 Geometry diagnostics also keep the visible-hole investigation separate from
 UV diagnostics. `mesh_metrics` reports boundary edges, boundary vertices,
 closed boundary-loop count, open boundary-chain count, small-loop count, and
-max boundary component size in native C++. Pixal3D exports preserve those
-fields under `source_metrics.metrics` and `export_metrics.metrics`, so a small
-visible hole can be checked against final mesh topology before changing
-simplification, repair, or UV chart policy.
+max boundary component size in native C++. It also separates open-boundary
+components by total edge count, small-open-component count, simple open-chain
+count, branched open-component count, endpoint count, and branch-vertex count.
+Pixal3D exports preserve those fields under `source_metrics.metrics` and
+`export_metrics.metrics`, so a small visible hole can be checked against final
+mesh topology before changing simplification, repair, or UV chart policy.
+On the current reference-target fixture, remaining open components are
+branched, not simple endpoint-to-endpoint chains, so open-boundary repair needs
+a separate conservative design.
 The topology-aware production simplifier now applies a bounded native
 small-loop fill after simplification: by default it uses projected
 ear-clipping to fill closed boundary loops up to 8 edges, only while staying

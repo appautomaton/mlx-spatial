@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback",
+  "active_change": "2026-05-27-mlx-spatialkit-open-boundary-diagnostics",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-open-boundary-diagnostics/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-open-boundary-diagnostics/PLAN.md"
 }

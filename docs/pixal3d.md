@@ -312,9 +312,14 @@ boundaries remain open.
 The export diagnostics now keep geometry-hole evidence separate from UV chart
 coverage. Native `mesh_metrics` reports boundary vertices, closed boundary
 loops, open boundary chains, small boundary loops, and max boundary component
-size. `export_pixal3d_glb` records those metrics for both the source and final
-export meshes, so visible holes can be evaluated as topology evidence before
-we change simplification, repair, or UV charting.
+size. It also reports open-boundary edge totals, small-open-component totals,
+simple open-chain count, branched open-component count, endpoint count, and
+branch-vertex count. `export_pixal3d_glb` records those metrics for both the
+source and final export meshes, so visible holes can be evaluated as topology
+evidence before we change simplification, repair, or UV charting. The current
+reference-target fixture's open components are branched rather than simple
+endpoint-to-endpoint chains, so open-boundary repair remains a separate design
+step.
 For the topology-aware production simplifier, `mlx-spatialkit` also performs a
 bounded small-loop fill after simplification. The repair uses projected
 ear-clipping for closed boundary loops up to 8 edges by default, respects the

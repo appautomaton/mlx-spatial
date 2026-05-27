@@ -287,6 +287,9 @@ Script defaults:
   boundary-loop topology under
   `source_metrics.metrics` and `export_metrics.metrics`, so geometry holes are
   not conflated with UV chart coverage or xatlas parity.
+  Open-boundary diagnostics also report simple versus branched open components,
+  endpoint counts, branch-vertex counts, and open-component edge totals; this
+  is diagnostic only and does not repair open chains.
   The topology-aware simplifier also runs a bounded native small-loop fill for
   closed boundary loops up to 8 edges when target-face budget remains, using
   projected ear-clipping first and a guarded centroid-fan fallback capped at

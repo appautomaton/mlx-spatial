@@ -475,7 +475,17 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
     assert export_metrics["boundary_small_loop_edge_count"] < 4000
     assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
+    assert export_metrics["boundary_open_chain_count"] == 808
+    assert export_metrics["boundary_open_chain_edge_count"] == 12622
+    assert export_metrics["boundary_small_open_chain_count"] == 753
+    assert export_metrics["boundary_small_open_chain_edge_count"] == 9159
+    assert export_metrics["boundary_simple_open_chain_count"] == 0
+    assert export_metrics["boundary_branched_open_chain_count"] == export_metrics["boundary_open_chain_count"]
+    assert export_metrics["boundary_open_chain_endpoint_count"] == 0
+    assert export_metrics["boundary_open_chain_branch_vertex_count"] == 1894
+    assert export_metrics["boundary_max_open_chain_edges"] == 205
     assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_loop_edges"]
+    assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_open_chain_edges"]
     assert export_metrics["export_blocking_reasons"] == []
 
     candidate = diagnostics["quality"]["native_chart_uv_candidate"]

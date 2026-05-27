@@ -50,11 +50,22 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback/SPEC.md`
 - exit signal: Focused and package tests pass, native build succeeds, and the real fixture lowers boundary-loop/edge counts without readiness regressions.
 
+## Phase 45: Open-Boundary Diagnostics
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-open-boundary-diagnostics`
+- objective: Extend native mesh metrics so remaining open boundary components are classified before attempting repair.
+- why now: The latest fixture has `808` open boundary components after closed-loop repair, but current metrics do not separate simple open chains from branched open components.
+- likely outputs: C++ mesh metric fields, focused tests, real-fixture metric assertions, docs, package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-open-boundary-diagnostics/SPEC.md`
+- exit signal: Focused and package tests pass, native build succeeds, and the real fixture records actionable open-boundary diagnostics without readiness regressions.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback`.
+- Last verified change: `2026-05-27-mlx-spatialkit-open-boundary-diagnostics`.
 - Diagnostics separate scalar reference-target quality from production equivalence.
 - Native geometry repair now uses bounded projected ear-clipping with an 8-edge public cap plus a conservative 6-edge centroid-fan fallback for rejected small closed loops.
+- Native open-boundary diagnostics now distinguish simple open chains from branched open components; the current real fixture has branched open components, not simple open chains.
 - Native-chart xatlas-utilization ratio improved through bounded small-chart splitting and denser split-position search, not by changing padding defaults.
 - Metal texture bake now releases the Python GIL during command-buffer waits so Python monitor threads can sample during GPU execution.
 
@@ -62,4 +73,4 @@
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
 - Zero-padding default switch remains deferred until separately justified.
-- Implementing xatlas parity, full remesh, arbitrary large N-gon filling, or CUDA/cuMesh behavior is outside the current split-position search change.
+- Implementing open-boundary repair, xatlas parity, full remesh, arbitrary large N-gon filling, or CUDA/cuMesh behavior is outside the current diagnostics change.

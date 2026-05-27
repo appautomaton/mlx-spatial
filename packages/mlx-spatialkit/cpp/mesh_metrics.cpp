@@ -21,7 +21,15 @@ struct BoundaryTopology {
   int64_t open_chain_count = 0;
   int64_t small_loop_count = 0;
   int64_t small_loop_edge_count = 0;
+  int64_t open_chain_edge_count = 0;
+  int64_t small_open_chain_count = 0;
+  int64_t small_open_chain_edge_count = 0;
+  int64_t simple_open_chain_count = 0;
+  int64_t branched_open_chain_count = 0;
+  int64_t open_chain_endpoint_count = 0;
+  int64_t open_chain_branch_vertex_count = 0;
   int64_t max_loop_edges = 0;
+  int64_t max_open_chain_edges = 0;
   int64_t max_component_edges = 0;
 };
 
@@ -57,6 +65,8 @@ BoundaryTopology boundary_topology(const std::unordered_map<mesh_common::EdgeKey
     visited.insert(seed);
     int64_t component_vertices = 0;
     int64_t edge_stubs = 0;
+    int64_t endpoint_vertices = 0;
+    int64_t branch_vertices = 0;
     bool every_vertex_degree_two = true;
     while (!stack.empty()) {
       const int64_t vertex = stack.back();
@@ -69,6 +79,11 @@ BoundaryTopology boundary_topology(const std::unordered_map<mesh_common::EdgeKey
       }
       const auto &neighbors = found->second;
       edge_stubs += static_cast<int64_t>(neighbors.size());
+      if (neighbors.size() == 1) {
+        endpoint_vertices += 1;
+      } else if (neighbors.size() > 2) {
+        branch_vertices += 1;
+      }
       if (neighbors.size() != 2) {
         every_vertex_degree_two = false;
       }
@@ -92,6 +107,19 @@ BoundaryTopology boundary_topology(const std::unordered_map<mesh_common::EdgeKey
       }
     } else {
       topology.open_chain_count += 1;
+      topology.open_chain_edge_count += component_edges;
+      topology.max_open_chain_edges = std::max(topology.max_open_chain_edges, component_edges);
+      topology.open_chain_endpoint_count += endpoint_vertices;
+      topology.open_chain_branch_vertex_count += branch_vertices;
+      if (endpoint_vertices == 2 && branch_vertices == 0) {
+        topology.simple_open_chain_count += 1;
+      } else {
+        topology.branched_open_chain_count += 1;
+      }
+      if (component_edges <= kSmallBoundaryLoopThresholdEdges) {
+        topology.small_open_chain_count += 1;
+        topology.small_open_chain_edge_count += component_edges;
+      }
     }
   }
   return topology;
@@ -154,7 +182,15 @@ nb::dict mesh_metrics(nb::object vertices, nb::object faces) {
   result["boundary_small_loop_count"] = boundary.small_loop_count;
   result["boundary_small_loop_edge_count"] = boundary.small_loop_edge_count;
   result["boundary_small_loop_threshold_edges"] = kSmallBoundaryLoopThresholdEdges;
+  result["boundary_open_chain_edge_count"] = boundary.open_chain_edge_count;
+  result["boundary_small_open_chain_count"] = boundary.small_open_chain_count;
+  result["boundary_small_open_chain_edge_count"] = boundary.small_open_chain_edge_count;
+  result["boundary_simple_open_chain_count"] = boundary.simple_open_chain_count;
+  result["boundary_branched_open_chain_count"] = boundary.branched_open_chain_count;
+  result["boundary_open_chain_endpoint_count"] = boundary.open_chain_endpoint_count;
+  result["boundary_open_chain_branch_vertex_count"] = boundary.open_chain_branch_vertex_count;
   result["boundary_max_loop_edges"] = boundary.max_loop_edges;
+  result["boundary_max_open_chain_edges"] = boundary.max_open_chain_edges;
   result["boundary_max_component_edges"] = boundary.max_component_edges;
   result["nonmanifold_edges"] = nonmanifold_edges;
   result["connected_components"] = mesh_common::connected_component_count(mesh);
