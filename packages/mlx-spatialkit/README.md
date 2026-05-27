@@ -60,3 +60,10 @@ coverage thresholds, with final visible coverage around `0.602` versus the older
 one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
 gate with `production_quality_ready=true`. This is not a claim of upstream
 xatlas, 4096-texture, or 1M-face export parity.
+
+When the checked-in reference GLB is available, reference-target export also
+writes a `visual_parity/` sidecar next to `model.glb`: `visual_parity.json`,
+`index.html`, and extracted candidate/reference base-color PNGs. The report
+compares GLB mesh counts, texture dimensions, and embedded base-color coverage
+against the reference GLB. It is deterministic inspection evidence, not a
+browser-rendered screenshot or xatlas chart-equivalence proof.

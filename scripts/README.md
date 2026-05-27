@@ -241,6 +241,9 @@ Script defaults:
   details against the checked-in Pixal3D reference trace. The current
   reference-target heavy fixture passes the measured spatialkit production gate,
   but this is not full upstream xatlas, 4096-texture, or 1M-face setting parity.
+  When the reference GLB is available, reference-target export also writes a
+  `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
+  plus extracted candidate/reference base-color PNG previews.
 
 ### LiTo
 

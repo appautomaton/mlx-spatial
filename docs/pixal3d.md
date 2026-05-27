@@ -255,3 +255,11 @@ reporting. Current reference-target diagnostics are expected to stay
 final coverage, raw coverage reporting, preset, and reference checks all pass.
 This closes the measured native spatialkit gate, not full upstream xatlas,
 4096-texture, or 1M-face export-setting parity.
+
+When the reference GLB is available, `mlx_spatialkit.export_pixal3d_glb` writes
+a `visual_parity/` directory next to the generated GLB. It contains
+`visual_parity.json`, an `index.html` texture preview, and extracted
+candidate/reference base-color PNGs. The diagnostics JSON includes the compact
+visual-comparison summary and paths. This report compares GLB structure, face
+counts, texture dimensions, and embedded texture coverage; it does not claim
+browser-rendered visual proof or xatlas chart parity.

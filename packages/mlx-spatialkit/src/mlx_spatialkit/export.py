@@ -22,6 +22,7 @@ from ._native import (
     validate_pixal3d_shape_fields,
     validate_pixal3d_texture_attributes,
 )
+from .glb_compare import compare_textured_glbs
 from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
 
 _T = TypeVar("_T")
@@ -415,6 +416,16 @@ def export_pixal3d_glb(
     )
     diagnostics["stages"]["write_glb"]["artifact"] = glb.metadata
     sample("after_write_glb")
+
+    if reference is not None:
+        reference_glb = _reference_glb_path(reference)
+        if reference_glb is not None:
+            visual_report = compare_textured_glbs(
+                glb.path,
+                reference_glb,
+                output_dir=glb.path.parent / "visual_parity",
+            )
+            diagnostics["visual_comparison"] = _visual_comparison_summary(visual_report)
 
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
@@ -831,6 +842,7 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
         artifact_metadata = metadata.get("textured_glb_artifact", {}).get("metadata", {})
         return {
             "trace_path": str(path),
+            "model_glb_path": str(path.with_name("model.glb")) if path.with_name("model.glb").exists() else None,
             "final_faces": _maybe_int(postprocess.get("final_faces")),
             "final_vertices": _maybe_int(postprocess.get("final_vertices")),
             "raw_coverage_ratio": _maybe_float(mesh_export.get("raw_coverage_ratio", artifact_metadata.get("raw_coverage_ratio"))),
@@ -842,6 +854,23 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
             "unwrap_utilization": _maybe_float(mesh_export.get("unwrap_utilization", artifact_metadata.get("unwrap_utilization"))),
         }
     return None
+
+
+def _reference_glb_path(reference: dict[str, Any]) -> Path | None:
+    path = reference.get("model_glb_path")
+    if path is None:
+        return None
+    reference_glb = Path(path)
+    return reference_glb if reference_glb.exists() else None
+
+
+def _visual_comparison_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": report["summary"],
+        "checks": report["checks"],
+        "artifacts": report.get("artifacts", {}),
+        "deferred_parity_boundaries": report["deferred_parity_boundaries"],
+    }
 
 
 def _reference_comparison(diagnostics: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:

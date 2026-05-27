@@ -149,6 +149,21 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert thresholds["final_coverage_ratio"]["actual"] >= thresholds["final_coverage_ratio"]["required_min"]
     assert thresholds["raw_coverage_ratio"]["passed"] is True
     assert diagnostics["reference_comparison"]["reference_bake_backend"] == "xatlas-kdtree"
+    visual = diagnostics["visual_comparison"]
+    assert visual["summary"]["all_passed"] is True
+    assert 0.80 <= visual["summary"]["face_count_ratio"] <= 1.25
+    assert visual["summary"]["texture_resolution_match"] is True
+    assert visual["summary"]["base_color_alpha_coverage_ratio"] >= 0.50
+    assert visual["summary"]["base_color_rgb_coverage_ratio"] >= 0.50
+    assert visual["checks"]["texture_resolution_match"]["passed"] is True
+    assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
+    assert "not_browser_rendered_visual_proof" in visual["deferred_parity_boundaries"]
+    visual_artifacts = visual["artifacts"]
+    assert Path(visual_artifacts["report_json"]).is_file()
+    assert Path(visual_artifacts["preview_html"]).is_file()
+    assert Path(visual_artifacts["candidate_base_color_png"]).is_file()
+    assert Path(visual_artifacts["reference_base_color_png"]).is_file()
+    assert Path(visual_artifacts["report_json"]).parent == output_dir / "visual_parity"
     assert "after_write_glb" in diagnostics["memory_samples"]
 
 

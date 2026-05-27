@@ -40,6 +40,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/SPEC.md`
 - exit signal: Reference-target export reports `topology-aware`, `quality_tier=production`, all production thresholds pass, and `production_quality_ready=true` on the heavy decoded fixture under `/tmp`.
 
+## Phase 5: Reference Visual Parity Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-reference-visual-parity-gate`
+- objective: Add deterministic GLB visual-comparison diagnostics and reviewer-friendly sidecar artifacts for spatialkit reference-target exports against the checked-in Pixal3D reference GLB.
+- why now: The scalar production gate passes, but the broader goal still needs visual comparability evidence rather than only threshold readiness.
+- likely outputs: GLB/PNG inspection utility, visual parity JSON/HTML sidecar, reference-target diagnostics integration, heavy fixture gate, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-reference-visual-parity-gate/SPEC.md`
+- exit signal: Reference-target heavy fixture writes visual comparison artifacts under `/tmp` and diagnostics show face, texture, and coverage comparability against the reference GLB.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
