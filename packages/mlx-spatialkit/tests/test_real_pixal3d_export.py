@@ -142,6 +142,17 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert uv_stats["chart_split_max_faces"] == 512
     assert uv_stats["chart_split_count"] > 0
     assert uv_stats["oversized_source_chart_count"] > 0
+    assert uv_stats["pre_low_fill_chart_count"] > 0
+    assert uv_stats["low_fill_rect_fill_threshold"] == pytest.approx(0.65)
+    assert uv_stats["low_fill_split_min_improvement"] == pytest.approx(0.02)
+    assert uv_stats["low_fill_split_min_faces"] == 6
+    assert uv_stats["low_fill_split_min_child_faces"] == 3
+    assert uv_stats["low_fill_split_max_depth"] == 2
+    assert uv_stats["low_fill_split_candidate_count"] > 0
+    assert uv_stats["low_fill_source_chart_count"] > 0
+    assert uv_stats["low_fill_split_accepted_count"] > 0
+    assert uv_stats["low_fill_chart_split_count"] == uv_stats["chart_count"] - uv_stats["pre_low_fill_chart_count"]
+    assert uv_stats["chart_rect_fill_ratio"] > uv_stats["pre_low_fill_chart_rect_fill_ratio"]
     assert uv_stats["max_chart_faces"] <= uv_stats["chart_split_max_faces"]
     assert uv_stats["packing"] == "aspect-shelf-charts"
     assert uv_stats["chart_count"] > 0
@@ -170,8 +181,8 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert candidate["uv_surface_occupancy_ratio"] == pytest.approx(
         texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     )
-    assert uv_stats["chart_rect_fill_ratio"] > 0.5649183023244753
-    assert candidate["global_coverage_ratio"] > 0.36844539642333984
+    assert uv_stats["chart_rect_fill_ratio"] > 0.5727071617508422
+    assert candidate["global_coverage_ratio"] > 0.3883981704711914
     assert candidate["uv_surface_occupancy_ratio"] > 0.50
     assert candidate["uv_bin_max_candidate_faces"] <= 512
     assert candidate["checks"]["global_coverage_floor"]["passed"] is False

@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "mesh_common.hpp"
@@ -721,6 +722,268 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   }
   charts = std::move(split_charts);
 
+  constexpr int64_t projection_rotation_candidates = 19;
+  constexpr double projection_rotation_step_degrees = 5.0;
+  constexpr double pi = 3.14159265358979323846;
+  constexpr double low_fill_rect_fill_threshold = 0.65;
+  constexpr double low_fill_split_min_improvement = 0.02;
+  constexpr int64_t low_fill_split_min_faces = 6;
+  constexpr int64_t low_fill_split_min_child_faces = 3;
+  constexpr int64_t low_fill_split_max_depth = 2;
+
+  struct ChartFillEvaluation {
+    double triangle_area = 0.0;
+    double rect_area = 1.0;
+    double rect_fill = 0.0;
+    int split_axis = 0;
+    std::vector<std::array<double, 2>> face_centroids;
+  };
+
+  auto evaluate_chart_fill = [&](const std::vector<int64_t> &chart) {
+    ChartFillEvaluation evaluation;
+    if (chart.empty()) {
+      return evaluation;
+    }
+
+    std::unordered_map<int64_t, int64_t> local_index;
+    local_index.reserve(chart.size() * 3);
+    std::vector<int64_t> source_vertices;
+    std::vector<std::array<int64_t, 3>> local_faces;
+    source_vertices.reserve(chart.size() * 3);
+    local_faces.reserve(chart.size());
+    for (int64_t face_index : chart) {
+      const auto &face = mesh.faces[static_cast<size_t>(face_index)];
+      std::array<int64_t, 3> local_face{};
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t source_index = face[corner];
+        auto inserted = local_index.emplace(source_index, static_cast<int64_t>(source_vertices.size()));
+        if (inserted.second) {
+          source_vertices.push_back(source_index);
+        }
+        local_face[static_cast<size_t>(corner)] = inserted.first->second;
+      }
+      local_faces.push_back(local_face);
+    }
+    if (source_vertices.empty()) {
+      return evaluation;
+    }
+
+    std::array<float, 3> average_normal{0.0f, 0.0f, 0.0f};
+    for (int64_t face_index : chart) {
+      const auto &normal = face_normals[static_cast<size_t>(face_index)];
+      average_normal[0] += normal[0];
+      average_normal[1] += normal[1];
+      average_normal[2] += normal[2];
+    }
+    const std::array<float, 3> chart_normal = normalize3(average_normal, {0.0f, 0.0f, 1.0f});
+    const float nx = std::fabs(chart_normal[0]);
+    const float ny = std::fabs(chart_normal[1]);
+    const float nz = std::fabs(chart_normal[2]);
+    std::array<float, 3> seed_axis{1.0f, 0.0f, 0.0f};
+    if (ny <= nx && ny <= nz) {
+      seed_axis = {0.0f, 1.0f, 0.0f};
+    } else if (nz <= nx && nz <= ny) {
+      seed_axis = {0.0f, 0.0f, 1.0f};
+    }
+    const std::array<float, 3> tangent_u = normalize3(cross3(seed_axis, chart_normal), {1.0f, 0.0f, 0.0f});
+    const std::array<float, 3> tangent_v = normalize3(cross3(chart_normal, tangent_u), {0.0f, 1.0f, 0.0f});
+
+    std::vector<std::array<double, 2>> projected_coords;
+    projected_coords.reserve(source_vertices.size());
+    double mean_u = 0.0;
+    double mean_v = 0.0;
+    for (int64_t source_index : source_vertices) {
+      const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
+      const double u = static_cast<double>(vertex[0]) * tangent_u[0] +
+                       static_cast<double>(vertex[1]) * tangent_u[1] +
+                       static_cast<double>(vertex[2]) * tangent_u[2];
+      const double v = static_cast<double>(vertex[0]) * tangent_v[0] +
+                       static_cast<double>(vertex[1]) * tangent_v[1] +
+                       static_cast<double>(vertex[2]) * tangent_v[2];
+      projected_coords.push_back({u, v});
+      mean_u += u;
+      mean_v += v;
+    }
+    mean_u /= static_cast<double>(projected_coords.size());
+    mean_v /= static_cast<double>(projected_coords.size());
+
+    double cov_uu = 0.0;
+    double cov_vv = 0.0;
+    double cov_uv = 0.0;
+    for (const auto &coord : projected_coords) {
+      const double du = coord[0] - mean_u;
+      const double dv = coord[1] - mean_v;
+      cov_uu += du * du;
+      cov_vv += dv * dv;
+      cov_uv += du * dv;
+    }
+    const double pca_angle = std::isfinite(cov_uu) && std::isfinite(cov_vv) && std::isfinite(cov_uv)
+                                 ? 0.5 * std::atan2(2.0 * cov_uv, cov_uu - cov_vv)
+                                 : 0.0;
+    std::array<double, projection_rotation_candidates> candidate_angles{};
+    const double step_radians = projection_rotation_step_degrees * pi / 180.0;
+    const int64_t midpoint = projection_rotation_candidates / 2;
+    for (int64_t candidate = 0; candidate < projection_rotation_candidates; ++candidate) {
+      candidate_angles[static_cast<size_t>(candidate)] =
+          pca_angle + static_cast<double>(candidate - midpoint) * step_radians;
+    }
+
+    double best_angle = 0.0;
+    double best_min_u = 0.0;
+    double best_min_v = 0.0;
+    double best_width = std::numeric_limits<double>::infinity();
+    double best_height = std::numeric_limits<double>::infinity();
+    double best_area = std::numeric_limits<double>::infinity();
+    for (double angle : candidate_angles) {
+      const double cos_angle = std::cos(angle);
+      const double sin_angle = std::sin(angle);
+      double min_u = std::numeric_limits<double>::infinity();
+      double min_v = std::numeric_limits<double>::infinity();
+      double max_u = -std::numeric_limits<double>::infinity();
+      double max_v = -std::numeric_limits<double>::infinity();
+      for (const auto &coord : projected_coords) {
+        const double centered_u = coord[0] - mean_u;
+        const double centered_v = coord[1] - mean_v;
+        const double rotated_u = cos_angle * centered_u + sin_angle * centered_v;
+        const double rotated_v = -sin_angle * centered_u + cos_angle * centered_v;
+        min_u = std::min(min_u, rotated_u);
+        min_v = std::min(min_v, rotated_v);
+        max_u = std::max(max_u, rotated_u);
+        max_v = std::max(max_v, rotated_v);
+      }
+      const double width = std::max(max_u - min_u, 1e-12);
+      const double height = std::max(max_v - min_v, 1e-12);
+      const double area = width * height;
+      if (area < best_area - 1e-12) {
+        best_angle = angle;
+        best_min_u = min_u;
+        best_min_v = min_v;
+        best_width = width;
+        best_height = height;
+        best_area = area;
+      }
+    }
+
+    const double max_extent = std::max(best_width, best_height);
+    if (!std::isfinite(max_extent) || max_extent <= 0.0) {
+      return evaluation;
+    }
+    const double cos_angle = std::cos(best_angle);
+    const double sin_angle = std::sin(best_angle);
+    std::vector<std::array<double, 2>> local_uvs;
+    local_uvs.reserve(projected_coords.size());
+    for (const auto &coord : projected_coords) {
+      const double centered_u = coord[0] - mean_u;
+      const double centered_v = coord[1] - mean_v;
+      const double rotated_u = cos_angle * centered_u + sin_angle * centered_v;
+      const double rotated_v = -sin_angle * centered_u + cos_angle * centered_v;
+      local_uvs.push_back({
+          (rotated_u - best_min_u) / max_extent,
+          (rotated_v - best_min_v) / max_extent,
+      });
+    }
+
+    evaluation.split_axis = best_width >= best_height ? 0 : 1;
+    evaluation.rect_area = (best_width / max_extent) * (best_height / max_extent);
+    evaluation.face_centroids.reserve(local_faces.size());
+    for (const auto &face : local_faces) {
+      const auto &a = local_uvs[static_cast<size_t>(face[0])];
+      const auto &b = local_uvs[static_cast<size_t>(face[1])];
+      const auto &c = local_uvs[static_cast<size_t>(face[2])];
+      const double area = 0.5 * std::fabs(
+          (b[0] - a[0]) * (c[1] - a[1]) -
+          (b[1] - a[1]) * (c[0] - a[0]));
+      evaluation.triangle_area += area;
+      evaluation.face_centroids.push_back({
+          (a[0] + b[0] + c[0]) / 3.0,
+          (a[1] + b[1] + c[1]) / 3.0,
+      });
+    }
+    evaluation.rect_fill = evaluation.rect_area > 0.0 ? evaluation.triangle_area / evaluation.rect_area : 0.0;
+    return evaluation;
+  };
+
+  const int64_t pre_low_fill_chart_count = static_cast<int64_t>(charts.size());
+  const int64_t oversized_chart_split_count = pre_low_fill_chart_count - source_chart_count;
+  double pre_low_fill_triangle_area = 0.0;
+  double pre_low_fill_rect_area = 0.0;
+  for (const auto &chart : charts) {
+    const ChartFillEvaluation evaluation = evaluate_chart_fill(chart);
+    pre_low_fill_triangle_area += evaluation.triangle_area;
+    pre_low_fill_rect_area += evaluation.rect_area;
+  }
+  int64_t low_fill_split_candidate_count = 0;
+  int64_t low_fill_source_chart_count = 0;
+  int64_t low_fill_split_accepted_count = 0;
+  int64_t low_fill_split_rejected_count = 0;
+  std::vector<std::vector<int64_t>> low_fill_charts;
+  low_fill_charts.reserve(charts.size());
+  struct LowFillWorkItem {
+    std::vector<int64_t> faces;
+    int64_t depth = 0;
+    bool source_counted = false;
+  };
+  for (const auto &chart : charts) {
+    std::vector<LowFillWorkItem> pending;
+    pending.push_back(LowFillWorkItem{chart, 0, false});
+    while (!pending.empty()) {
+      LowFillWorkItem item = std::move(pending.back());
+      pending.pop_back();
+      const ChartFillEvaluation parent = evaluate_chart_fill(item.faces);
+      const bool can_split = static_cast<int64_t>(item.faces.size()) >= low_fill_split_min_faces &&
+                             item.depth < low_fill_split_max_depth &&
+                             parent.rect_fill > 0.0 &&
+                             parent.rect_fill < low_fill_rect_fill_threshold;
+      if (can_split) {
+        low_fill_split_candidate_count += 1;
+        std::vector<std::pair<double, int64_t>> sortable;
+        sortable.reserve(item.faces.size());
+        for (size_t index = 0; index < item.faces.size(); ++index) {
+          const auto &centroid = parent.face_centroids[index];
+          sortable.push_back({centroid[static_cast<size_t>(parent.split_axis)], item.faces[index]});
+        }
+        std::stable_sort(sortable.begin(), sortable.end(), [](const auto &left, const auto &right) {
+          if (std::fabs(left.first - right.first) > 1e-12) {
+            return left.first < right.first;
+          }
+          return left.second < right.second;
+        });
+        const size_t midpoint_index = sortable.size() / 2;
+        std::vector<int64_t> left_faces;
+        std::vector<int64_t> right_faces;
+        left_faces.reserve(midpoint_index);
+        right_faces.reserve(sortable.size() - midpoint_index);
+        for (size_t index = 0; index < sortable.size(); ++index) {
+          const int64_t face_index = sortable[index].second;
+          if (index < midpoint_index) {
+            left_faces.push_back(face_index);
+          } else {
+            right_faces.push_back(face_index);
+          }
+        }
+        if (static_cast<int64_t>(left_faces.size()) >= low_fill_split_min_child_faces &&
+            static_cast<int64_t>(right_faces.size()) >= low_fill_split_min_child_faces) {
+          const ChartFillEvaluation left = evaluate_chart_fill(left_faces);
+          const ChartFillEvaluation right = evaluate_chart_fill(right_faces);
+          const double child_rect_area = left.rect_area + right.rect_area;
+          const double child_fill = child_rect_area > 0.0 ? (left.triangle_area + right.triangle_area) / child_rect_area : 0.0;
+          if (child_fill > parent.rect_fill + low_fill_split_min_improvement) {
+            if (!item.source_counted) {
+              low_fill_source_chart_count += 1;
+            }
+            low_fill_split_accepted_count += 1;
+            pending.push_back(LowFillWorkItem{std::move(right_faces), item.depth + 1, true});
+            pending.push_back(LowFillWorkItem{std::move(left_faces), item.depth + 1, true});
+            continue;
+          }
+        }
+        low_fill_split_rejected_count += 1;
+      }
+      low_fill_charts.push_back(std::move(item.faces));
+    }
+  }
+  charts = std::move(low_fill_charts);
+
   struct ChartData {
     int64_t original_index = 0;
     std::vector<int64_t> source_vertices;
@@ -737,9 +1000,6 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     double projection_rotation_radians = 0.0;
   };
 
-  constexpr int64_t projection_rotation_candidates = 19;
-  constexpr double projection_rotation_step_degrees = 5.0;
-  constexpr double pi = 3.14159265358979323846;
   const int64_t chart_count = static_cast<int64_t>(charts.size());
   const int64_t chart_split_count = chart_count - source_chart_count;
   std::vector<ChartData> chart_data;
@@ -1034,6 +1294,20 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["chart_split_max_faces"] = chart_split_max_faces;
   stats["chart_split_count"] = chart_split_count;
   stats["oversized_source_chart_count"] = oversized_source_chart_count;
+  stats["oversized_chart_split_count"] = oversized_chart_split_count;
+  stats["pre_low_fill_chart_count"] = pre_low_fill_chart_count;
+  stats["pre_low_fill_chart_rect_fill_ratio"] =
+      pre_low_fill_rect_area > 0.0 ? pre_low_fill_triangle_area / pre_low_fill_rect_area : 0.0;
+  stats["low_fill_rect_fill_threshold"] = low_fill_rect_fill_threshold;
+  stats["low_fill_split_min_improvement"] = low_fill_split_min_improvement;
+  stats["low_fill_split_min_faces"] = low_fill_split_min_faces;
+  stats["low_fill_split_min_child_faces"] = low_fill_split_min_child_faces;
+  stats["low_fill_split_max_depth"] = low_fill_split_max_depth;
+  stats["low_fill_split_candidate_count"] = low_fill_split_candidate_count;
+  stats["low_fill_source_chart_count"] = low_fill_source_chart_count;
+  stats["low_fill_split_accepted_count"] = low_fill_split_accepted_count;
+  stats["low_fill_split_rejected_count"] = low_fill_split_rejected_count;
+  stats["low_fill_chart_split_count"] = chart_count - pre_low_fill_chart_count;
   stats["max_chart_faces"] = max_chart_faces;
   stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
   stats["chart_angle_degrees"] = chart_angle_degrees;

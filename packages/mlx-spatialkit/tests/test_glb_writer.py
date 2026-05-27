@@ -119,6 +119,10 @@ def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> No
     assert mesh.stats["chart_count"] == 1
     assert mesh.stats["chart_split_count"] == 0
     assert mesh.stats["oversized_source_chart_count"] == 0
+    assert mesh.stats["low_fill_chart_split_count"] == 0
+    assert mesh.stats["low_fill_split_accepted_count"] == 0
+    assert mesh.stats["pre_low_fill_chart_count"] == 1
+    assert mesh.stats["pre_low_fill_chart_rect_fill_ratio"] == pytest.approx(1.0)
     assert mesh.stats["max_chart_faces"] == 2
     assert mesh.stats["projection"] == "local-frame-pca"
     assert mesh.stats["projection_rotation_candidates"] == 19
@@ -174,6 +178,7 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert mesh.stats["projection"] == "local-frame-pca"
     assert mesh.stats["projection_rotation_candidates"] == 19
     assert mesh.stats["projection_rotation_step_degrees"] == 5.0
+    assert mesh.stats["low_fill_chart_split_count"] == 0
     assert mesh.stats["chart_rect_fill_ratio"] > 0.0
     assert mesh.stats["shelf_rows"] >= 1
     assert mesh.stats["shelf_packing_efficiency"] > 0.0
@@ -221,6 +226,58 @@ def test_make_native_chart_uvs_local_projection_fills_rotated_rectangle() -> Non
     assert np.ptp(mesh.uvs[:, 1]) == pytest.approx(0.23, abs=1e-6)
 
 
+def test_make_native_chart_uvs_splits_low_fill_l_shape_deterministically() -> None:
+    cells = 5
+    vertices = []
+    for y in range(cells + 1):
+        for x in range(cells + 1):
+            vertices.append([float(x), float(y), 0.0])
+    faces = []
+    for y in range(cells):
+        for x in range(cells):
+            if x != 0 and y != 0:
+                continue
+            v0 = y * (cells + 1) + x
+            v1 = v0 + 1
+            v2 = v0 + cells + 1
+            v3 = v2 + 1
+            faces.append([v0, v1, v2])
+            faces.append([v2, v1, v3])
+    vertices_array = np.asarray(vertices, dtype=np.float32)
+    faces_array = np.asarray(faces, dtype=np.int64)
+
+    mesh = make_native_chart_uvs(vertices_array, faces_array, chart_angle_degrees=1.0, tile_padding=0.02)
+    repeat = make_native_chart_uvs(vertices_array, faces_array, chart_angle_degrees=1.0, tile_padding=0.02)
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["source_chart_count"] == 1
+    assert mesh.stats["pre_low_fill_chart_count"] == 1
+    assert mesh.stats["low_fill_rect_fill_threshold"] == pytest.approx(0.65)
+    assert mesh.stats["low_fill_split_min_faces"] == 6
+    assert mesh.stats["low_fill_split_min_child_faces"] == 3
+    assert mesh.stats["low_fill_split_max_depth"] == 2
+    assert mesh.stats["pre_low_fill_chart_rect_fill_ratio"] < mesh.stats["low_fill_rect_fill_threshold"]
+    assert mesh.stats["low_fill_split_candidate_count"] > 0
+    assert mesh.stats["low_fill_source_chart_count"] == 1
+    assert mesh.stats["low_fill_split_accepted_count"] > 0
+    assert mesh.stats["low_fill_chart_split_count"] == mesh.stats["chart_count"] - mesh.stats["pre_low_fill_chart_count"]
+    assert mesh.stats["chart_rect_fill_ratio"] > mesh.stats["pre_low_fill_chart_rect_fill_ratio"]
+    assert mesh.stats["chart_count"] > mesh.stats["pre_low_fill_chart_count"]
+    assert mesh.faces.shape == faces_array.shape
+    assert mesh.uvs.shape[0] == mesh.vertices.shape[0]
+    np.testing.assert_array_equal(mesh.faces, repeat.faces)
+    np.testing.assert_allclose(mesh.vertices, repeat.vertices)
+    np.testing.assert_allclose(mesh.uvs, repeat.uvs)
+    for key in (
+        "chart_count",
+        "chart_rect_fill_ratio",
+        "low_fill_split_candidate_count",
+        "low_fill_split_accepted_count",
+        "low_fill_chart_split_count",
+    ):
+        assert repeat.stats[key] == pytest.approx(mesh.stats[key])
+
+
 def test_make_native_chart_uvs_splits_oversized_coplanar_chart() -> None:
     columns = 34
     rows = 18
@@ -246,6 +303,8 @@ def test_make_native_chart_uvs_splits_oversized_coplanar_chart() -> None:
     assert mesh.stats["source_chart_count"] == 1
     assert mesh.stats["chart_count"] > 1
     assert mesh.stats["chart_split_count"] == mesh.stats["chart_count"] - mesh.stats["source_chart_count"]
+    assert mesh.stats["low_fill_chart_split_count"] == 0
+    assert mesh.stats["oversized_chart_split_count"] == mesh.stats["chart_count"] - mesh.stats["source_chart_count"]
     assert mesh.stats["oversized_source_chart_count"] == 1
     assert mesh.stats["chart_split_max_faces"] == 512
     assert mesh.stats["max_chart_faces"] <= mesh.stats["chart_split_max_faces"]

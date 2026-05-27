@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-low-fill-chart-split-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-low-fill-chart-split-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-low-fill-chart-split-gate/PLAN.md"
 }

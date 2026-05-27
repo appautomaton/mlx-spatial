@@ -200,6 +200,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate/SPEC.md`
 - exit signal: Real chart export improves chart rect fill or global coverage beyond the Phase 19 baseline while readiness diagnostics remain honest.
 
+## Phase 21: Low-Fill Chart Split Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-low-fill-chart-split-gate`
+- objective: Add deterministic low-fill chart splitting to improve native chart rect fill and global coverage without changing bake thresholds.
+- why now: Native-chart occupancy barely clears its floor and global coverage remains blocked; diagnostics show shelf packing is efficient but chart-internal rect fill remains low.
+- likely outputs: Low-fill split policy, split diagnostics, focused chart tests, real fixture rect-fill/coverage gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-low-fill-chart-split-gate/SPEC.md`
+- exit signal: Real chart export improves chart rect fill or global coverage beyond the Phase 20 baseline while readiness diagnostics remain honest.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
