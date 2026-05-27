@@ -121,7 +121,8 @@ def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> No
     assert mesh.stats["oversized_source_chart_count"] == 0
     assert mesh.stats["max_chart_faces"] == 2
     assert mesh.stats["projection"] == "local-frame-pca"
-    assert mesh.stats["projection_rotation_candidates"] == 7
+    assert mesh.stats["projection_rotation_candidates"] == 19
+    assert mesh.stats["projection_rotation_step_degrees"] == 5.0
     assert mesh.stats["chart_rect_fill_ratio"] == pytest.approx(1.0)
     assert mesh.stats["shelf_rows"] == 1
     assert mesh.stats["packed_width"] == pytest.approx(1.0)
@@ -171,7 +172,8 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(8 / 6)
     assert mesh.stats["chart_normal_cos_threshold"] == pytest.approx(np.cos(np.deg2rad(30.0)))
     assert mesh.stats["projection"] == "local-frame-pca"
-    assert mesh.stats["projection_rotation_candidates"] == 7
+    assert mesh.stats["projection_rotation_candidates"] == 19
+    assert mesh.stats["projection_rotation_step_degrees"] == 5.0
     assert mesh.stats["chart_rect_fill_ratio"] > 0.0
     assert mesh.stats["shelf_rows"] >= 1
     assert mesh.stats["shelf_packing_efficiency"] > 0.0

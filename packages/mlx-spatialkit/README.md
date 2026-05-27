@@ -79,9 +79,10 @@ opt-in native chart candidate: it groups edge-connected smooth faces by a
 normal-angle threshold, splits oversized charts into deterministic spatial
 chunks, duplicates vertices at chart boundaries, packs charts through
 deterministic local-frame/PCA projection plus aspect-aware shelf packing, and
-feeds this binned Metal path. Existing Pixal3D exports still use the
-paired-triangle face atlas by default, and this chart candidate is not xatlas
-chart parity.
+feeds this binned Metal path. Projection evaluates a deterministic 19-candidate
+PCA-centered rotation search at 5-degree steps and reports the candidate count
+and step size in UV stats. Existing Pixal3D exports still use the paired-triangle
+face atlas by default, and this chart candidate is not xatlas chart parity.
 `export_pixal3d_glb(...,
 uv_backend="native-chart")` wires the same candidate into the real decoded
 Pixal3D export path and records chart count, duplicate ratio, UV-bin
@@ -96,10 +97,10 @@ too low. In that case `result.quality_warnings` includes
 `native_chart_uv_candidate_quality_blocked`, and the failed checks identify the
 specific coverage/utilization blocker.
 
-The current large-chart splitter, local projection, shelf packer, and tighter
-native-chart padding improve the real fixture chart candidate versus the older
-fixed-axis/equal-grid chart path. It can still report `quality_blocked` until
-global texture coverage clears the readiness floor.
+The current large-chart splitter, bounded rotation search, shelf packer, and
+tighter native-chart padding improve the real fixture chart candidate versus the
+older fixed-axis/equal-grid chart path. It can still report `quality_blocked`
+until global texture coverage clears the readiness floor.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

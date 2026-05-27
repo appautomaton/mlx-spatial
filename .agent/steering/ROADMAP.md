@@ -190,6 +190,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-padding-gate/SPEC.md`
 - exit signal: Native-chart real fixture reports `uv_surface_occupancy_ratio > 0.50` with only truthful remaining quality blockers.
 
+## Phase 20: Chart Rect Fill Rotation Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate`
+- objective: Improve native chart rect-fill quality with a finer deterministic projection rotation search and prove the real Pixal3D chart boundary advances.
+- why now: Native-chart occupancy now clears its floor, but global coverage remains blocked; diagnostics show chart rect fill, not packing or dilation, is the measured bottleneck.
+- likely outputs: Bounded projection rotation search, projection diagnostics, focused chart tests, real fixture rect-fill/coverage gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-rect-fill-rotation-gate/SPEC.md`
+- exit signal: Real chart export improves chart rect fill or global coverage beyond the Phase 19 baseline while readiness diagnostics remain honest.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

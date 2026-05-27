@@ -263,10 +263,12 @@ edge-connected smooth faces by a configurable normal-angle threshold, reuses
 vertices within a chart, splits oversized charts into deterministic spatial
 chunks, duplicates only at chart boundaries, and bakes through the binned Metal
 path. Chart projection uses a deterministic local-frame/PCA rotation before
-deterministic aspect-aware shelf packing, with split counts, chart rect fill,
-packing efficiency, and packed-bounds diagnostics. Existing Pixal3D exports
-still use the paired-triangle face-atlas fast path; this candidate does not
-replace xatlas charting or prove CUDA/cuMesh remesh parity.
+deterministic aspect-aware shelf packing. Projection evaluates 19 PCA-centered
+rotation candidates at 5-degree steps and reports the candidate count, step,
+split counts, chart rect fill, packing efficiency, and packed-bounds
+diagnostics. Existing Pixal3D exports still use the paired-triangle face-atlas
+fast path; this candidate does not replace xatlas charting or prove CUDA/cuMesh
+remesh parity.
 
 For direct decoded-NPZ conversion, `mlx_spatialkit.export_pixal3d_glb` accepts
 `uv_backend="native-chart"` and `chart_angle_degrees=45.0` as an opt-in chart

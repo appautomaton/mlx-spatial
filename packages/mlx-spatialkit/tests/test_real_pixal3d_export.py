@@ -134,7 +134,8 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     uv_stats = diagnostics["stages"]["uv"]["stats"]
     assert uv_stats["backend"] == "native-chart-atlas"
     assert uv_stats["projection"] == "local-frame-pca"
-    assert uv_stats["projection_rotation_candidates"] == 7
+    assert uv_stats["projection_rotation_candidates"] == 19
+    assert uv_stats["projection_rotation_step_degrees"] == 5.0
     assert uv_stats["chart_rect_fill_ratio"] > 0.50
     assert uv_stats["source_chart_count"] > 0
     assert uv_stats["chart_count"] >= uv_stats["source_chart_count"]
@@ -169,7 +170,8 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert candidate["uv_surface_occupancy_ratio"] == pytest.approx(
         texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     )
-    assert candidate["global_coverage_ratio"] > 0.24212932586669922
+    assert uv_stats["chart_rect_fill_ratio"] > 0.5649183023244753
+    assert candidate["global_coverage_ratio"] > 0.36844539642333984
     assert candidate["uv_surface_occupancy_ratio"] > 0.50
     assert candidate["uv_bin_max_candidate_faces"] <= 512
     assert candidate["checks"]["global_coverage_floor"]["passed"] is False

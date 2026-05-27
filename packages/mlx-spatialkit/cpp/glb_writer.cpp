@@ -737,7 +737,8 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     double projection_rotation_radians = 0.0;
   };
 
-  constexpr int64_t projection_rotation_candidates = 7;
+  constexpr int64_t projection_rotation_candidates = 19;
+  constexpr double projection_rotation_step_degrees = 5.0;
   constexpr double pi = 3.14159265358979323846;
   const int64_t chart_count = static_cast<int64_t>(charts.size());
   const int64_t chart_split_count = chart_count - source_chart_count;
@@ -825,15 +826,13 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     const double pca_angle = std::isfinite(cov_uu) && std::isfinite(cov_vv) && std::isfinite(cov_uv)
                                  ? 0.5 * std::atan2(2.0 * cov_uv, cov_uu - cov_vv)
                                  : 0.0;
-    const std::array<double, projection_rotation_candidates> candidate_angles{
-        pca_angle,
-        pca_angle + pi * 0.125,
-        pca_angle - pi * 0.125,
-        pca_angle + pi * 0.25,
-        pca_angle - pi * 0.25,
-        0.0,
-        pi * 0.25,
-    };
+    std::array<double, projection_rotation_candidates> candidate_angles{};
+    const double step_radians = projection_rotation_step_degrees * pi / 180.0;
+    const int64_t midpoint = projection_rotation_candidates / 2;
+    for (int64_t candidate = 0; candidate < projection_rotation_candidates; ++candidate) {
+      candidate_angles[static_cast<size_t>(candidate)] =
+          pca_angle + static_cast<double>(candidate - midpoint) * step_radians;
+    }
 
     double best_angle = 0.0;
     double best_min_u = 0.0;
@@ -1041,6 +1040,7 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["chart_normal_cos_threshold"] = cos_threshold;
   stats["projection"] = "local-frame-pca";
   stats["projection_rotation_candidates"] = projection_rotation_candidates;
+  stats["projection_rotation_step_degrees"] = projection_rotation_step_degrees;
   stats["average_abs_projection_rotation_radians"] = rotation_abs_sum / static_cast<double>(chart_count);
   stats["chart_rect_fill_ratio"] = local_rect_area > 0.0 ? local_triangle_area / local_rect_area : 0.0;
   stats["packing"] = "aspect-shelf-charts";
