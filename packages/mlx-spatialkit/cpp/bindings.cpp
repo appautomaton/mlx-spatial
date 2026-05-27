@@ -2,6 +2,7 @@
 #include <nanobind/stl/string.h>
 
 #include "flexi_dual_grid.hpp"
+#include "glb_writer.hpp"
 #include "metal_probe.hpp"
 #include "mesh_processing.hpp"
 #include "pixal3d_contracts.hpp"
@@ -57,4 +58,23 @@ NB_MODULE(_native, module) {
              nb::arg("target_faces"),
              nb::arg("min_component_faces") = 32,
              "Run the native-owned first-pass mesh simplification interface.");
+
+  module.def("make_face_atlas_uvs",
+             &mlx_spatialkit::make_face_atlas_uvs,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("tile_padding") = 0.08,
+             "Create a deterministic native face-atlas UV mesh.");
+
+  module.def("textured_glb_payload",
+             &mlx_spatialkit::textured_glb_payload,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("base_color_rgba"),
+             nb::arg("metallic_roughness"),
+             nb::arg("generator") = "mlx-spatialkit",
+             nb::arg("mesh_name") = "TexturedMesh",
+             nb::arg("material_name") = "PBRMaterial",
+             "Build a self-contained GLB 2.0 payload with embedded PBR textures.");
 }

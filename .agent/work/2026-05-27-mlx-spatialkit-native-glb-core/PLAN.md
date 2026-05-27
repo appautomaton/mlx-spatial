@@ -132,6 +132,10 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 
 **Touches:** `packages/mlx-spatialkit/cpp/glb_writer.cpp`, `packages/mlx-spatialkit/cpp/*uv*`, `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests`
 
+**Status:** complete
+**Evidence:** Added native `make_face_atlas_uvs` and `textured_glb_payload` bindings plus thin Python `NativeUvMesh`, `NativeGlbArtifact`, `make_face_atlas_uvs`, `textured_glb_payload`, and `write_textured_glb` wrappers. The native writer emits GLB 2.0 JSON/BIN chunks, aligned buffer views, POSITION/TEXCOORD/index accessors, embedded PNG base-color and metallic-roughness images, Pixal3D/TRELLIS-style PBR material labels, and explicit texture/32-bit length guards. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_glb_writer.py -q` passed with `5 passed`; full package tests passed with `32 passed`; `xcrun metal -v && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear && ...` passed and printed `artifact clean`. Read-only subagent spec review and quality review both returned `APPROVED`.
+**Risks / next:** UVs are deterministic face-atlas UVs, not production unwraps; Slice 6 must replace texture sampling/bake hot loops behind this stable GLB/UV contract.
+
 ### Slice 6: Metal 4 Texture Bake
 
 **Objective:** Implement the Metal-backed texture/PBR bake path for UV raster/sampling work.

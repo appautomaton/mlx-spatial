@@ -69,6 +69,7 @@ nanobind_add_module(
   STABLE_ABI
   cpp/bindings.cpp
   cpp/flexi_dual_grid.cpp
+  cpp/glb_writer.cpp
   cpp/mesh_cleanup.cpp
   cpp/mesh_metrics.cpp
   cpp/pixal3d_contracts.cpp
