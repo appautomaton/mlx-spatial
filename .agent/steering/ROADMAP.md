@@ -32,12 +32,12 @@
 
 ## Phase 4: Native Remesh Backend Tier
 
-- status: pending
-- change:
+- status: active
+- change: `2026-05-27-mlx-spatialkit-native-geometry-backend-tier`
 - objective: Replace or augment `spatial-cluster` with a non-preview native remesh/simplification backend so the reference-target export can pass backend-tier readiness.
-- why now: Deferred from the atlas coverage cycle because coverage is the current visual blocker and can be improved independently.
-- likely outputs: Non-preview native remesh backend or equivalent, topology/quality diagnostics, runtime/memory benchmarks.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-atlas-coverage-parity/PLAN.md`
+- why now: Current reference-target evidence shows face count, topology, coverage, and raw reporting pass; backend tier is the only remaining measured production blocker.
+- likely outputs: Native topology-aware geometry backend, explicit backend selection contract, production-tier self-diagnostics, heavy reference-target gate, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/SPEC.md`
 - exit signal: Reference-target export no longer reports `native_geometry_candidate_blocked` for preview-tier simplification.
 
 ## Deferred or Not Now
