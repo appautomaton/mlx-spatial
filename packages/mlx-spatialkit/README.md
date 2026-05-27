@@ -76,7 +76,9 @@ compares GLB mesh counts, texture dimensions, and embedded base-color coverage
 against the reference GLB. It is deterministic inspection evidence, not a
 browser-rendered screenshot or xatlas chart-equivalence proof. When comparing a
 4096 candidate against the checked-in 1024 reference GLB, texture-resolution
-mismatch is expected and should stay visible in the report.
+mismatch is expected and should stay visible in the report. Default deferred
+visual parity boundaries now stay limited to xatlas chart parity and 1M-face
+export-setting parity.
 
 Pixal3D export diagnostics also include a `memory` summary with observed process
 RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`

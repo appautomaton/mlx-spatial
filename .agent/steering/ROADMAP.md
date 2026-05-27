@@ -80,6 +80,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/SPEC.md`
 - exit signal: 4096 reference-target export under `/tmp` reports `production_quality_ready=true` with final coverage above threshold while xatlas and 1M-face boundaries remain explicit.
 
+## Phase 9: Parity Boundary Coherence Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate`
+- objective: Make visual-comparison deferred parity boundaries reflect only production gaps that remain open after the 4096 texture and browser-render proof gates.
+- why now: `glb_compare.py` still emits stale `not_4096_texture_parity` and `not_browser_rendered_visual_proof` labels even though those gates are verified done.
+- likely outputs: Updated boundary labels, focused and heavy diagnostics assertions, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/SPEC.md`
+- exit signal: Visual-comparison diagnostics retain only xatlas chart parity and 1M-face export-setting parity as deferred boundaries, with focused/heavy tests and docs aligned.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

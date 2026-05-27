@@ -158,7 +158,9 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert visual["summary"]["base_color_rgb_coverage_ratio"] >= 0.50
     assert visual["checks"]["texture_resolution_match"]["passed"] is True
     assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
-    assert "not_browser_rendered_visual_proof" in visual["deferred_parity_boundaries"]
+    assert "not_1m_face_export_setting_parity" in visual["deferred_parity_boundaries"]
+    assert "not_4096_texture_parity" not in visual["deferred_parity_boundaries"]
+    assert "not_browser_rendered_visual_proof" not in visual["deferred_parity_boundaries"]
     visual_artifacts = visual["artifacts"]
     assert Path(visual_artifacts["report_json"]).is_file()
     assert Path(visual_artifacts["preview_html"]).is_file()

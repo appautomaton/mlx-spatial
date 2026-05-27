@@ -166,9 +166,7 @@ def compare_textured_glbs(
         "checks": checks,
         "deferred_parity_boundaries": [
             "not_xatlas_chart_parity",
-            "not_4096_texture_parity",
             "not_1m_face_export_setting_parity",
-            "not_browser_rendered_visual_proof",
         ],
     }
     if output_dir is not None:

@@ -1,7 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-4096-texture-coverage-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-parity-boundary-coherence-gate/PLAN.md"
 }

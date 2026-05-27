@@ -64,7 +64,10 @@ def test_compare_textured_glbs_writes_report_and_preview_artifacts(tmp_path: Pat
     assert report["summary"]["base_color_alpha_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_rgb_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["texture_resolution_match"] is True
-    assert "not_browser_rendered_visual_proof" in report["deferred_parity_boundaries"]
+    assert report["deferred_parity_boundaries"] == [
+        "not_xatlas_chart_parity",
+        "not_1m_face_export_setting_parity",
+    ]
     assert Path(report["artifacts"]["report_json"]) == output_dir / "visual_parity.json"
     assert (output_dir / "visual_parity.json").exists()
     assert (output_dir / "index.html").exists()

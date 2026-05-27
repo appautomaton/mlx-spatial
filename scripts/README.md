@@ -247,7 +247,9 @@ Script defaults:
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
   plus extracted candidate/reference base-color PNG previews. The checked-in
   reference GLB is 1024, so a 4096 candidate is expected to report texture-size
-  mismatch while still passing coverage.
+  mismatch while still passing coverage. Default deferred visual parity
+  boundaries are limited to xatlas chart parity and 1M-face export-setting
+  parity.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting.

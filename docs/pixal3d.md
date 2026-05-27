@@ -268,10 +268,11 @@ a `visual_parity/` directory next to the generated GLB. It contains
 `visual_parity.json`, an `index.html` texture preview, and extracted
 candidate/reference base-color PNGs. The diagnostics JSON includes the compact
 visual-comparison summary and paths. This report compares GLB structure, face
-counts, texture dimensions, and embedded texture coverage; it does not claim
-browser-rendered visual proof or xatlas chart parity. The checked-in reference
-GLB is 1024, so a 4096 candidate should honestly report texture-resolution
-mismatch even when its production coverage gate passes.
+counts, texture dimensions, and embedded texture coverage; it is not xatlas
+chart parity. The checked-in reference GLB is 1024, so a 4096 candidate should
+honestly report texture-resolution mismatch even when its production coverage
+gate passes. Default deferred visual parity boundaries now stay limited to
+xatlas chart parity and 1M-face export-setting parity.
 
 The same diagnostics JSON includes a `memory` summary for spatialkit exports.
 It records aggregate process RSS samples, observed per-stage RSS peaks, and
@@ -285,7 +286,6 @@ runtime dependency. Install pinned Playwright/Three dependencies under `/tmp`
 and run `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated
 `model.glb` and the checked-in reference GLB. The script writes
 `browser_render_report.json`, `comparison.png`, and `index.html` under
-`visual_parity/browser_render/`; when the render checks pass, it augments
-`visual_parity.json` and removes only the browser-rendered-proof deferral. This
-still does not claim xatlas chart parity, 1M-face setting parity, or exact
+`visual_parity/browser_render/` and augments `visual_parity.json` when requested.
+This still does not claim xatlas chart parity, 1M-face setting parity, or exact
 perceptual equivalence.
