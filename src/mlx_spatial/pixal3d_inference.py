@@ -79,6 +79,8 @@ PIXAL3D_DEFAULT_DINO_ROOT = DINOv3_VITL16_ASSETS.root_hint
 PIXAL3D_DEFAULT_SEED = 42
 PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
 PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT = 1_000_000
+PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT = 1_100_000
+PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT = 1_100_000
 PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
 PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
@@ -149,6 +151,8 @@ class Pixal3DInferencePipeline:
         seed: int = PIXAL3D_DEFAULT_SEED,
         max_num_tokens: int = PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
         shape_upsample_token_limit: int = PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+        shape_decoder_token_limit: int = PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
+        texture_decoder_token_limit: int = PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
         dino_root: str | Path | None = None,
         texture_size: int = PIXAL3D_DEFAULT_TEXTURE_SIZE,
         glb_target_faces: int = PIXAL3D_DEFAULT_GLB_TARGET_FACES,
@@ -194,6 +198,11 @@ class Pixal3DInferencePipeline:
             },
             "shape_upsample_options": {
                 "token_limit": int(shape_upsample_token_limit),
+                "hr_selection_max_num_tokens": int(max_num_tokens),
+            },
+            "decoder_options": {
+                "shape_decoder_token_limit": int(shape_decoder_token_limit),
+                "texture_decoder_token_limit": int(texture_decoder_token_limit),
                 "hr_selection_max_num_tokens": int(max_num_tokens),
             },
         }
@@ -288,6 +297,38 @@ class Pixal3DInferencePipeline:
                 "validate Pixal3D shape upsample token limit",
                 f"shape_upsample_token_limit must be positive, got {shape_upsample_token_limit}",
                 {"shape_upsample_token_limit": shape_upsample_token_limit},
+                metadata=metadata,
+            )
+
+        if shape_decoder_token_limit <= 0:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D shape decoder token limit",
+                f"shape_decoder_token_limit must be positive, got {shape_decoder_token_limit}",
+                {"shape_decoder_token_limit": shape_decoder_token_limit},
+                metadata=metadata,
+            )
+
+        if texture_decoder_token_limit <= 0:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D texture decoder token limit",
+                f"texture_decoder_token_limit must be positive, got {texture_decoder_token_limit}",
+                {"texture_decoder_token_limit": texture_decoder_token_limit},
                 metadata=metadata,
             )
 
@@ -1606,7 +1647,7 @@ class Pixal3DInferencePipeline:
                     shape_decoder_config,
                     hr_selection.coordinates,
                     shape_hr_features,
-                    decoder_token_limit=max_num_tokens,
+                    decoder_token_limit=shape_decoder_token_limit,
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
@@ -1625,7 +1666,8 @@ class Pixal3DInferencePipeline:
                     {
                         "config_path": shape_decoder_model.config_path,
                         "checkpoint_path": shape_decoder_model.checkpoint_path,
-                        "decoder_token_limit": max_num_tokens,
+                        "shape_decoder_token_limit": shape_decoder_token_limit,
+                        "hr_selection_max_num_tokens": max_num_tokens,
                         "shape_coordinates_shape": tuple(int(dim) for dim in hr_selection.coordinates.shape),
                         "shape_features_shape": tuple(int(dim) for dim in shape_hr_features.shape),
                     },
@@ -1644,6 +1686,7 @@ class Pixal3DInferencePipeline:
                 "completed_levels": shape_decode.probe.completed_levels,
                 "subdivision_shapes": shape_decode.probe.subdivision_shapes,
                 "decoder_token_limit": shape_decode.probe.reference_token_limit,
+                "hr_selection_max_num_tokens": max_num_tokens,
             }
             shape_decoder_artifact = write_pixal3d_shape_decoder_npz(
                 artifact_dir / "shape_decoder_fields.npz",
@@ -1662,6 +1705,7 @@ class Pixal3DInferencePipeline:
                     "actual_hr_resolution": hr_selection.actual_hr_resolution,
                     "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
                     "decoder_token_limit": shape_decode.probe.reference_token_limit,
+                    "hr_selection_max_num_tokens": max_num_tokens,
                     "blocker_next_target": "texture-decoder",
                 },
             )
@@ -1683,13 +1727,14 @@ class Pixal3DInferencePipeline:
                     hr_selection.coordinates,
                     texture_features,
                     guide_subdivisions=shape_decode.subdivisions,
-                    decoder_token_limit=max_num_tokens,
+                    decoder_token_limit=texture_decoder_token_limit,
                     decode_resolution=hr_selection.actual_hr_resolution,
                     shape_decoder_coordinates=shape_decode.coordinates,
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 decoder_metadata = {
-                    "decoder_token_limit": max_num_tokens,
+                    "texture_decoder_token_limit": texture_decoder_token_limit,
+                    "hr_selection_max_num_tokens": max_num_tokens,
                     "texture_coordinates_shape": tuple(int(dim) for dim in hr_selection.coordinates.shape),
                     "texture_features_shape": tuple(int(dim) for dim in texture_features.shape),
                     "guide_subdivision_shapes": tuple(
@@ -1738,6 +1783,7 @@ class Pixal3DInferencePipeline:
                 "voxel_size": texture_decode.voxel_size,
                 "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
                 "decoder_token_limit": texture_decode.probe.reference_token_limit,
+                "hr_selection_max_num_tokens": max_num_tokens,
             }
             texture_decoder_artifact = write_pixal3d_texture_decoder_npz(
                 artifact_dir / "texture_decoder_pbr.npz",
@@ -1759,6 +1805,7 @@ class Pixal3DInferencePipeline:
                     "actual_hr_resolution": hr_selection.actual_hr_resolution,
                     "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
                     "decoder_token_limit": texture_decode.probe.reference_token_limit,
+                    "hr_selection_max_num_tokens": max_num_tokens,
                     "guide_subdivision_shapes": texture_decode.guide_subdivision_shapes,
                     "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
                     "blocker_next_target": "mesh-extraction",

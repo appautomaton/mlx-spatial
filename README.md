@@ -308,7 +308,9 @@ as downstream stage assets permit. Compatible decoder assets then write
 `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, followed by shared
 mesh extraction and texture baking to write `model.glb`. `max_num_tokens`
 remains the HR coordinate selection guard; `--shape-upsample-token-limit`
-separately bounds the shape-decoder upsample compute stage.
+separately bounds the shape-decoder upsample compute stage, and
+`--shape-decoder-token-limit` / `--texture-decoder-token-limit` bound final
+decoder compute.
 
 ## Repository Layout
 

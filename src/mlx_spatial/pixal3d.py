@@ -27,7 +27,9 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+    PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
@@ -86,6 +88,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=int,
         default=PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
         help="compute token guard for Pixal3D shape decoder upsample before HR coordinate selection; default: %(default)s",
+    )
+    generate_parser.add_argument(
+        "--shape-decoder-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
+        help="compute token guard for Pixal3D final shape decoder; default: %(default)s",
+    )
+    generate_parser.add_argument(
+        "--texture-decoder-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
+        help="compute token guard for Pixal3D final texture decoder; default: %(default)s",
     )
     generate_parser.add_argument(
         "--texture-size",
@@ -213,6 +227,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=args.seed,
             max_num_tokens=args.max_num_tokens,
             shape_upsample_token_limit=args.shape_upsample_token_limit,
+            shape_decoder_token_limit=args.shape_decoder_token_limit,
+            texture_decoder_token_limit=args.texture_decoder_token_limit,
             dino_root=args.dino_root,
             texture_size=args.texture_size,
             glb_target_faces=args.glb_target_faces,

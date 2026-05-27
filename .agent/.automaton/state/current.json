@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-shape-upsample-token-guard",
+  "active_change": "2026-05-26-pixal3d-decoder-token-guards",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-shape-upsample-token-guard/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-shape-upsample-token-guard/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-decoder-token-guards/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-decoder-token-guards/PLAN.md"
 }

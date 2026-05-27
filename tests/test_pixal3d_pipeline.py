@@ -9,7 +9,12 @@ from PIL import Image
 import mlx_spatial.pixal3d_inference as pixal3d_inference
 from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
-from mlx_spatial.pixal3d_inference import PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT, Pixal3DInferencePipeline
+from mlx_spatial.pixal3d_inference import (
+    PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
+    PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+    PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
+    Pixal3DInferencePipeline,
+)
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS, Pixal3DProjectionStageConfig
 from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
 from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
@@ -187,6 +192,32 @@ def test_pixal3d_pipeline_validates_shape_upsample_token_limit(tmp_path):
     assert result.trace.blocker.stage == "input-validation"
     assert result.trace.blocker.operation == "validate Pixal3D shape upsample token limit"
     assert result.trace.blocker.metadata["shape_upsample_token_limit"] == 0
+
+
+def test_pixal3d_pipeline_validates_decoder_token_limits(tmp_path):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+
+    shape_result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        shape_decoder_token_limit=0,
+    )
+    texture_result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        texture_decoder_token_limit=0,
+    )
+
+    assert shape_result.trace.blocker is not None
+    assert shape_result.trace.blocker.stage == "input-validation"
+    assert shape_result.trace.blocker.operation == "validate Pixal3D shape decoder token limit"
+    assert shape_result.trace.blocker.metadata["shape_decoder_token_limit"] == 0
+    assert texture_result.trace.blocker is not None
+    assert texture_result.trace.blocker.stage == "input-validation"
+    assert texture_result.trace.blocker.operation == "validate Pixal3D texture decoder token limit"
+    assert texture_result.trace.blocker.metadata["texture_decoder_token_limit"] == 0
 
 
 def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_root(tmp_path):
@@ -611,6 +642,7 @@ def test_pixal3d_pipeline_writes_texture_slat_and_shape_decoder_then_blocks_with
     assert result.trace.metadata["texture_slat"]["normalized_shape_feature_shape"] == (4096, 32)
     assert result.trace.metadata["texture_slat"]["sampled_feature_shape"] == (4096, 32)
     assert result.trace.metadata["shape_decoder"]["decoder_output_shape"] == (4096, 7)
+    assert result.trace.metadata["shape_decoder"]["decoder_token_limit"] == PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT
 
 
 def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_assets(tmp_path):
@@ -689,6 +721,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
     assert metadata["stage"] == "texture_decoder_pbr"
     assert metadata["blocker_next_target"] == "mesh-extraction"
     assert result.trace.metadata["texture_decoder"]["decoder_output_shape"] == (4096, 6)
+    assert result.trace.metadata["texture_decoder"]["decoder_token_limit"] == PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT
     assert result.trace.blocker.metadata["shape_decoder_fields_shape"] == (4096, 7)
     assert result.trace.blocker.metadata["texture_decoder_attributes_shape"] == (4096, 6)
 

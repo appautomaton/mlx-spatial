@@ -23,8 +23,8 @@ Recommended settings:
     weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
     GLB target faces 50000, kdtree texture baking, MoGe root
     weights/sam-3d-objects-mlx/moge for auto-camera, shape upsample token
-    guard 1000000, and manual FOV only when intentionally overriding
-    auto-camera.
+    guard 1000000, decoder token guards 1100000, and manual FOV only when
+    intentionally overriding auto-camera.
 """
 
 from __future__ import annotations
@@ -48,7 +48,9 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+    PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
@@ -103,6 +105,18 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
         help="shape decoder upsample compute token guard before HR selection; default: %(default)s",
+    )
+    parser.add_argument(
+        "--shape-decoder-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
+        help="final shape decoder compute token guard; default: %(default)s",
+    )
+    parser.add_argument(
+        "--texture-decoder-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
+        help="final texture decoder compute token guard; default: %(default)s",
     )
     parser.add_argument(
         "--texture-size",
@@ -161,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
         str(args.max_num_tokens),
         "--shape-upsample-token-limit",
         str(args.shape_upsample_token_limit),
+        "--shape-decoder-token-limit",
+        str(args.shape_decoder_token_limit),
+        "--texture-decoder-token-limit",
+        str(args.texture_decoder_token_limit),
         "--texture-size",
         str(args.texture_size),
         "--glb-target-faces",

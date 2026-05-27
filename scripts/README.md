@@ -211,6 +211,8 @@ Script defaults:
 - seed: `42`
 - max tokens: `49152`
 - shape upsample token limit: `1000000`
+- shape decoder token limit: `1100000`
+- texture decoder token limit: `1100000`
 - texture size: `1024`
 - GLB face target: `50000`
 - xatlas face guard: `auto`

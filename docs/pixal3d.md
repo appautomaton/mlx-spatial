@@ -152,6 +152,8 @@ a Pixal3D-labeled textured GLB.
 - max tokens: `49152`, matching the upstream cascade guard
 - shape upsample token limit: `1000000`; this is the MLX compute guard before
   HR coordinate quantization/reduction
+- shape decoder token limit: `1100000`
+- texture decoder token limit: `1100000`
 - texture size: `1024`
 - GLB face target: `50000`
 - xatlas face guard: `auto`
