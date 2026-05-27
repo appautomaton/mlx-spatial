@@ -113,6 +113,10 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 
 **Touches:** `packages/mlx-spatialkit/cpp/mesh_metrics.cpp`, `packages/mlx-spatialkit/cpp/mesh_cleanup.cpp`, `packages/mlx-spatialkit/cpp/simplify.cpp`, `packages/mlx-spatialkit/tests`
 
+**Status:** complete
+**Evidence:** Added native `mesh_metrics`, `clean_mesh`, and `simplify_mesh` bindings plus thin Python wrappers; cleanup removes degenerate faces, duplicate faces, unreferenced vertices, and small components in C++; metrics now separates open boundary edges from true nonmanifold edges. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py -q` passed with `8 passed`; full package tests passed with `27 passed`; `xcrun metal -v && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear && ...` passed and printed `artifact clean`. Read-only subagent spec review and quality review both returned `APPROVED`.
+**Risks / next:** Simplification is intentionally a first native-owned interface, not final quality remeshing; Slice 5 must validate UV/export behavior against these cleaned meshes.
+
 ### Slice 5: Native UV Interface And GLB Writer
 
 **Objective:** Add the UV-ready geometry interface and native GLB writer needed for a textured GLB.

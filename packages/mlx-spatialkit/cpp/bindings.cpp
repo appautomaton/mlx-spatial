@@ -3,6 +3,7 @@
 
 #include "flexi_dual_grid.hpp"
 #include "metal_probe.hpp"
+#include "mesh_processing.hpp"
 #include "pixal3d_contracts.hpp"
 
 namespace nb = nanobind;
@@ -35,4 +36,25 @@ NB_MODULE(_native, module) {
              nb::arg("fields"),
              nb::arg("grid_size"),
              "Extract a triangle mesh from Pixal3D FlexiDualGrid fields.");
+
+  module.def("mesh_metrics",
+             &mlx_spatialkit::mesh_metrics,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             "Return native mesh metrics and export-blocking reasons.");
+
+  module.def("clean_mesh",
+             &mlx_spatialkit::clean_mesh,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("min_component_faces") = 32,
+             "Clean degenerate, duplicate, unreferenced, and tiny-component mesh data.");
+
+  module.def("simplify_mesh",
+             &mlx_spatialkit::simplify_mesh,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("target_faces"),
+             nb::arg("min_component_faces") = 32,
+             "Run the native-owned first-pass mesh simplification interface.");
 }
