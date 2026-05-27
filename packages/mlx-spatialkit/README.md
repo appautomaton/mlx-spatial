@@ -44,7 +44,7 @@ print(result.diagnostics["quality"]["native_chart_uv_candidate"])
 ```
 
 When `tile_padding` is not supplied, Pixal3D exports resolve padding by UV
-backend: `face-atlas` keeps `0.08`, while `native-chart` uses `0.005`.
+backend: `face-atlas` keeps `0.08`, while `native-chart` uses `0.001`.
 Diagnostics record both `settings.tile_padding` and
 `settings.tile_padding_source`; explicit caller padding is preserved.
 
@@ -112,7 +112,7 @@ readiness gate, not a claim of xatlas chart equivalence or 1M/4096 upstream
 setting parity.
 
 The current large-chart splitter, low-fill splitter, bounded rotation search,
-shelf packer, tighter native-chart padding, and UV-surface fill improve the real
+shelf packer, sub-texel native-chart padding, and UV-surface fill improve the real
 fixture chart candidate versus the older fixed-axis/equal-grid chart path.
 The bounded low-fill splitter now uses a slightly higher fill target and one
 extra split depth, improving the reference-target fixture's measured native

@@ -167,7 +167,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["requested_uv_backend"] == "native-chart"
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
     assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
-    assert diagnostics["settings"]["tile_padding"] == 0.005
+    assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
     assert "native_chart_uv_candidate_quality_blocked" not in diagnostics["result"]["quality_warnings"]
@@ -366,7 +366,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert diagnostics["settings"]["quality_preset"] == "reference-target"
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
     assert diagnostics["settings"]["target_faces"] == 212_542
-    assert diagnostics["settings"]["tile_padding"] == 0.005
+    assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
@@ -417,7 +417,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
     assert diagnostics["quality"]["xatlas_chart_parity"]["ratios"][
         "uv_surface_occupancy_vs_reference_utilization"
-    ] > 0.6736181097830843
+    ] > 0.690
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True
@@ -569,7 +569,7 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert diagnostics["settings"]["target_faces_source"] == "explicit"
     assert diagnostics["settings"]["texture_size"] == 4096
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
-    assert diagnostics["settings"]["tile_padding"] == 0.005
+    assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is False
@@ -660,7 +660,7 @@ def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
     assert _resolve_pixal3d_uv_backend("native_chart") == "native-chart"
     assert _resolve_chart_angle_degrees(45.0) == 45.0
     assert _resolve_tile_padding(None, "face-atlas") == (0.08, "backend_default:face-atlas")
-    assert _resolve_tile_padding(None, "native-chart") == (0.005, "backend_default:native-chart")
+    assert _resolve_tile_padding(None, "native-chart") == (0.001, "backend_default:native-chart")
     assert _resolve_tile_padding(0.07, "native-chart") == (0.07, "explicit")
 
     with pytest.raises(ValueError, match="uv_backend"):

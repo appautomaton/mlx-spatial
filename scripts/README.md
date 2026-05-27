@@ -259,8 +259,8 @@ Script defaults:
   and xatlas chart parity remains a later parity boundary. Native chart UVs use
   deterministic oversized-chart splitting, local-frame/PCA projection, a
   bounded 19-candidate rotation search at 5-degree steps, bounded low-fill
-  chart splitting, and aspect-aware shelves with a tighter backend default
-  padding of `0.005`. They report oversized and low-fill split counts, projection
+  chart splitting, and aspect-aware shelves with a sub-texel backend default
+  padding of `0.001`. They report oversized and low-fill split counts, projection
   candidate count and step, chart rect fill, padding source, and packing
   efficiency. When the Pixal3D xatlas reference trace is available, diagnostics
   also report `quality.xatlas_chart_parity` with reference chart count and
