@@ -235,7 +235,9 @@ Script defaults:
   optional package is missing, the Pixal3D script records the fallback and uses
   the internal writer. Current spatialkit output is preview-quality: native
   Metal texture fallback/fill is enabled, while simplification is reported as
-  `face-stride-preview` and `production_quality_ready=false`.
+  `spatial-cluster` with `quality_tier=geometry_aware_preview`; diagnostics
+  compare against the checked-in Pixal3D reference trace when available and keep
+  `production_quality_ready=false`.
 
 ### LiTo
 

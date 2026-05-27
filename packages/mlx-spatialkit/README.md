@@ -30,6 +30,9 @@ fallback, and native UV-surface dilation. Diagnostics record raw exact coverage,
 fallback-filled texels, final visible base-color coverage, runtime, and RSS
 samples.
 
-Mesh simplification is intentionally labeled `face-stride-preview` with
-`quality_tier=preview`. A written GLB can be `artifact_ready=true` while
-`production_quality_ready=false`; production remeshing parity is a later phase.
+Mesh simplification is currently labeled `spatial-cluster` with
+`quality_tier=geometry_aware_preview`. The native C++ path clusters vertices
+spatially, remaps source faces, removes degenerate/duplicate output faces, and
+rejects faces that would create nonmanifold edges. A written GLB can be
+`artifact_ready=true` while `production_quality_ready=false`; production
+remeshing parity is still a later phase.

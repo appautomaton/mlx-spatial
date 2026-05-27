@@ -230,6 +230,11 @@ Spatialkit diagnostics separate artifact readiness from production-quality
 readiness. The current native texture path uses Metal exact sparse-voxel
 sampling plus bounded fallback/fill and records raw exact coverage, final visible
 base-color coverage, fallback-filled texels, timings, and RSS samples. Current
-mesh simplification is reported as `face-stride-preview` with
-`quality_tier=preview`, so generated GLBs are preview artifacts rather than
-upstream-style production remesh parity.
+mesh simplification is reported as `spatial-cluster` with
+`quality_tier=geometry_aware_preview`: native C++ spatially clusters vertices,
+remaps source faces, drops degenerate/duplicate faces, and rejects clustered
+faces that would create nonmanifold edges. When the checked-in Pixal3D reference
+trace is available, diagnostics include `reference_comparison` face-count and
+coverage ratios. Generated GLBs are still preview artifacts rather than
+upstream-style production remesh parity, so `production_quality_ready` remains
+false until stronger remesh/unwrap/texture parity thresholds are met.

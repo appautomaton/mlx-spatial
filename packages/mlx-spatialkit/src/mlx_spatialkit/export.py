@@ -383,6 +383,11 @@ def export_pixal3d_glb(
     diagnostics["stages"]["write_glb"]["artifact"] = glb.metadata
     sample("after_write_glb")
 
+    reference = _load_pixal3d_reference_trace(source_dir)
+    if reference is not None:
+        diagnostics["reference"] = reference
+        diagnostics["reference_comparison"] = _reference_comparison(diagnostics, reference)
+
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
         "artifact_ready": bool(quality["artifact_ready"]),
@@ -587,6 +592,80 @@ def _export_quality_summary(simplify_stats: dict[str, Any], export_metrics: dict
         "export_blocking_reasons": blockers,
         "warnings": tuple(warnings),
     }
+
+
+def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
+    candidates = [
+        decoded_dir.parent / "pixal3d-1024-cascade-glb-reference" / "trace.json",
+        Path.cwd() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-glb-reference" / "trace.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as handle:
+            trace = json.load(handle)
+        metadata = trace.get("metadata", {})
+        mesh_export = metadata.get("mesh_export", {})
+        postprocess = mesh_export.get("postprocess_stats", {})
+        artifact_metadata = metadata.get("textured_glb_artifact", {}).get("metadata", {})
+        return {
+            "trace_path": str(path),
+            "final_faces": _maybe_int(postprocess.get("final_faces")),
+            "final_vertices": _maybe_int(postprocess.get("final_vertices")),
+            "raw_coverage_ratio": _maybe_float(mesh_export.get("raw_coverage_ratio", artifact_metadata.get("raw_coverage_ratio"))),
+            "coverage_ratio": _maybe_float(mesh_export.get("coverage_ratio", artifact_metadata.get("coverage_ratio"))),
+            "unwrap_backend": mesh_export.get("unwrap_backend", artifact_metadata.get("unwrap_backend")),
+            "bake_backend": mesh_export.get("bake_backend", artifact_metadata.get("bake_backend")),
+        }
+    return None
+
+
+def _reference_comparison(diagnostics: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+    simplify_stats = diagnostics.get("stages", {}).get("simplify_mesh", {}).get("stats", {})
+    texture_stats = diagnostics.get("stages", {}).get("texture_bake", {}).get("stats", {})
+    final_faces = _maybe_int(simplify_stats.get("final_faces"))
+    reference_faces = _maybe_int(reference.get("final_faces"))
+    raw_coverage = _maybe_float(texture_stats.get("raw_coverage_ratio"))
+    final_coverage = _maybe_float(texture_stats.get("coverage_ratio", texture_stats.get("final_visible_coverage_ratio")))
+    reference_raw = _maybe_float(reference.get("raw_coverage_ratio"))
+    reference_final = _maybe_float(reference.get("coverage_ratio"))
+    comparison: dict[str, Any] = {
+        "spatialkit_simplifier_backend": simplify_stats.get("backend"),
+        "spatialkit_quality_tier": simplify_stats.get("quality_tier"),
+        "reference_unwrap_backend": reference.get("unwrap_backend"),
+        "reference_bake_backend": reference.get("bake_backend"),
+        "spatialkit_final_faces": final_faces,
+        "reference_final_faces": reference_faces,
+        "spatialkit_raw_coverage_ratio": raw_coverage,
+        "reference_raw_coverage_ratio": reference_raw,
+        "spatialkit_final_coverage_ratio": final_coverage,
+        "reference_final_coverage_ratio": reference_final,
+    }
+    if final_faces is not None and reference_faces not in (None, 0):
+        comparison["final_face_count_ratio"] = float(final_faces) / float(reference_faces)
+    if raw_coverage is not None and reference_raw not in (None, 0.0):
+        comparison["raw_coverage_ratio_vs_reference"] = raw_coverage / reference_raw
+    if final_coverage is not None and reference_final not in (None, 0.0):
+        comparison["final_coverage_ratio_vs_reference"] = final_coverage / reference_final
+    return comparison
+
+
+def _maybe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

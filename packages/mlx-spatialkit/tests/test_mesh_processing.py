@@ -117,33 +117,50 @@ def test_mesh_processing_handles_empty_face_results() -> None:
 
 
 def test_simplify_mesh_reduces_faces_with_native_owned_interface() -> None:
-    vertices = np.array(
-        [[float(index), float(index % 2), 0.0] for index in range(8)],
-        dtype=np.float32,
-    )
-    faces = np.array(
-        [
-            [0, 1, 2],
-            [1, 2, 3],
-            [2, 3, 4],
-            [3, 4, 5],
-            [4, 5, 6],
-            [5, 6, 7],
-        ],
-        dtype=np.int64,
-    )
+    vertices, faces = _grid_mesh(10)
 
-    mesh, stats = simplify_mesh(vertices, faces, target_faces=3, min_component_faces=1)
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=40, min_component_faces=1)
+    metrics = mesh_metrics(mesh.vertices, mesh.faces)
 
-    assert stats["simplified"] == 1
-    assert stats["backend"] == "face-stride-preview"
-    assert stats["algorithm"] == "deterministic_face_stride_compaction"
-    assert stats["quality_tier"] == "preview"
+    assert stats["simplified"] is True
+    assert stats["backend"] == "spatial-cluster"
+    assert stats["algorithm"] == "native_spatial_vertex_clustering"
+    assert stats["quality_tier"] == "geometry_aware_preview"
     assert stats["production_ready"] is False
-    assert stats["source_faces"] == 6
-    assert stats["target_faces"] == 3
-    assert mesh.faces.shape[0] == 3
+    assert stats["source_faces"] == faces.shape[0]
+    assert stats["source_vertices"] == vertices.shape[0]
+    assert stats["target_faces"] == 40
+    assert stats["final_faces"] == mesh.faces.shape[0]
+    assert stats["final_vertices"] == mesh.vertices.shape[0]
+    assert stats["cluster_count"] > 0
+    assert stats["grid_resolution"] >= 2
+    assert stats["degenerate_faces_removed"] > 0
+    assert stats["duplicate_faces_removed"] >= 0
+    assert stats["nonmanifold_faces_removed"] >= 0
+    assert stats["target_reached"] is True
+    assert 0 < mesh.faces.shape[0] <= 40
     assert mesh.vertices.shape[0] <= vertices.shape[0]
+    assert metrics["degenerate_faces"] == 0
+    assert metrics["duplicate_faces"] == 0
+    assert metrics["nonmanifold_edges"] == 0
+    assert "degenerate_faces_present" not in metrics["export_blocking_reasons"]
+
+
+def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
+    vertices: list[list[float]] = []
+    for y in range(quads_per_axis + 1):
+        for x in range(quads_per_axis + 1):
+            vertices.append([float(x), float(y), 0.0])
+
+    def vid(x: int, y: int) -> int:
+        return y * (quads_per_axis + 1) + x
+
+    faces: list[list[int]] = []
+    for y in range(quads_per_axis):
+        for x in range(quads_per_axis):
+            faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
+            faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])
+    return np.array(vertices, dtype=np.float32), np.array(faces, dtype=np.int64)
 
 
 def test_mesh_processing_rejects_invalid_face_indices() -> None:

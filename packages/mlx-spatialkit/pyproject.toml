@@ -33,19 +33,23 @@ packages = ["src/mlx_spatialkit"]
 include = [
     "/CMakeLists.txt",
     "/README.md",
-    "/cpp",
-    "/metal",
-    "/src",
-    "/tests",
+    "/cpp/**",
+    "/metal/**",
+    "/src/mlx_spatialkit/*.py",
+    "/tests/*.py",
     "/pyproject.toml",
 ]
 exclude = [
     "/.venv",
+    "/.pytest_cache",
     "/dist",
     "/inputs",
     "/outputs",
     "/vendors",
     "/weights",
+    "/**/__pycache__",
+    "/**/*.pyc",
+    "/**/*.pyo",
 ]
 
 [tool.pytest.ini_options]
