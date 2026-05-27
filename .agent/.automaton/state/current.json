@@ -1,7 +1,7 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-reference-visual-parity-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-reference-visual-parity-gate/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-reference-visual-parity-gate/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-reference-visual-parity-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/SPEC.md",
+  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/PLAN.md"
 }

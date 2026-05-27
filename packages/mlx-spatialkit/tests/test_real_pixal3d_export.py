@@ -87,6 +87,7 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert comparison["final_face_count_ratio"] > 0.0
     assert comparison["final_coverage_ratio_vs_reference"] > 0.10
     assert "after_write_glb" in diagnostics["memory_samples"]
+    _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb"))
 
 
 @pytest.mark.heavy
@@ -165,6 +166,7 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert Path(visual_artifacts["reference_base_color_png"]).is_file()
     assert Path(visual_artifacts["report_json"]).parent == output_dir / "visual_parity"
     assert "after_write_glb" in diagnostics["memory_samples"]
+    _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
 
 def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
@@ -304,3 +306,26 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert thresholds["all_passed"] is True
     assert thresholds["checks"]["face_count_ratio"]["actual"] == pytest.approx(1.0)
     assert thresholds["checks"]["final_coverage_ratio"]["actual"] == pytest.approx(0.75)
+
+
+def _assert_memory_diagnostics(diagnostics: dict, *, required_stages: tuple[str, ...]) -> None:
+    memory = diagnostics["memory"]
+    assert memory["source"].startswith("process RSS from ps")
+    assert memory["poll_interval_sec"] > 0.0
+    assert memory["sample_count"] >= len(diagnostics["memory_samples"])
+    assert memory["peak_current_rss_bytes"] is not None
+    assert memory["peak_current_rss_bytes"] > 0
+    assert memory["peak_max_rss_bytes"] is not None
+    assert memory["peak_max_rss_bytes"] >= memory["peak_current_rss_bytes"]
+    assert memory["last_sample"]["source"].startswith("ps rss")
+    assert diagnostics["memory_samples"]["after_write_glb"]["source"].startswith("ps rss")
+    stage_peaks = memory["stage_peaks"]
+    for stage_name in required_stages:
+        stage = stage_peaks[stage_name]
+        assert stage["sample_count"] >= 2
+        assert stage["start_current_rss_bytes"] is not None
+        assert stage["end_current_rss_bytes"] is not None
+        assert stage["peak_current_rss_bytes"] >= max(
+            stage["start_current_rss_bytes"],
+            stage["end_current_rss_bytes"],
+        )

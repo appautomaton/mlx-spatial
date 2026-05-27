@@ -50,6 +50,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-reference-visual-parity-gate/SPEC.md`
 - exit signal: Reference-target heavy fixture writes visual comparison artifacts under `/tmp` and diagnostics show face, texture, and coverage comparability against the reference GLB.
 
+## Phase 6: Peak Memory Telemetry Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate`
+- objective: Add stage-level peak host-memory telemetry to Pixal3D exports so diagnostics report observed RSS peaks during major native export stages.
+- why now: The export quality gates are stronger, but sparse boundary memory samples can still under-explain real process memory seen by local monitors.
+- likely outputs: Thread-safe process RSS monitor, per-stage memory peak diagnostics, heavy fixture assertions, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/SPEC.md`
+- exit signal: Heavy reference-target export writes `diagnostics.memory.stage_peaks` under `/tmp`, with full package/root/build verification passing.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

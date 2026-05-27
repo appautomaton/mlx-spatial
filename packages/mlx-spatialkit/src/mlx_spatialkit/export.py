@@ -8,6 +8,7 @@ import os
 import resource
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ PIXAL3D_REFERENCE_TARGET_FACES = 212_542
 PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD = 0.50
 PIXAL3D_REFERENCE_FACE_RATIO_MIN = 0.80
 PIXAL3D_REFERENCE_FACE_RATIO_MAX = 1.25
+PIXAL3D_MEMORY_POLL_INTERVAL_SEC = 0.25
 
 
 @dataclass(frozen=True)
@@ -248,14 +250,18 @@ def export_pixal3d_glb(
         "memory_samples": {},
     }
 
-    def sample(label: str) -> None:
-        diagnostics["memory_samples"][label] = _memory_sample()
+    memory_monitor = _ProcessMemoryMonitor()
 
+    def sample(label: str) -> None:
+        diagnostics["memory_samples"][label] = memory_monitor.sample(label)
+
+    memory_monitor.start()
     sample("start")
     decoded = _timed_stage(
         diagnostics,
         "load_npz",
         lambda: load_pixal3d_decoded_npz(shape_path, texture_path),
+        memory_monitor=memory_monitor,
     )
     diagnostics["contracts"] = decoded.contracts
     diagnostics["source"] = {
@@ -298,6 +304,7 @@ def export_pixal3d_glb(
         diagnostics,
         "extract_mesh",
         lambda: extract_flexi_dual_grid(shape_coordinates, shape_fields, grid_size=resolved_grid_size),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["extract_mesh"].update(_mesh_shape(mesh, "source"))
     del shape_coordinates, shape_fields
@@ -308,6 +315,7 @@ def export_pixal3d_glb(
         diagnostics,
         "source_metrics",
         lambda: mesh_metrics(mesh.vertices, mesh.faces),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["source_metrics"]["metrics"] = pre_metrics
 
@@ -315,6 +323,7 @@ def export_pixal3d_glb(
         diagnostics,
         "clean_mesh",
         lambda: clean_mesh(mesh.vertices, mesh.faces, min_component_faces=min_component_faces),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["clean_mesh"].update(_mesh_shape(cleaned, "cleaned"))
     diagnostics["stages"]["clean_mesh"]["stats"] = clean_stats
@@ -332,6 +341,7 @@ def export_pixal3d_glb(
             min_component_faces=min_component_faces,
             backend=requested_simplifier_backend,
         ),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["simplify_mesh"].update(_mesh_shape(simplified, "simplified"))
     diagnostics["stages"]["simplify_mesh"]["stats"] = simplify_stats
@@ -343,6 +353,7 @@ def export_pixal3d_glb(
         diagnostics,
         "export_metrics",
         lambda: mesh_metrics(simplified.vertices, simplified.faces),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["export_metrics"]["metrics"] = post_metrics
 
@@ -350,6 +361,7 @@ def export_pixal3d_glb(
         diagnostics,
         "uv",
         lambda: make_face_atlas_uvs(simplified.vertices, simplified.faces, tile_padding=tile_padding),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["uv"].update(_uv_shape(uv_mesh))
     del simplified
@@ -368,6 +380,7 @@ def export_pixal3d_glb(
             voxel_size=texture_voxel_size,
             max_texture_pixels=resolved_max_texture_pixels,
         ),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["texture_bake"].update(_texture_shape(baked))
     del texture_coordinates, texture_attributes
@@ -413,6 +426,7 @@ def export_pixal3d_glb(
                 "production_quality_ready": bool(quality["production_quality_ready"]),
             },
         ),
+        memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["write_glb"]["artifact"] = glb.metadata
     sample("after_write_glb")
@@ -420,10 +434,15 @@ def export_pixal3d_glb(
     if reference is not None:
         reference_glb = _reference_glb_path(reference)
         if reference_glb is not None:
-            visual_report = compare_textured_glbs(
-                glb.path,
-                reference_glb,
-                output_dir=glb.path.parent / "visual_parity",
+            visual_report = _timed_stage(
+                diagnostics,
+                "visual_compare",
+                lambda: compare_textured_glbs(
+                    glb.path,
+                    reference_glb,
+                    output_dir=glb.path.parent / "visual_parity",
+                ),
+                memory_monitor=memory_monitor,
             )
             diagnostics["visual_comparison"] = _visual_comparison_summary(visual_report)
 
@@ -436,6 +455,8 @@ def export_pixal3d_glb(
         "diagnostics_json": str(resolved_diagnostics_path),
         "bytes_written": int(glb.bytes_written),
     }
+    memory_monitor.stop()
+    diagnostics["memory"] = memory_monitor.summary()
     _write_json_atomic(resolved_diagnostics_path, diagnostics)
     return Pixal3DGlbExportResult(glb=glb, diagnostics_path=resolved_diagnostics_path, diagnostics=diagnostics)
 
@@ -522,14 +543,196 @@ def load_pixal3d_decoded_npz(
     )
 
 
-def _timed_stage(diagnostics: dict[str, Any], name: str, fn: Callable[[], _T]) -> _T:
+def _timed_stage(
+    diagnostics: dict[str, Any],
+    name: str,
+    fn: Callable[[], _T],
+    *,
+    memory_monitor: _ProcessMemoryMonitor | None = None,
+) -> _T:
     start = time.perf_counter()
     try:
-        return fn()
+        if memory_monitor is None:
+            return fn()
+        with memory_monitor.track_stage(name):
+            return fn()
+    except BaseException:
+        if memory_monitor is not None:
+            memory_monitor.stop()
+        raise
     finally:
         elapsed = time.perf_counter() - start
         diagnostics["timings_sec"][name] = elapsed
         diagnostics["stages"].setdefault(name, {})["seconds"] = elapsed
+
+
+class _MemoryStageScope:
+    def __init__(self, monitor: _ProcessMemoryMonitor, stage: str):
+        self._monitor = monitor
+        self._stage = stage
+        self._prior_stage = "idle"
+
+    def __enter__(self) -> None:
+        self._prior_stage = self._monitor._set_active_stage(self._stage)
+        self._monitor._set_stage_boundary(self._stage, "start", self._monitor.sample(f"{self._stage}:start"))
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self._monitor._set_stage_boundary(self._stage, "end", self._monitor.sample(f"{self._stage}:end"))
+        self._monitor._set_active_stage(self._prior_stage)
+
+
+class _ProcessMemoryMonitor:
+    def __init__(
+        self,
+        *,
+        poll_interval_sec: float = PIXAL3D_MEMORY_POLL_INTERVAL_SEC,
+        sample_fn: Callable[[], dict[str, Any]] | None = None,
+    ):
+        if poll_interval_sec <= 0:
+            raise ValueError("poll_interval_sec must be positive")
+        self._poll_interval_sec = float(poll_interval_sec)
+        self._sample_fn = sample_fn or _memory_sample
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started = False
+        self._stopped = False
+        self._active_stage = "idle"
+        self._sample_count = 0
+        self._peak_current_rss_bytes: int | None = None
+        self._peak_current_rss_label: str | None = None
+        self._peak_current_rss_stage: str | None = None
+        self._peak_max_rss_bytes: int | None = None
+        self._peak_max_rss_label: str | None = None
+        self._peak_max_rss_stage: str | None = None
+        self._last_sample: dict[str, Any] | None = None
+        self._stage_peaks: dict[str, dict[str, Any]] = {}
+
+    @property
+    def poll_interval_sec(self) -> float:
+        return self._poll_interval_sec
+
+    def start(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        self.sample("monitor_start")
+        thread = threading.Thread(
+            target=self._poll_loop,
+            name="mlx-spatialkit-memory-monitor",
+            daemon=True,
+        )
+        with self._lock:
+            self._thread = thread
+        thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+            thread = self._thread
+        self._stop_event.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(1.0, self._poll_interval_sec * 4.0))
+        self.sample("monitor_stop")
+
+    def sample(self, label: str) -> dict[str, Any]:
+        sample = self._sample_fn()
+        self._record(label, sample)
+        return sample
+
+    def track_stage(self, stage: str) -> _MemoryStageScope:
+        return _MemoryStageScope(self, stage)
+
+    def summary(self) -> dict[str, Any]:
+        with self._lock:
+            stage_peaks = {stage: dict(values) for stage, values in sorted(self._stage_peaks.items())}
+            return {
+                "source": "process RSS from ps; high-water RSS from resource.getrusage(RUSAGE_SELF).ru_maxrss",
+                "poll_interval_sec": self._poll_interval_sec,
+                "sample_count": self._sample_count,
+                "peak_current_rss_bytes": self._peak_current_rss_bytes,
+                "peak_current_rss_label": self._peak_current_rss_label,
+                "peak_current_rss_stage": self._peak_current_rss_stage,
+                "peak_max_rss_bytes": self._peak_max_rss_bytes,
+                "peak_max_rss_label": self._peak_max_rss_label,
+                "peak_max_rss_stage": self._peak_max_rss_stage,
+                "last_sample": dict(self._last_sample) if self._last_sample is not None else None,
+                "stage_peaks": stage_peaks,
+            }
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.wait(self._poll_interval_sec):
+            self.sample("poll")
+
+    def _set_active_stage(self, stage: str) -> str:
+        with self._lock:
+            prior = self._active_stage
+            self._active_stage = stage
+            if stage != "idle":
+                self._stage_peaks.setdefault(stage, self._empty_stage_record())
+            return prior
+
+    def _set_stage_boundary(self, stage: str, boundary: str, sample: dict[str, Any]) -> None:
+        current_rss = _sample_int(sample, "current_rss_bytes")
+        max_rss = _sample_int(sample, "max_rss_bytes")
+        with self._lock:
+            record = self._stage_peaks.setdefault(stage, self._empty_stage_record())
+            record[f"{boundary}_current_rss_bytes"] = current_rss
+            record[f"{boundary}_max_rss_bytes"] = max_rss
+
+    def _record(self, label: str, sample: dict[str, Any]) -> None:
+        current_rss = _sample_int(sample, "current_rss_bytes")
+        max_rss = _sample_int(sample, "max_rss_bytes")
+        with self._lock:
+            self._sample_count += 1
+            self._last_sample = dict(sample)
+            stage = self._active_stage
+            if current_rss is not None and (
+                self._peak_current_rss_bytes is None or current_rss > self._peak_current_rss_bytes
+            ):
+                self._peak_current_rss_bytes = current_rss
+                self._peak_current_rss_label = label
+                self._peak_current_rss_stage = stage
+            if max_rss is not None and (self._peak_max_rss_bytes is None or max_rss > self._peak_max_rss_bytes):
+                self._peak_max_rss_bytes = max_rss
+                self._peak_max_rss_label = label
+                self._peak_max_rss_stage = stage
+            if stage == "idle":
+                return
+            record = self._stage_peaks.setdefault(stage, self._empty_stage_record())
+            record["sample_count"] += 1
+            if current_rss is not None and (
+                record["peak_current_rss_bytes"] is None or current_rss > record["peak_current_rss_bytes"]
+            ):
+                record["peak_current_rss_bytes"] = current_rss
+                record["peak_current_rss_label"] = label
+            if max_rss is not None and (
+                record["peak_max_rss_bytes"] is None or max_rss > record["peak_max_rss_bytes"]
+            ):
+                record["peak_max_rss_bytes"] = max_rss
+                record["peak_max_rss_label"] = label
+
+    @staticmethod
+    def _empty_stage_record() -> dict[str, Any]:
+        return {
+            "sample_count": 0,
+            "start_current_rss_bytes": None,
+            "end_current_rss_bytes": None,
+            "peak_current_rss_bytes": None,
+            "peak_current_rss_label": None,
+            "start_max_rss_bytes": None,
+            "end_max_rss_bytes": None,
+            "peak_max_rss_bytes": None,
+            "peak_max_rss_label": None,
+        }
+
+
+def _sample_int(sample: dict[str, Any], key: str) -> int | None:
+    value = sample.get(key)
+    return None if value is None else int(value)
 
 
 def _memory_sample() -> dict[str, Any]:

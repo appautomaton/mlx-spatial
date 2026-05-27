@@ -67,3 +67,9 @@ writes a `visual_parity/` sidecar next to `model.glb`: `visual_parity.json`,
 compares GLB mesh counts, texture dimensions, and embedded base-color coverage
 against the reference GLB. It is deterministic inspection evidence, not a
 browser-rendered screenshot or xatlas chart-equivalence proof.
+
+Pixal3D export diagnostics also include a `memory` summary with observed process
+RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`
+high-water RSS. These numbers explain host-process memory behavior during
+stages such as `texture_bake` and `write_glb`; they are not full system memory
+pressure, Activity Monitor app-memory equivalence, or Metal allocator telemetry.

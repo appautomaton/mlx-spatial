@@ -263,3 +263,10 @@ candidate/reference base-color PNGs. The diagnostics JSON includes the compact
 visual-comparison summary and paths. This report compares GLB structure, face
 counts, texture dimensions, and embedded texture coverage; it does not claim
 browser-rendered visual proof or xatlas chart parity.
+
+The same diagnostics JSON includes a `memory` summary for spatialkit exports.
+It records aggregate process RSS samples, observed per-stage RSS peaks, and
+`resource.getrusage` high-water RSS. Use this to compare stages such as
+`extract_mesh`, `texture_bake`, and `write_glb` within one run. It does not
+measure full system memory pressure, exact Activity Monitor app-memory values,
+MLX allocator state, or Metal heap residency.

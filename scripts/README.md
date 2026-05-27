@@ -244,6 +244,9 @@ Script defaults:
   When the reference GLB is available, reference-target export also writes a
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
   plus extracted candidate/reference base-color PNG previews.
+  The `diagnostics.json` file also includes observed process RSS peaks per
+  export stage from `ps` and `resource.getrusage`; this is host-process
+  telemetry, not full system pressure or Metal allocator accounting.
 
 ### LiTo
 
