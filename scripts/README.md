@@ -289,8 +289,9 @@ Script defaults:
   not conflated with UV chart coverage or xatlas parity.
   The topology-aware simplifier also runs a bounded native small-loop fill for
   closed boundary loops up to 8 edges when target-face budget remains, using
-  projected ear-clipping and reporting considered/filled/rejected loops and
-  faces added. Direct decoded-NPZ exports expose this as
+  projected ear-clipping first and a guarded centroid-fan fallback capped at
+  6 edges. Diagnostics report method counts, rejection reasons, and faces
+  added. Direct decoded-NPZ exports expose this as
   `small_boundary_loop_fill_max_edges=8`; use `0` to disable the repair for
   comparison runs.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,

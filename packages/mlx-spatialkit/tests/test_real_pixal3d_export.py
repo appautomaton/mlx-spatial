@@ -414,8 +414,22 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert simplify_stats["small_boundary_loop_fill_enabled"] is True
     assert simplify_stats["small_boundary_loop_fill_max_edges"] == 8
     assert simplify_stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
+    assert simplify_stats["small_boundary_loop_fill_fallback_algorithm"] == "centroid-fan"
+    assert simplify_stats["small_boundary_loop_fill_fallback_enabled"] is True
+    assert simplify_stats["small_boundary_loop_fill_fallback_max_edges"] == 6
     assert simplify_stats["small_boundary_loops_considered"] > 0
     assert simplify_stats["small_boundary_loops_filled"] > 0
+    assert simplify_stats["small_boundary_loops_filled_by_ear_clipping"] > 0
+    assert simplify_stats["small_boundary_loops_centroid_fan_attempted"] > 0
+    assert simplify_stats["small_boundary_loops_filled_by_centroid_fan"] > 0
+    assert simplify_stats["small_boundary_loops_rejected"] == (
+        simplify_stats["small_boundary_loops_rejected_ordering"]
+        + simplify_stats["small_boundary_loops_rejected_triangulation"]
+        + simplify_stats["small_boundary_loops_rejected_fallback_cap"]
+        + simplify_stats["small_boundary_loops_rejected_degenerate"]
+        + simplify_stats["small_boundary_loops_rejected_duplicate"]
+        + simplify_stats["small_boundary_loops_rejected_nonmanifold"]
+    )
     assert simplify_stats["small_boundary_loop_faces_added"] > 0
     assert simplify_stats["small_boundary_loops_budget_limited"] == 0
     assert simplify_stats["final_faces"] <= simplify_stats["target_faces"]
@@ -455,11 +469,11 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert export_metrics["boundary_edges"] > 0
     assert export_metrics["boundary_vertices"] > 0
     assert export_metrics["boundary_loop_count"] > 0
-    assert export_metrics["boundary_edges"] < 18500
-    assert export_metrics["boundary_loop_count"] < 1100
+    assert export_metrics["boundary_edges"] < 16600
+    assert export_metrics["boundary_loop_count"] < 725
     assert export_metrics["boundary_small_loop_threshold_edges"] == 32
     assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
-    assert export_metrics["boundary_small_loop_edge_count"] < 5800
+    assert export_metrics["boundary_small_loop_edge_count"] < 4000
     assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
     assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_loop_edges"]
     assert export_metrics["export_blocking_reasons"] == []

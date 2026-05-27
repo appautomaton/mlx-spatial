@@ -203,11 +203,23 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert before["boundary_edges"] == 9
     assert stats["small_boundary_loop_fill_enabled"] is True
     assert stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
+    assert stats["small_boundary_loop_fill_fallback_algorithm"] == "centroid-fan"
+    assert stats["small_boundary_loop_fill_fallback_enabled"] is True
+    assert stats["small_boundary_loop_fill_fallback_max_edges"] == 6
     assert stats["small_boundary_loop_fill_max_edges"] == 8
     assert stats["small_boundary_loop_fill_face_budget"] == 2
     assert stats["small_boundary_loops_considered"] == 2
     assert stats["small_boundary_loops_filled"] == 1
+    assert stats["small_boundary_loops_filled_by_ear_clipping"] == 1
+    assert stats["small_boundary_loops_centroid_fan_attempted"] == 0
+    assert stats["small_boundary_loops_filled_by_centroid_fan"] == 0
     assert stats["small_boundary_loops_rejected"] == 0
+    assert stats["small_boundary_loops_rejected_ordering"] == 0
+    assert stats["small_boundary_loops_rejected_triangulation"] == 0
+    assert stats["small_boundary_loops_rejected_fallback_cap"] == 0
+    assert stats["small_boundary_loops_rejected_degenerate"] == 0
+    assert stats["small_boundary_loops_rejected_duplicate"] == 0
+    assert stats["small_boundary_loops_rejected_nonmanifold"] == 0
     assert stats["small_boundary_loops_budget_limited"] == 1
     assert stats["small_boundary_loop_faces_added"] == 1
     assert stats["final_faces"] == faces.shape[0] + 1
@@ -233,9 +245,14 @@ def test_simplify_mesh_can_disable_small_boundary_loop_fill() -> None:
     after = mesh_metrics(mesh.vertices, mesh.faces)
 
     assert stats["small_boundary_loop_fill_enabled"] is False
+    assert stats["small_boundary_loop_fill_fallback_algorithm"] == "centroid-fan"
+    assert stats["small_boundary_loop_fill_fallback_enabled"] is False
+    assert stats["small_boundary_loop_fill_fallback_max_edges"] == 6
     assert stats["small_boundary_loop_fill_max_edges"] == 0
     assert stats["small_boundary_loops_considered"] == 0
     assert stats["small_boundary_loops_filled"] == 0
+    assert stats["small_boundary_loops_centroid_fan_attempted"] == 0
+    assert stats["small_boundary_loops_filled_by_centroid_fan"] == 0
     assert stats["small_boundary_loop_faces_added"] == 0
     assert after["boundary_loop_count"] == before["boundary_loop_count"]
     assert after["boundary_edges"] == before["boundary_edges"]

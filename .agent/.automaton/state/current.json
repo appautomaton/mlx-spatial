@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-split-position-search",
+  "active_change": "2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-split-position-search/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-split-position-search/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-centroid-fan-hole-fallback/PLAN.md"
 }

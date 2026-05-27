@@ -70,7 +70,16 @@ struct SmallLoopFillResult {
   int64_t face_budget = 0;
   int64_t loops_considered = 0;
   int64_t loops_filled = 0;
+  int64_t loops_filled_by_ear_clipping = 0;
+  int64_t loops_centroid_fan_attempted = 0;
+  int64_t loops_filled_by_centroid_fan = 0;
   int64_t loops_rejected = 0;
+  int64_t loops_rejected_ordering = 0;
+  int64_t loops_rejected_triangulation = 0;
+  int64_t loops_rejected_fallback_cap = 0;
+  int64_t loops_rejected_degenerate = 0;
+  int64_t loops_rejected_duplicate = 0;
+  int64_t loops_rejected_nonmanifold = 0;
   int64_t loops_budget_limited = 0;
   int64_t faces_added = 0;
 };
@@ -88,6 +97,15 @@ struct BackendSelection {
 };
 
 constexpr const char *kSmallBoundaryLoopFillAlgorithm = "projected-ear-clipping";
+constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "centroid-fan";
+constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 6;
+
+enum class PatchRejectReason {
+  none,
+  degenerate,
+  duplicate,
+  nonmanifold,
+};
 
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
   std::array<float, 3> min_bounds{
@@ -445,6 +463,76 @@ std::vector<std::array<int64_t, 3>> triangulate_loop_patch(
   return patch_faces;
 }
 
+std::vector<std::array<int64_t, 3>> centroid_fan_loop_patch(
+    const mesh_common::MeshData &mesh,
+    const std::vector<int64_t> &loop,
+    int64_t center_vertex_id) {
+  if (loop.size() < 3) {
+    return {};
+  }
+
+  double sign = 1.0;
+  const std::vector<Point2> projected = project_loop_to_stable_plane(mesh, loop);
+  if (projected.size() == loop.size()) {
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    for (const Point2 &point : projected) {
+      min_x = std::min(min_x, point.x);
+      min_y = std::min(min_y, point.y);
+      max_x = std::max(max_x, point.x);
+      max_y = std::max(max_y, point.y);
+    }
+    const double span = std::max(max_x - min_x, max_y - min_y);
+    const double eps = std::max(1e-12, span * span * 1e-12);
+    const double area = polygon_signed_area(projected);
+    if (std::isfinite(area) && std::abs(area) > eps) {
+      sign = area >= 0.0 ? 1.0 : -1.0;
+    }
+  }
+
+  std::vector<std::array<int64_t, 3>> patch_faces;
+  patch_faces.reserve(loop.size());
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const int64_t current = loop[index];
+    const int64_t next = loop[(index + 1) % loop.size()];
+    if (sign >= 0.0) {
+      patch_faces.push_back({current, next, center_vertex_id});
+    } else {
+      patch_faces.push_back({current, center_vertex_id, next});
+    }
+  }
+  return patch_faces;
+}
+
+std::array<float, 3> loop_centroid(const mesh_common::MeshData &mesh, const std::vector<int64_t> &loop) {
+  std::array<double, 3> centroid{0.0, 0.0, 0.0};
+  for (const int64_t vertex_id : loop) {
+    const auto &vertex = mesh.vertices[static_cast<size_t>(vertex_id)];
+    centroid[0] += vertex[0];
+    centroid[1] += vertex[1];
+    centroid[2] += vertex[2];
+  }
+  const double denom = static_cast<double>(std::max<size_t>(1, loop.size()));
+  return {
+      static_cast<float>(centroid[0] / denom),
+      static_cast<float>(centroid[1] / denom),
+      static_cast<float>(centroid[2] / denom),
+  };
+}
+
+void record_patch_rejection(SmallLoopFillResult &result, PatchRejectReason reason) {
+  result.loops_rejected += 1;
+  if (reason == PatchRejectReason::degenerate) {
+    result.loops_rejected_degenerate += 1;
+  } else if (reason == PatchRejectReason::duplicate) {
+    result.loops_rejected_duplicate += 1;
+  } else if (reason == PatchRejectReason::nonmanifold) {
+    result.loops_rejected_nonmanifold += 1;
+  }
+}
+
 SmallLoopFillResult fill_small_boundary_loops(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
@@ -523,27 +611,52 @@ SmallLoopFillResult fill_small_boundary_loops(
     const std::vector<int64_t> loop = ordered_closed_loop(adjacency, component_vertices);
     if (loop.size() < 3 || static_cast<int64_t>(loop.size()) != component_edges) {
       result.loops_rejected += 1;
+      result.loops_rejected_ordering += 1;
       continue;
     }
 
     std::vector<std::array<int64_t, 3>> patch_faces = triangulate_loop_patch(result.mesh, loop);
+    bool centroid_fan_patch = false;
     if (patch_faces.empty()) {
-      result.loops_rejected += 1;
-      continue;
+      if (component_edges > kSmallBoundaryLoopFillFallbackMaxEdges) {
+        result.loops_rejected += 1;
+        result.loops_rejected_fallback_cap += 1;
+        continue;
+      }
+      result.loops_centroid_fan_attempted += 1;
+      const int64_t center_vertex_id = static_cast<int64_t>(result.mesh.vertices.size());
+      const std::array<float, 3> center = loop_centroid(result.mesh, loop);
+      if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
+        result.loops_rejected += 1;
+        result.loops_rejected_triangulation += 1;
+        continue;
+      }
+      result.mesh.vertices.push_back(center);
+      patch_faces = centroid_fan_loop_patch(result.mesh, loop, center_vertex_id);
+      centroid_fan_patch = true;
+      if (patch_faces.empty()) {
+        result.mesh.vertices.pop_back();
+        result.loops_rejected += 1;
+        result.loops_rejected_triangulation += 1;
+        continue;
+      }
     }
     bool valid_patch = true;
+    PatchRejectReason reject_reason = PatchRejectReason::none;
     std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> local_edge_adds;
     local_edge_adds.reserve(patch_faces.size() * 3);
     std::set<std::array<int64_t, 3>> local_seen_faces;
     for (const std::array<int64_t, 3> &face : patch_faces) {
       if (mesh_common::face_degenerate(result.mesh, face)) {
         valid_patch = false;
+        reject_reason = PatchRejectReason::degenerate;
         break;
       }
       std::array<int64_t, 3> canonical = face;
       std::sort(canonical.begin(), canonical.end());
       if (seen_faces.contains(canonical) || !local_seen_faces.insert(canonical).second) {
         valid_patch = false;
+        reject_reason = PatchRejectReason::duplicate;
         break;
       }
       const std::array<mesh_common::EdgeKey, 3> edges{
@@ -552,9 +665,14 @@ SmallLoopFillResult fill_small_boundary_loops(
           mesh_common::edge_key(face[2], face[0]),
       };
       for (const auto &edge : edges) {
-        const int64_t current_count = edge_counts[edge] + local_edge_adds[edge];
+        const auto found_edge = edge_counts.find(edge);
+        const int64_t mesh_edge_count = found_edge == edge_counts.end() ? 0 : found_edge->second;
+        const auto found_local = local_edge_adds.find(edge);
+        const int64_t local_edge_count = found_local == local_edge_adds.end() ? 0 : found_local->second;
+        const int64_t current_count = mesh_edge_count + local_edge_count;
         if (current_count >= 2) {
           valid_patch = false;
+          reject_reason = PatchRejectReason::nonmanifold;
           break;
         }
         local_edge_adds[edge] += 1;
@@ -565,10 +683,16 @@ SmallLoopFillResult fill_small_boundary_loops(
     }
 
     if (!valid_patch) {
-      result.loops_rejected += 1;
+      if (centroid_fan_patch) {
+        result.mesh.vertices.pop_back();
+      }
+      record_patch_rejection(result, reject_reason);
       continue;
     }
     if (static_cast<int64_t>(patch_faces.size()) > result.face_budget - result.faces_added) {
+      if (centroid_fan_patch) {
+        result.mesh.vertices.pop_back();
+      }
       result.loops_budget_limited += 1;
       continue;
     }
@@ -583,6 +707,11 @@ SmallLoopFillResult fill_small_boundary_loops(
     }
     result.faces_added += static_cast<int64_t>(patch_faces.size());
     result.loops_filled += 1;
+    if (centroid_fan_patch) {
+      result.loops_filled_by_centroid_fan += 1;
+    } else {
+      result.loops_filled_by_ear_clipping += 1;
+    }
   }
   return result;
 }
@@ -651,11 +780,23 @@ void add_small_loop_fill_stats(
     const SmallLoopFillResult &fill) {
   stats["small_boundary_loop_fill_enabled"] = enabled;
   stats["small_boundary_loop_fill_algorithm"] = kSmallBoundaryLoopFillAlgorithm;
+  stats["small_boundary_loop_fill_fallback_algorithm"] = kSmallBoundaryLoopFillFallbackAlgorithm;
+  stats["small_boundary_loop_fill_fallback_enabled"] = enabled;
+  stats["small_boundary_loop_fill_fallback_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
   stats["small_boundary_loop_fill_face_budget"] = fill.face_budget;
   stats["small_boundary_loops_considered"] = fill.loops_considered;
   stats["small_boundary_loops_filled"] = fill.loops_filled;
+  stats["small_boundary_loops_filled_by_ear_clipping"] = fill.loops_filled_by_ear_clipping;
+  stats["small_boundary_loops_centroid_fan_attempted"] = fill.loops_centroid_fan_attempted;
+  stats["small_boundary_loops_filled_by_centroid_fan"] = fill.loops_filled_by_centroid_fan;
   stats["small_boundary_loops_rejected"] = fill.loops_rejected;
+  stats["small_boundary_loops_rejected_ordering"] = fill.loops_rejected_ordering;
+  stats["small_boundary_loops_rejected_triangulation"] = fill.loops_rejected_triangulation;
+  stats["small_boundary_loops_rejected_fallback_cap"] = fill.loops_rejected_fallback_cap;
+  stats["small_boundary_loops_rejected_degenerate"] = fill.loops_rejected_degenerate;
+  stats["small_boundary_loops_rejected_duplicate"] = fill.loops_rejected_duplicate;
+  stats["small_boundary_loops_rejected_nonmanifold"] = fill.loops_rejected_nonmanifold;
   stats["small_boundary_loops_budget_limited"] = fill.loops_budget_limited;
   stats["small_boundary_loop_faces_added"] = fill.faces_added;
 }

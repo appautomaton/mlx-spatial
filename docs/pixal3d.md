@@ -319,13 +319,16 @@ For the topology-aware production simplifier, `mlx-spatialkit` also performs a
 bounded small-loop fill after simplification. The repair uses projected
 ear-clipping for closed boundary loops up to 8 edges by default, respects the
 remaining target-face budget, and rejects patches that would introduce
-degenerate, duplicate, or nonmanifold faces. Diagnostics report the repair
-algorithm, budget, loop counts, rejected loops, and faces added. This addresses
+degenerate, duplicate, or nonmanifold faces. If projected ear-clipping fails,
+a conservative centroid-fan fallback may fill loops up to 6 edges under the
+same guards. Diagnostics report the primary algorithm, fallback algorithm,
+method counts, rejection reason counts, budget, and faces added. This addresses
 small geometry holes separately from xatlas chart parity or open-boundary
 remeshing.
 The public export parameter `small_boundary_loop_fill_max_edges` defaults to
-`8` for this measured policy; use `0` to disable the fill when comparing
-geometry repair against the unpatched simplifier output.
+`8` for this measured policy; the fallback stays internally capped at 6 edges,
+and `0` disables the fill when comparing geometry repair against the unpatched
+simplifier output.
 For texture seam robustness, the native bake fills a bounded no-face gutter
 after UV-surface fill. The gutter copies RGB and metallic/roughness values into
 padding texels that can be touched by linear texture filtering, but keeps alpha
