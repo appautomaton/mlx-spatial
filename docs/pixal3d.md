@@ -150,6 +150,8 @@ a Pixal3D-labeled textured GLB.
 - high-memory mode: `1536_cascade`
 - seed: `42`
 - max tokens: `49152`, matching the upstream cascade guard
+- shape upsample token limit: `1000000`; this is the MLX compute guard before
+  HR coordinate quantization/reduction
 - texture size: `1024`
 - GLB face target: `50000`
 - xatlas face guard: `auto`

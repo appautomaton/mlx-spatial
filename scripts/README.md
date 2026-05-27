@@ -210,6 +210,7 @@ Script defaults:
 - pipeline type: `1024_cascade`, the recommended Apple Silicon default
 - seed: `42`
 - max tokens: `49152`
+- shape upsample token limit: `1000000`
 - texture size: `1024`
 - GLB face target: `50000`
 - xatlas face guard: `auto`

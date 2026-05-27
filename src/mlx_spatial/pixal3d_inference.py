@@ -78,6 +78,7 @@ PIXAL3D_PIPELINE_TYPES = ("1024_cascade", "1536_cascade")
 PIXAL3D_DEFAULT_DINO_ROOT = DINOv3_VITL16_ASSETS.root_hint
 PIXAL3D_DEFAULT_SEED = 42
 PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
+PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT = 1_000_000
 PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
 PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
@@ -147,6 +148,7 @@ class Pixal3DInferencePipeline:
         manual_fov: float | None = None,
         seed: int = PIXAL3D_DEFAULT_SEED,
         max_num_tokens: int = PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+        shape_upsample_token_limit: int = PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
         dino_root: str | Path | None = None,
         texture_size: int = PIXAL3D_DEFAULT_TEXTURE_SIZE,
         glb_target_faces: int = PIXAL3D_DEFAULT_GLB_TARGET_FACES,
@@ -189,6 +191,10 @@ class Pixal3DInferencePipeline:
                 "source": "existing MLX SAM3D MoGe pointmap/intrinsics runtime",
                 "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
                 "exact_upstream_v2_parity": False,
+            },
+            "shape_upsample_options": {
+                "token_limit": int(shape_upsample_token_limit),
+                "hr_selection_max_num_tokens": int(max_num_tokens),
             },
         }
         started = time.perf_counter()
@@ -266,6 +272,22 @@ class Pixal3DInferencePipeline:
                 "validate Pixal3D MoGe memory profile",
                 f"unsupported MoGe memory profile: {moge_memory_profile}",
                 {"memory_profile": moge_memory_profile, "supported": tuple(SAM3D_MOGE_MEMORY_PROFILES)},
+                metadata=metadata,
+            )
+
+        if shape_upsample_token_limit <= 0:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D shape upsample token limit",
+                f"shape_upsample_token_limit must be positive, got {shape_upsample_token_limit}",
+                {"shape_upsample_token_limit": shape_upsample_token_limit},
                 metadata=metadata,
             )
 
@@ -1059,7 +1081,7 @@ class Pixal3DInferencePipeline:
                     decoder_probe.coordinates,
                     shape_features,
                     upsample_times=4,
-                    decoder_token_limit=max_num_tokens,
+                    decoder_token_limit=shape_upsample_token_limit,
                 )
                 hr_selection = pixal3d_select_hr_coordinates(
                     shape_upsample.coordinates,
@@ -1084,7 +1106,8 @@ class Pixal3DInferencePipeline:
                         "config_path": shape_decoder_model.config_path,
                         "checkpoint_path": shape_decoder_model.checkpoint_path,
                         "upsample_times": 4,
-                        "decoder_token_limit": max_num_tokens,
+                        "shape_upsample_token_limit": shape_upsample_token_limit,
+                        "hr_selection_max_num_tokens": max_num_tokens,
                     },
                     metadata=metadata,
                     artifacts=(projection_artifact.path, sparse_structure_artifact.path, shape_slat_artifact.path),
@@ -1100,6 +1123,7 @@ class Pixal3DInferencePipeline:
                 "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
                 "token_count": hr_selection.token_count,
                 "max_num_tokens": hr_selection.max_num_tokens,
+                "shape_upsample_token_limit": int(shape_upsample_token_limit),
             }
             shape_hr_coordinates_artifact = write_pixal3d_shape_hr_coordinates_npz(
                 artifact_dir / "shape_slat_hr_coordinates.npz",

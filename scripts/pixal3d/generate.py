@@ -22,8 +22,9 @@ Recommended settings:
     DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, converted NAF root
     weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
     GLB target faces 50000, kdtree texture baking, MoGe root
-    weights/sam-3d-objects-mlx/moge for auto-camera, and manual FOV only when
-    intentionally overriding auto-camera.
+    weights/sam-3d-objects-mlx/moge for auto-camera, shape upsample token
+    guard 1000000, and manual FOV only when intentionally overriding
+    auto-camera.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
@@ -95,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
         help="Pixal3D sparse token guard; default: %(default)s",
+    )
+    parser.add_argument(
+        "--shape-upsample-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+        help="shape decoder upsample compute token guard before HR selection; default: %(default)s",
     )
     parser.add_argument(
         "--texture-size",
@@ -151,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         str(args.seed),
         "--max-num-tokens",
         str(args.max_num_tokens),
+        "--shape-upsample-token-limit",
+        str(args.shape_upsample_token_limit),
         "--texture-size",
         str(args.texture_size),
         "--glb-target-faces",

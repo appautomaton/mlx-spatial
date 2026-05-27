@@ -27,6 +27,7 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
+    PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
     PIXAL3D_PIPELINE_TYPES,
@@ -80,6 +81,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     generate_parser.add_argument("--seed", type=int, default=PIXAL3D_DEFAULT_SEED)
     generate_parser.add_argument("--max-num-tokens", type=int, default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS)
+    generate_parser.add_argument(
+        "--shape-upsample-token-limit",
+        type=int,
+        default=PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
+        help="compute token guard for Pixal3D shape decoder upsample before HR coordinate selection; default: %(default)s",
+    )
     generate_parser.add_argument(
         "--texture-size",
         type=int,
@@ -205,6 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             manual_fov=args.manual_fov,
             seed=args.seed,
             max_num_tokens=args.max_num_tokens,
+            shape_upsample_token_limit=args.shape_upsample_token_limit,
             dino_root=args.dino_root,
             texture_size=args.texture_size,
             glb_target_faces=args.glb_target_faces,

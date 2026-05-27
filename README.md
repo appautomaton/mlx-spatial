@@ -306,7 +306,9 @@ high-resolution feature maps, then can write `shape_slat_lr.npz`,
 `shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and `texture_slat.npz`
 as downstream stage assets permit. Compatible decoder assets then write
 `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, followed by shared
-mesh extraction and texture baking to write `model.glb`.
+mesh extraction and texture baking to write `model.glb`. `max_num_tokens`
+remains the HR coordinate selection guard; `--shape-upsample-token-limit`
+separately bounds the shape-decoder upsample compute stage.
 
 ## Repository Layout
 

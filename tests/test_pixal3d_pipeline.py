@@ -9,7 +9,7 @@ from PIL import Image
 import mlx_spatial.pixal3d_inference as pixal3d_inference
 from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
-from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
+from mlx_spatial.pixal3d_inference import PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT, Pixal3DInferencePipeline
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS, Pixal3DProjectionStageConfig
 from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
 from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
@@ -169,6 +169,24 @@ def test_pixal3d_pipeline_reports_missing_dinov3_assets_with_manual_fov(tmp_path
     assert result.trace.blocker.metadata["dino_root"] == str(tmp_path / "missing-dinov3")
     assert "hf download facebook/dinov3-vitl16-pretrain-lvd1689m" in result.trace.blocker.metadata["download_command"]
     assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config", "camera-setup")
+
+
+def test_pixal3d_pipeline_validates_shape_upsample_token_limit(tmp_path):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        shape_upsample_token_limit=0,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "input-validation"
+    assert result.trace.blocker.operation == "validate Pixal3D shape upsample token limit"
+    assert result.trace.blocker.metadata["shape_upsample_token_limit"] == 0
 
 
 def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_root(tmp_path):
@@ -450,6 +468,7 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
     assert metadata["blocker_next_target"] == "shape-hr-projection-conditioning"
     assert result.trace.metadata["shape_hr_cascade"]["completed_upsamples"] == 4
     assert result.trace.metadata["shape_hr_cascade"]["token_count"] == 4096
+    assert result.trace.metadata["shape_hr_cascade"]["shape_upsample_token_limit"] == PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT
 
 
 def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_shape_flow(tmp_path):
