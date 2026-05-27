@@ -148,6 +148,13 @@ scale `fallback_radius` within `12..24` and `dilation_max_passes` within
 lower defaults. The 4096 reference-target gate now passes production coverage
 on the real Pixal3D decoded fixture while recording the resolved budgets,
 actual dilation passes, and stage RSS peaks.
+After UV-surface fill, the native bake also fills a bounded no-face texture
+gutter around visible texels. This copies RGB plus metallic/roughness into
+padding texels for linear-filter seam robustness, while preserving alpha,
+coverage status, UV-surface counts, and visible-coverage ratios. Diagnostics
+report `gutter_fill_enabled`, pass count, max passes, and filled texels. Visual
+comparison keeps this raw RGB footprint separate from visible RGB coverage, so
+transparent gutter color does not inflate pass/fail coverage.
 
 `quality_preset="reference-target"` resolves the face target from the checked-in
 Pixal3D reference trace when available and records threshold checks for topology,

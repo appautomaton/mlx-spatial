@@ -403,6 +403,10 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert texture_stats["surface_fill_enabled"] is True
     assert texture_stats["surface_filled_texel_count"] > 0
     assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["gutter_fill_enabled"] is True
+    assert texture_stats["gutter_fill_max_passes"] == 4
+    assert 0 < texture_stats["gutter_fill_pass_count"] <= texture_stats["gutter_fill_max_passes"]
+    assert texture_stats["gutter_filled_texel_count"] > 0
     assert texture_stats["raw_coverage_ratio"] < texture_stats["final_visible_coverage_ratio"]
     assert texture_stats["uv_surface_exact_coverage_ratio"] < texture_stats["uv_surface_final_visible_coverage_ratio"]
     assert texture_stats["final_visible_coverage_ratio"] >= 0.50

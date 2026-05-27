@@ -1,73 +1,24 @@
 # Roadmap
 
-## Phase 31: Xatlas Deficit Diagnostics Gate
+## Phase 37: Texture Gutter Fill
 
 - status: done
-- change: `2026-05-27-mlx-spatialkit-xatlas-deficit-diagnostics-gate`
-- objective: Make the remaining native-chart versus xatlas utilization deficit explicit in diagnostics and tests.
-- why now: Native-chart readiness now passes, but the utilization ratio is still only about `0.685` of the xatlas reference and can be hidden behind scalar readiness.
-- likely outputs: Deficit fields, utilization-equivalence check, focused and heavy assertions, docs, package/root/build verification.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-xatlas-deficit-diagnostics-gate/SPEC.md`
-- exit signal: Native-chart diagnostics quantify the remaining deficit while readiness and non-parity contracts stay explicit.
-
-## Phase 32: Native Chart Hole Reduction
-
-- status: done
-- change: `2026-05-27-mlx-spatialkit-native-chart-hole-reduction`
-- objective: Identify and reduce native-chart UV holes that keep spatialkit below the Pixal3D xatlas reference.
-- why now: Deficit diagnostics show scalar native-chart readiness passes while xatlas utilization remains about `0.685`; the next work must reduce that measured gap instead of adding micro-roadmap tweaks.
-- likely outputs: Hole baseline, bounded native chart-generation improvement, focused tests, real-fixture quality gate, docs, package/root/build verification.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-hole-reduction/SPEC.md`
-- exit signal: Real native-chart reference-target export improves UV-surface occupancy or xatlas-utilization ratio while parity remains honestly false.
-
-## Phase 33: Geometry Hole Diagnostics
-
-- status: done
-- change: `2026-05-27-mlx-spatialkit-geometry-hole-diagnostics`
-- objective: Make native geometry hole risk measurable with boundary-loop diagnostics before adding repair heuristics.
-- why now: The latest reference-target export has acceptable shape/color and close face-count parity, but final export metrics still show `23822` boundary edges; we need loop-level topology evidence before blaming triangle count or UVs.
-- likely outputs: Native boundary-loop metrics, focused tests, heavy Pixal3D export assertion, docs, roadmap current-state refresh.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-geometry-hole-diagnostics/SPEC.md`
-- exit signal: Export diagnostics show remaining visible-hole risk as `2594` closed boundary loops and `808` open boundary-chain components, while xatlas and repair parity remain explicitly open.
-
-## Phase 34: Small Boundary Loop Fill
-
-- status: done
-- change: `2026-05-27-mlx-spatialkit-small-boundary-loop-fill`
-- objective: Fill small closed boundary loops in the native topology-aware simplifier when target-face budget allows.
-- why now: Geometry diagnostics showed `2594` closed boundary loops and remaining face budget in the reference-target export; this directly addresses the small visible-hole class.
-- likely outputs: Native small-loop repair, repair stats, focused tests, heavy topology gate, docs.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-small-boundary-loop-fill/SPEC.md`
-- exit signal: Reference-target export closed boundary loops drop from `2594` to `1479` without new nonmanifold edges or false xatlas parity.
-
-## Phase 35: Small Loop Fill Balance
-
-- status: done
-- change: `2026-05-27-mlx-spatialkit-small-loop-fill-balance`
-- objective: Tune small-loop repair to triangular holes so UV utilization improves while geometry repair remains measurable.
-- why now: Cap-4 repair reduced topology holes but lowered native-chart UV utilization; a cap-3 probe keeps topology improvement with better texture coverage.
-- likely outputs: Cap-3 repair policy, focused triangular/quad-hole tests, heavy balance gate, docs.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-small-loop-fill-balance/SPEC.md`
-- exit signal: Reference-target export keeps `boundary_loop_count=1872 < 2594` and improves xatlas-utilization ratio to `0.6828063257125282`, above the cap-4 repair baseline.
-
-## Phase 36: Repair Policy Contract
-
-- status: done
-- change: `2026-05-27-mlx-spatialkit-repair-policy-contract`
-- objective: Expose the verified small-loop repair cap as a native/Python/export setting instead of a hidden constant.
-- why now: The cap-3 policy is a measured geometry/UV tradeoff and must be reproducible from diagnostics and caller settings.
-- likely outputs: Native/Python parameter, export setting, disable path, focused tests, docs.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-repair-policy-contract/SPEC.md`
-- exit signal: Default cap `3` remains verified, value `0` disables repair, and diagnostics make the policy explicit.
+- change: `2026-05-27-mlx-spatialkit-texture-gutter-fill`
+- objective: Add native post-bake texture gutter fill so linear-filtered GLB viewers do not bleed black no-face texels around UV islands.
+- why now: Geometry holes and repair policy are now measured; the next visual-quality risk is texture seam robustness in the native export path.
+- likely outputs: Native gutter fill, diagnostics, focused texture test, real Pixal3D heavy gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-texture-gutter-fill/SPEC.md`
+- exit signal: Gutter fill improves no-face RGB/MR seam texels while preserving UV-surface and visible-alpha coverage semantics, and the real reference-target native-chart export stays green.
 
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-repair-policy-contract`.
-- Phases 1-30 are consolidated into the current verified native export line: Pixal3D decoded fixtures can export GLB through the spatialkit native path with geometry readiness, texture coverage, viewer compatibility, memory telemetry, browser visual proof, and native-chart UV/Metal bake gates.
-- Remaining measured boundary: xatlas chart parity is still false. Latest reference-target native-chart xatlas-utilization ratio before geometry repair was `0.6941716645020964`, with UV-surface occupancy `0.5768346786499023`.
-- Current geometry repair evidence: bounded triangular loop fill reduces final closed boundary loops from `2594` to `1872` with `nonmanifold_edges=0`; the cap is exposed as `small_boundary_loop_fill_max_edges=3`, and `0` disables it for comparison runs. UV utilization remains below xatlas parity and is tracked separately.
+- Last verified change: `2026-05-27-mlx-spatialkit-texture-gutter-fill`.
+- Prior geometry-hole investigation/reduction is consolidated into the current native export line: boundary-loop diagnostics are present, triangular small-loop repair is configurable as `small_boundary_loop_fill_max_edges=3`, and `0` disables it for comparison runs.
+- Current reference-target native-chart baseline: final closed boundary loops `1872`, nonmanifold edges `0`, UV-surface occupancy `0.5673904418945312`, xatlas-utilization ratio `0.6828063257125282`, and xatlas chart parity remains false.
+- Texture bake now fills a bounded no-face RGB/MR gutter around UV islands for linear-filter seam robustness while preserving alpha, coverage status, UV-surface counts, and visible-coverage ratios. Visual comparison separates raw RGB footprint from visible RGB coverage. Latest real-fixture diagnostics showed `gutter_filled_texel_count=453197`.
 - Explicit 1M/4096 native-chart exports are upstream-setting ready, with xatlas parity still the open quality-equivalence gap.
 
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
+- Zero-padding default switch is deferred until seam behavior is safer and separately justified.

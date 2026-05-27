@@ -321,6 +321,12 @@ parity or open-boundary remeshing.
 The public export parameter `small_boundary_loop_fill_max_edges` defaults to
 `3` for this measured policy; use `0` to disable the fill when comparing
 geometry repair against the unpatched simplifier output.
+For texture seam robustness, the native bake fills a bounded no-face gutter
+after UV-surface fill. The gutter copies RGB and metallic/roughness values into
+padding texels that can be touched by linear texture filtering, but keeps alpha
+and coverage status unchanged so UV-surface and visible-coverage metrics do not
+inflate. Diagnostics report the gutter pass count and filled texel count, and
+visual comparison reports raw RGB footprint separately from visible RGB coverage.
 When the same opt-in native-chart backend is run with explicit upstream-style
 `target_faces=1000000`, `texture_size=4096`, the real fixture passes both
 `quality.upstream_export_settings` and `quality.native_chart_uv_candidate`

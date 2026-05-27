@@ -28,8 +28,22 @@ def test_png_coverage_supports_standard_row_filters() -> None:
     assert coverage.pixel_count == 10
     assert coverage.alpha_nonzero_count == 6
     assert coverage.rgb_nonzero_count == 5
+    assert coverage.visible_rgb_nonzero_count == 5
     assert coverage.alpha_coverage_ratio == pytest.approx(0.6)
     assert coverage.rgb_coverage_ratio == pytest.approx(0.5)
+    assert coverage.visible_rgb_coverage_ratio == pytest.approx(0.5)
+
+
+def test_png_coverage_separates_raw_and_visible_rgb() -> None:
+    png = _filtered_png(width=2, rows=[bytes([99, 0, 0, 0, 0, 10, 0, 255])], filters=[0])
+
+    coverage = png_coverage(png)
+
+    assert coverage.alpha_nonzero_count == 1
+    assert coverage.rgb_nonzero_count == 2
+    assert coverage.visible_rgb_nonzero_count == 1
+    assert coverage.rgb_coverage_ratio == pytest.approx(1.0)
+    assert coverage.visible_rgb_coverage_ratio == pytest.approx(0.5)
 
 
 def test_inspect_glb_reports_mesh_counts_and_embedded_texture_coverage(tmp_path: Path) -> None:
@@ -54,6 +68,7 @@ def test_inspect_glb_reports_mesh_counts_and_embedded_texture_coverage(tmp_path:
     assert base_image["coverage"]["height"] == 4
     assert base_image["coverage"]["alpha_coverage_ratio"] == pytest.approx(0.25)
     assert base_image["coverage"]["rgb_coverage_ratio"] == pytest.approx(0.25)
+    assert base_image["coverage"]["visible_rgb_coverage_ratio"] == pytest.approx(0.25)
 
 
 def test_compare_textured_glbs_writes_report_and_preview_artifacts(tmp_path: Path) -> None:
@@ -67,6 +82,7 @@ def test_compare_textured_glbs_writes_report_and_preview_artifacts(tmp_path: Pat
     assert report["summary"]["face_count_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_alpha_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_rgb_coverage_ratio"] == pytest.approx(1.0)
+    assert report["summary"]["base_color_raw_rgb_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["texture_resolution_match"] is True
     assert report["deferred_parity_boundaries"] == [
         "not_xatlas_chart_parity",

@@ -25,6 +25,7 @@ class PngCoverage:
     pixel_count: int
     alpha_nonzero_count: int
     rgb_nonzero_count: int
+    visible_rgb_nonzero_count: int
 
     @property
     def alpha_coverage_ratio(self) -> float:
@@ -34,6 +35,10 @@ class PngCoverage:
     def rgb_coverage_ratio(self) -> float:
         return self.rgb_nonzero_count / float(self.pixel_count)
 
+    @property
+    def visible_rgb_coverage_ratio(self) -> float:
+        return self.visible_rgb_nonzero_count / float(self.pixel_count)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "width": self.width,
@@ -42,8 +47,10 @@ class PngCoverage:
             "pixel_count": self.pixel_count,
             "alpha_nonzero_count": self.alpha_nonzero_count,
             "rgb_nonzero_count": self.rgb_nonzero_count,
+            "visible_rgb_nonzero_count": self.visible_rgb_nonzero_count,
             "alpha_coverage_ratio": self.alpha_coverage_ratio,
             "rgb_coverage_ratio": self.rgb_coverage_ratio,
+            "visible_rgb_coverage_ratio": self.visible_rgb_coverage_ratio,
         }
 
 
@@ -125,7 +132,8 @@ def compare_textured_glbs(
     face_ratio = _ratio(candidate["total_faces"], reference["total_faces"])
     vertex_ratio = _ratio(candidate["total_vertices"], reference["total_vertices"])
     alpha_ratio = _coverage_ratio(candidate_base, reference_base, "alpha_coverage_ratio")
-    rgb_ratio = _coverage_ratio(candidate_base, reference_base, "rgb_coverage_ratio")
+    rgb_ratio = _coverage_ratio(candidate_base, reference_base, "visible_rgb_coverage_ratio")
+    raw_rgb_ratio = _coverage_ratio(candidate_base, reference_base, "rgb_coverage_ratio")
     texture_resolution_match = (
         candidate_base.get("coverage", {}).get("width") == reference_base.get("coverage", {}).get("width")
         and candidate_base.get("coverage", {}).get("height") == reference_base.get("coverage", {}).get("height")
@@ -158,6 +166,7 @@ def compare_textured_glbs(
         "base_color_rgb_coverage_ratio": {
             "passed": rgb_ratio is not None and rgb_ratio >= 0.50,
             "actual": rgb_ratio,
+            "metric": "visible_rgb_coverage_ratio",
             "required_min": 0.50,
         },
     }
@@ -170,6 +179,7 @@ def compare_textured_glbs(
             "vertex_count_ratio": vertex_ratio,
             "base_color_alpha_coverage_ratio": alpha_ratio,
             "base_color_rgb_coverage_ratio": rgb_ratio,
+            "base_color_raw_rgb_coverage_ratio": raw_rgb_ratio,
             "texture_resolution_match": texture_resolution_match,
         },
         "checks": checks,
@@ -290,6 +300,7 @@ def png_coverage(png: bytes) -> PngCoverage:
     rows = _decode_png_rows(zlib.decompress(bytes(idat)), width, height, channels)
     alpha_nonzero = 0
     rgb_nonzero = 0
+    visible_rgb_nonzero = 0
     for row in rows:
         for pixel in range(0, len(row), channels):
             r = row[pixel]
@@ -300,6 +311,8 @@ def png_coverage(png: bytes) -> PngCoverage:
                 alpha_nonzero += 1
             if r or g or b:
                 rgb_nonzero += 1
+                if a:
+                    visible_rgb_nonzero += 1
     return PngCoverage(
         width=width,
         height=height,
@@ -307,6 +320,7 @@ def png_coverage(png: bytes) -> PngCoverage:
         pixel_count=width * height,
         alpha_nonzero_count=alpha_nonzero,
         rgb_nonzero_count=rgb_nonzero,
+        visible_rgb_nonzero_count=visible_rgb_nonzero,
     )
 
 
@@ -426,7 +440,8 @@ def _visual_report_html(report: dict[str, Any]) -> str:
   <h1>mlx-spatialkit Visual Parity: {status}</h1>
   <p>Face ratio: <code>{summary["face_count_ratio"]:.6f}</code></p>
   <p>Base-color alpha coverage ratio: <code>{summary["base_color_alpha_coverage_ratio"]:.6f}</code></p>
-  <p>Base-color RGB coverage ratio: <code>{summary["base_color_rgb_coverage_ratio"]:.6f}</code></p>
+  <p>Base-color visible RGB coverage ratio: <code>{summary["base_color_rgb_coverage_ratio"]:.6f}</code></p>
+  <p>Base-color raw RGB footprint ratio: <code>{summary["base_color_raw_rgb_coverage_ratio"]:.6f}</code></p>
   <section class="textures">
     <figure>
       <img src="{escape(Path(artifacts["candidate_base_color_png"]).name)}" alt="candidate base color texture">

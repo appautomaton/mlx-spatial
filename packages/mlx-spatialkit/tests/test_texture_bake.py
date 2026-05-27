@@ -239,6 +239,10 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
     assert baked.stats["surface_unfilled_texel_count"] == (
         baked.stats["missing_texel_count"] + baked.stats["out_of_grid_texel_count"]
     )
+    assert baked.stats["gutter_fill_enabled"] is True
+    assert baked.stats["gutter_fill_max_passes"] == 4
+    assert 0 < baked.stats["gutter_fill_pass_count"] <= baked.stats["gutter_fill_max_passes"]
+    assert baked.stats["gutter_filled_texel_count"] > 0
     fallback_texels = baked.base_color_rgba[baked.coverage_status == 4]
     assert fallback_texels.shape[0] == baked.stats["fallback_filled_texel_count"]
     assert np.all(fallback_texels[:, 3] > 0)
@@ -251,6 +255,13 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         + baked.stats["surface_filled_texel_count"]
     )
     assert np.all(baked.base_color_rgba[baked.coverage_status == 0][:, 3] == 0)
+    gutter_texels = baked.base_color_rgba[
+        (baked.coverage_status == 0) & np.any(baked.base_color_rgba[:, :, :3] != 0, axis=2)
+    ]
+    assert gutter_texels.shape[0] == baked.stats["gutter_filled_texel_count"]
+    assert np.all(gutter_texels[:, 3] == 0)
+    assert baked.stats["no_face_texel_count"] + baked.stats["uv_surface_texel_count"] == 256
+    assert baked.stats["visible_base_color_texel_count"] < baked.stats["nonzero_rgb_texel_count"]
     assert baked.stats["uv_surface_exact_coverage_ratio"] < 1.0
     assert baked.stats["uv_surface_final_visible_coverage_ratio"] > baked.stats["uv_surface_exact_coverage_ratio"]
     assert baked.stats["fallback_radius"] == 12

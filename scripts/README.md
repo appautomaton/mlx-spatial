@@ -275,7 +275,10 @@ Script defaults:
   the bounded partition-search count.
   Non-atlas UV bakes also use bounded native UV-surface fill and
   report raw exact coverage, surface-filled texels, and final visible coverage
-  separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;
+  separately. They also fill a bounded no-face RGB/MR gutter for linear-filter
+  seam robustness without changing alpha, coverage status, UV-surface counts,
+  or visible-coverage ratios; visual comparison keeps raw RGB footprint separate
+  from visible RGB coverage. Chart diagnostics separate `artifact_ready` from `quality_ready`;
   the current real fixture clears scalar native-chart coverage while xatlas
   chart parity remains deferred. Native export diagnostics also include
   boundary-loop topology under

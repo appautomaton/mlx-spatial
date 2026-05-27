@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-repair-policy-contract",
+  "active_change": "2026-05-27-mlx-spatialkit-texture-gutter-fill",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-repair-policy-contract/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-repair-policy-contract/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-texture-gutter-fill/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-texture-gutter-fill/PLAN.md"
 }

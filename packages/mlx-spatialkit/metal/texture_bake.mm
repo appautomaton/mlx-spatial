@@ -539,6 +539,83 @@ int64_t fill_remaining_surface_texels(
   return filled;
 }
 
+int64_t fill_no_face_gutter_texels(
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness,
+    const std::vector<uint8_t> &coverage,
+    int64_t texture_size,
+    int64_t max_passes,
+    int64_t *passes_run) {
+  const size_t side = checked_size(static_cast<uint64_t>(texture_size), "texture gutter-fill side");
+  int64_t total_filled = 0;
+  *passes_run = 0;
+  for (int64_t pass = 0; pass < max_passes; ++pass) {
+    std::vector<uint8_t> next_base = base_color;
+    std::vector<uint8_t> next_mr = metallic_roughness;
+    int64_t pass_filled = 0;
+    for (size_t y = 0; y < side; ++y) {
+      for (size_t x = 0; x < side; ++x) {
+        const size_t texel = y * side + x;
+        if (coverage[texel] != 0) {
+          continue;
+        }
+        const size_t dst_base = texel * 4;
+        if (base_color[dst_base + 0] != 0 || base_color[dst_base + 1] != 0 || base_color[dst_base + 2] != 0) {
+          continue;
+        }
+        bool found = false;
+        size_t source = 0;
+        for (int dy = -1; dy <= 1 && !found; ++dy) {
+          const int64_t sy = static_cast<int64_t>(y) + dy;
+          if (sy < 0 || sy >= texture_size) {
+            continue;
+          }
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int64_t sx = static_cast<int64_t>(x) + dx;
+            if (sx < 0 || sx >= texture_size) {
+              continue;
+            }
+            const size_t neighbor = static_cast<size_t>(sy) * side + static_cast<size_t>(sx);
+            const size_t src_base = neighbor * 4;
+            if (base_color[src_base + 0] == 0 && base_color[src_base + 1] == 0 &&
+                base_color[src_base + 2] == 0 && base_color[src_base + 3] == 0) {
+              continue;
+            }
+            source = neighbor;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          continue;
+        }
+        const size_t src_base = source * 4;
+        next_base[dst_base + 0] = base_color[src_base + 0];
+        next_base[dst_base + 1] = base_color[src_base + 1];
+        next_base[dst_base + 2] = base_color[src_base + 2];
+        next_base[dst_base + 3] = base_color[dst_base + 3];
+        const size_t dst_mr = texel * 3;
+        const size_t src_mr = source * 3;
+        next_mr[dst_mr + 0] = metallic_roughness[src_mr + 0];
+        next_mr[dst_mr + 1] = metallic_roughness[src_mr + 1];
+        next_mr[dst_mr + 2] = metallic_roughness[src_mr + 2];
+        pass_filled += 1;
+      }
+    }
+    if (pass_filled == 0) {
+      break;
+    }
+    base_color.swap(next_base);
+    metallic_roughness.swap(next_mr);
+    total_filled += pass_filled;
+    *passes_run = pass + 1;
+  }
+  return total_filled;
+}
+
 int64_t resolve_dilation_max_passes(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
   if (atlas_cols <= 0 || atlas_rows <= 0) {
     return 8;
@@ -808,6 +885,15 @@ nb::dict bake_pbr_texture_metal(
         coverage,
         texture_size,
         &surface_fill_seed_texels);
+    constexpr int64_t gutter_fill_max_passes = 4;
+    int64_t gutter_fill_passes = 0;
+    const int64_t gutter_filled = fill_no_face_gutter_texels(
+        base_color,
+        metallic_roughness,
+        coverage,
+        texture_size,
+        gutter_fill_max_passes,
+        &gutter_fill_passes);
 
     int64_t no_face = 0;
     int64_t sampled = 0;
@@ -864,6 +950,10 @@ nb::dict bake_pbr_texture_metal(
     stats["surface_unfilled_texel_count"] = missing + out_of_grid;
     stats["dilation_filled_texel_count"] = dilation_filled;
     stats["dilation_pass_count"] = dilation_passes;
+    stats["gutter_fill_enabled"] = true;
+    stats["gutter_fill_max_passes"] = gutter_fill_max_passes;
+    stats["gutter_fill_pass_count"] = gutter_fill_passes;
+    stats["gutter_filled_texel_count"] = gutter_filled;
     stats["exact_missing_texel_count"] = exact_missing;
     stats["missing_texel_count"] = missing;
     stats["out_of_grid_texel_count"] = out_of_grid;
