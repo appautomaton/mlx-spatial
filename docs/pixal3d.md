@@ -280,7 +280,7 @@ candidate export. That path records `native_chart_uv_candidate` diagnostics,
 bakes through `metal-uv-binned-nearest`, and keeps `xatlas_chart_parity=false`.
 The default remains `uv_backend="face-atlas"` for stability. If `tile_padding`
 is not supplied, face-atlas exports keep `0.08`; native-chart exports resolve
-to tighter `0.02` padding and record `settings.tile_padding_source` so the
+to tighter `0.01` padding and record `settings.tile_padding_source` so the
 contract is visible.
 When the checked-in reference trace has xatlas unwrap metrics, spatialkit also
 records `quality.xatlas_chart_parity`: reference xatlas chart count/utilization,

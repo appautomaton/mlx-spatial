@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-native-chart-split-position-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-native-chart-tight-padding-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-split-position-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-split-position-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-tight-padding-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-tight-padding-gate/PLAN.md"
 }

@@ -280,6 +280,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-split-position-gate/SPEC.md`
 - exit signal: Native-chart reference-target export improves beyond the Phase 27 chart-fill or xatlas-utilization baseline while parity stays explicitly false.
 
+## Phase 29: Native Chart Tight Padding Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-tight-padding-gate`
+- objective: Improve native-chart UV occupancy by tightening the backend default padding to `0.01`.
+- why now: A `/tmp` padding probe improved the xatlas-utilization ratio from Phase 28's `0.6494` to `0.6736` without changing chart topology.
+- likely outputs: Native-chart padding default, resolver and real-fixture assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-tight-padding-gate/SPEC.md`
+- exit signal: Native-chart reference-target export improves UV-surface occupancy or xatlas-utilization ratio beyond the Phase 28 baseline while parity stays explicitly false.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
