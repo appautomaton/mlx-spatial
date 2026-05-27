@@ -44,6 +44,23 @@ struct BufferView {
   int target;
 };
 
+struct EdgeKey {
+  int64_t a;
+  int64_t b;
+
+  bool operator==(const EdgeKey &other) const {
+    return a == other.a && b == other.b;
+  }
+};
+
+struct EdgeKeyHash {
+  size_t operator()(const EdgeKey &edge) const {
+    const auto left = static_cast<uint64_t>(edge.a);
+    const auto right = static_cast<uint64_t>(edge.b);
+    return static_cast<size_t>((left * 11400714819323198485ull) ^ (right + 0x9e3779b97f4a7c15ull + (left << 6) + (left >> 2)));
+  }
+};
+
 void append_u16_le(std::vector<uint8_t> &out, uint16_t value) {
   out.push_back(static_cast<uint8_t>(value & 0xff));
   out.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
@@ -357,6 +374,35 @@ std::array<float, 3> uv_max_padded(const std::vector<std::array<float, 2>> &uvs)
   return result;
 }
 
+std::array<float, 3> normalized_face_normal(const mesh_common::MeshData &mesh, const std::array<int64_t, 3> &face) {
+  const auto &a = mesh.vertices[static_cast<size_t>(face[0])];
+  const auto &b = mesh.vertices[static_cast<size_t>(face[1])];
+  const auto &c = mesh.vertices[static_cast<size_t>(face[2])];
+  const std::array<float, 3> ab{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+  const std::array<float, 3> ac{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+  std::array<float, 3> normal{
+      ab[1] * ac[2] - ab[2] * ac[1],
+      ab[2] * ac[0] - ab[0] * ac[2],
+      ab[0] * ac[1] - ab[1] * ac[0],
+  };
+  const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+  if (std::isfinite(length) && length > 1e-12f) {
+    normal[0] /= length;
+    normal[1] /= length;
+    normal[2] /= length;
+    return normal;
+  }
+  return {0.0f, 0.0f, 1.0f};
+}
+
+float dot3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+EdgeKey edge_key(int64_t left, int64_t right) {
+  return left < right ? EdgeKey{left, right} : EdgeKey{right, left};
+}
+
 std::vector<std::array<float, 3>> compute_vertex_normals(const mesh_common::MeshData &mesh) {
   std::vector<std::array<float, 3>> normals(mesh.vertices.size(), std::array<float, 3>{0.0f, 0.0f, 0.0f});
   for (const auto &face : mesh.faces) {
@@ -525,6 +571,190 @@ nb::dict make_face_atlas_uvs(nb::object vertices, nb::object faces, double tile_
   stats["atlas_rows"] = rows;
   stats["tile_padding"] = tile_padding;
   stats["estimated_tile_utilization"] = face_count > 1 ? std::pow(1.0 - 2.0 * tile_padding, 2.0) : 0.5 * std::pow(1.0 - 2.0 * tile_padding, 2.0);
+  result["stats"] = stats;
+  return result;
+}
+
+nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double chart_angle_degrees, double tile_padding) {
+  if (chart_angle_degrees < 0.0 || chart_angle_degrees > 180.0) {
+    throw nb::value_error("chart_angle_degrees must be in [0, 180]");
+  }
+  if (tile_padding < 0.0 || tile_padding >= 0.45) {
+    throw nb::value_error("tile_padding must be in [0, 0.45)");
+  }
+  mesh_common::MeshData mesh = mesh_common::load_mesh(vertices, faces);
+  if (mesh.faces.empty()) {
+    throw nb::value_error("native chart UV generation requires at least one face");
+  }
+
+  const int64_t face_count = static_cast<int64_t>(mesh.faces.size());
+  std::vector<std::array<float, 3>> face_normals;
+  face_normals.reserve(mesh.faces.size());
+  for (const auto &face : mesh.faces) {
+    face_normals.push_back(normalized_face_normal(mesh, face));
+  }
+
+  std::unordered_map<EdgeKey, std::vector<int64_t>, EdgeKeyHash> edge_faces;
+  edge_faces.reserve(mesh.faces.size() * 3);
+  for (int64_t face_index = 0; face_index < face_count; ++face_index) {
+    const auto &face = mesh.faces[static_cast<size_t>(face_index)];
+    edge_faces[edge_key(face[0], face[1])].push_back(face_index);
+    edge_faces[edge_key(face[1], face[2])].push_back(face_index);
+    edge_faces[edge_key(face[2], face[0])].push_back(face_index);
+  }
+
+  std::vector<std::vector<int64_t>> neighbors(mesh.faces.size());
+  for (const auto &item : edge_faces) {
+    const auto &edge_face_list = item.second;
+    for (size_t left = 0; left < edge_face_list.size(); ++left) {
+      for (size_t right = left + 1; right < edge_face_list.size(); ++right) {
+        neighbors[static_cast<size_t>(edge_face_list[left])].push_back(edge_face_list[right]);
+        neighbors[static_cast<size_t>(edge_face_list[right])].push_back(edge_face_list[left]);
+      }
+    }
+  }
+
+  const double radians = chart_angle_degrees * 3.14159265358979323846 / 180.0;
+  const float cos_threshold = static_cast<float>(std::cos(radians));
+  std::vector<int32_t> chart_labels(mesh.faces.size(), -1);
+  std::vector<std::vector<int64_t>> charts;
+  std::vector<int64_t> stack;
+  for (int64_t seed = 0; seed < face_count; ++seed) {
+    if (chart_labels[static_cast<size_t>(seed)] >= 0) {
+      continue;
+    }
+    const int32_t chart_id = static_cast<int32_t>(charts.size());
+    charts.push_back({});
+    chart_labels[static_cast<size_t>(seed)] = chart_id;
+    stack = {seed};
+    while (!stack.empty()) {
+      const int64_t current = stack.back();
+      stack.pop_back();
+      charts.back().push_back(current);
+      for (int64_t neighbor : neighbors[static_cast<size_t>(current)]) {
+        if (chart_labels[static_cast<size_t>(neighbor)] >= 0) {
+          continue;
+        }
+        if (dot3(face_normals[static_cast<size_t>(current)], face_normals[static_cast<size_t>(neighbor)]) < cos_threshold) {
+          continue;
+        }
+        chart_labels[static_cast<size_t>(neighbor)] = chart_id;
+        stack.push_back(neighbor);
+      }
+    }
+  }
+
+  const int64_t chart_count = static_cast<int64_t>(charts.size());
+  const int64_t cols = static_cast<int64_t>(std::ceil(std::sqrt(static_cast<double>(chart_count))));
+  const int64_t rows = static_cast<int64_t>(std::ceil(static_cast<double>(chart_count) / static_cast<double>(cols)));
+  std::vector<float> chart_vertices;
+  std::vector<float> chart_uvs;
+  std::vector<int64_t> chart_faces;
+  chart_faces.reserve(mesh.faces.size() * 3);
+  int64_t max_chart_faces = 0;
+  std::vector<int64_t> local_index_lookup(mesh.vertices.size(), -1);
+  std::vector<int64_t> touched_vertices;
+
+  for (int64_t chart_index = 0; chart_index < chart_count; ++chart_index) {
+    const auto &chart = charts[static_cast<size_t>(chart_index)];
+    max_chart_faces = std::max<int64_t>(max_chart_faces, static_cast<int64_t>(chart.size()));
+    std::array<float, 3> average_normal{0.0f, 0.0f, 0.0f};
+    for (int64_t face_index : chart) {
+      const auto &normal = face_normals[static_cast<size_t>(face_index)];
+      average_normal[0] += normal[0];
+      average_normal[1] += normal[1];
+      average_normal[2] += normal[2];
+    }
+    const float nx = std::fabs(average_normal[0]);
+    const float ny = std::fabs(average_normal[1]);
+    const float nz = std::fabs(average_normal[2]);
+    int axis_u = 0;
+    int axis_v = 1;
+    if (nx >= ny && nx >= nz) {
+      axis_u = 1;
+      axis_v = 2;
+    } else if (ny >= nx && ny >= nz) {
+      axis_u = 0;
+      axis_v = 2;
+    }
+
+    std::vector<int64_t> source_vertices;
+    for (int64_t face_index : chart) {
+      const auto &face = mesh.faces[static_cast<size_t>(face_index)];
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t source_index = face[corner];
+        if (local_index_lookup[static_cast<size_t>(source_index)] < 0) {
+          local_index_lookup[static_cast<size_t>(source_index)] = static_cast<int64_t>(source_vertices.size());
+          source_vertices.push_back(source_index);
+          touched_vertices.push_back(source_index);
+        }
+      }
+    }
+
+    float min_u = std::numeric_limits<float>::infinity();
+    float min_v = std::numeric_limits<float>::infinity();
+    float max_u = -std::numeric_limits<float>::infinity();
+    float max_v = -std::numeric_limits<float>::infinity();
+    for (int64_t source_index : source_vertices) {
+      const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
+      min_u = std::min(min_u, vertex[static_cast<size_t>(axis_u)]);
+      min_v = std::min(min_v, vertex[static_cast<size_t>(axis_v)]);
+      max_u = std::max(max_u, vertex[static_cast<size_t>(axis_u)]);
+      max_v = std::max(max_v, vertex[static_cast<size_t>(axis_v)]);
+    }
+    const float width = std::max(max_u - min_u, 1e-12f);
+    const float height = std::max(max_v - min_v, 1e-12f);
+    const float scale = static_cast<float>(1.0 - 2.0 * tile_padding) / std::max(width, height);
+    const float chart_width = width * scale;
+    const float chart_height = height * scale;
+    const float offset_u = static_cast<float>(tile_padding) + (static_cast<float>(1.0 - 2.0 * tile_padding) - chart_width) * 0.5f;
+    const float offset_v = static_cast<float>(tile_padding) + (static_cast<float>(1.0 - 2.0 * tile_padding) - chart_height) * 0.5f;
+    const int64_t col = chart_index % cols;
+    const int64_t row = chart_index / cols;
+    const int64_t output_offset = static_cast<int64_t>(chart_vertices.size() / 3);
+    for (int64_t source_index : source_vertices) {
+      const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
+      chart_vertices.push_back(vertex[0]);
+      chart_vertices.push_back(vertex[1]);
+      chart_vertices.push_back(vertex[2]);
+      const float local_u = offset_u + (vertex[static_cast<size_t>(axis_u)] - min_u) * scale;
+      const float local_v = offset_v + (vertex[static_cast<size_t>(axis_v)] - min_v) * scale;
+      chart_uvs.push_back((static_cast<float>(col) + local_u) / static_cast<float>(cols));
+      chart_uvs.push_back((static_cast<float>(row) + local_v) / static_cast<float>(rows));
+    }
+    for (int64_t face_index : chart) {
+      const auto &face = mesh.faces[static_cast<size_t>(face_index)];
+      for (int corner = 0; corner < 3; ++corner) {
+        chart_faces.push_back(output_offset + local_index_lookup[static_cast<size_t>(face[corner])]);
+      }
+    }
+    for (int64_t source_index : touched_vertices) {
+      local_index_lookup[static_cast<size_t>(source_index)] = -1;
+    }
+    touched_vertices.clear();
+  }
+
+  nb::dict result;
+  const size_t output_vertices = chart_vertices.size() / 3;
+  result["vertices"] = mesh_common::make_float32_array(std::move(chart_vertices), output_vertices, 3);
+  result["faces"] = mesh_common::make_int64_array(std::move(chart_faces), mesh.faces.size(), 3);
+  result["uvs"] = mesh_common::make_float32_array(std::move(chart_uvs), output_vertices, 2);
+  nb::dict stats;
+  stats["backend"] = "native-chart-atlas";
+  stats["source_vertices"] = static_cast<int64_t>(mesh.vertices.size());
+  stats["source_faces"] = face_count;
+  stats["output_vertices"] = static_cast<int64_t>(output_vertices);
+  stats["output_faces"] = face_count;
+  stats["chart_count"] = chart_count;
+  stats["max_chart_faces"] = max_chart_faces;
+  stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
+  stats["chart_angle_degrees"] = chart_angle_degrees;
+  stats["chart_normal_cos_threshold"] = cos_threshold;
+  stats["packing"] = "grid-charts";
+  stats["chart_atlas_cols"] = cols;
+  stats["chart_atlas_rows"] = rows;
+  stats["tile_padding"] = tile_padding;
+  stats["duplicated_vertex_ratio"] = static_cast<double>(output_vertices) / static_cast<double>(mesh.vertices.size());
   result["stats"] = stats;
   return result;
 }

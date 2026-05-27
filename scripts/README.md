@@ -248,8 +248,9 @@ Script defaults:
   Arbitrary non-atlas UV bakes now use `metal-uv-binned-nearest`, a bounded
   UV-space face-bin Metal lookup that reports bin grid and candidate diagnostics
   instead of scanning every face per texel. The current Pixal3D export still
-  uses the paired-triangle face-atlas fast path; native chart generation remains
-  a later parity boundary.
+  uses the paired-triangle face-atlas fast path. `mlx-spatialkit` exposes
+  opt-in native chart-candidate UV generation for focused testing, but xatlas
+  chart parity remains a later parity boundary.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,

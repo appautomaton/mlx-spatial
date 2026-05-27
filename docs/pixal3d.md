@@ -257,10 +257,13 @@ generation or a production remesh backend.
 When a caller supplies arbitrary non-atlas UVs, the Metal bake no longer scans
 every face for every texel. It builds a bounded UV-space face-bin index and
 reports `backend=metal-uv-binned-nearest` with bin grid, face-reference,
-max-candidate, and guard diagnostics. Existing Pixal3D exports still use the
-paired-triangle face-atlas fast path; the binned path is the scalable raster
-foundation needed before native xatlas-like chart generation can replace that
-atlas.
+max-candidate, and guard diagnostics. `mlx-spatialkit` also exposes
+`make_native_chart_uvs` as an opt-in native chart candidate. It groups
+edge-connected smooth faces by a configurable normal-angle threshold, reuses
+vertices within a chart, duplicates only at chart boundaries, and bakes through
+the binned Metal path. Existing Pixal3D exports still use the paired-triangle
+face-atlas fast path; this candidate does not replace xatlas charting or prove
+CUDA/cuMesh remesh parity.
 
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from

@@ -19,6 +19,7 @@ import numpy as np
 from ._native import (
     backend_info,
     make_face_atlas_uvs as _make_face_atlas_uvs,
+    make_native_chart_uvs as _make_native_chart_uvs,
     textured_glb_payload as _textured_glb_payload,
     validate_pixal3d_shape_fields,
     validate_pixal3d_texture_attributes,
@@ -102,6 +103,24 @@ def make_face_atlas_uvs(vertices: np.ndarray, faces: np.ndarray, *, tile_padding
     """Create a deterministic native face-atlas UV mesh."""
 
     result = _make_face_atlas_uvs(vertices, faces, float(tile_padding))
+    return NativeUvMesh(
+        vertices=np.asarray(result["vertices"]),
+        faces=np.asarray(result["faces"]),
+        uvs=np.asarray(result["uvs"]),
+        stats=dict(result["stats"]),
+    )
+
+
+def make_native_chart_uvs(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    *,
+    chart_angle_degrees: float = 45.0,
+    tile_padding: float = 0.04,
+) -> NativeUvMesh:
+    """Create a deterministic native chart UV mesh."""
+
+    result = _make_native_chart_uvs(vertices, faces, float(chart_angle_degrees), float(tile_padding))
     return NativeUvMesh(
         vertices=np.asarray(result["vertices"]),
         faces=np.asarray(result["faces"]),
@@ -1349,6 +1368,7 @@ __all__ = [
     "export_pixal3d_glb",
     "load_pixal3d_decoded_npz",
     "make_face_atlas_uvs",
+    "make_native_chart_uvs",
     "textured_glb_payload",
     "validate_pixal3d_decoded",
     "write_textured_glb",

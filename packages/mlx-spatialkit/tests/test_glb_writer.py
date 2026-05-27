@@ -6,7 +6,13 @@ import struct
 import numpy as np
 import pytest
 
-from mlx_spatialkit import NativeUvMesh, make_face_atlas_uvs, textured_glb_payload, write_textured_glb
+from mlx_spatialkit import (
+    NativeUvMesh,
+    make_face_atlas_uvs,
+    make_native_chart_uvs,
+    textured_glb_payload,
+    write_textured_glb,
+)
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
@@ -93,6 +99,69 @@ def test_make_face_atlas_uvs_duplicates_vertices_and_returns_stats() -> None:
             dtype=np.float32,
         ),
     )
+
+
+def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> None:
+    vertices, faces = _fixture_mesh()
+
+    mesh = make_native_chart_uvs(vertices, faces, chart_angle_degrees=1.0, tile_padding=0.05)
+
+    assert mesh.vertices.shape == (4, 3)
+    assert mesh.faces.shape == (2, 3)
+    assert mesh.uvs.shape == (4, 2)
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["packing"] == "grid-charts"
+    assert mesh.stats["source_vertices"] == 4
+    assert mesh.stats["source_faces"] == 2
+    assert mesh.stats["output_vertices"] == 4
+    assert mesh.stats["output_faces"] == 2
+    assert mesh.stats["chart_count"] == 1
+    assert mesh.stats["max_chart_faces"] == 2
+    assert mesh.stats["chart_atlas_cols"] == 1
+    assert mesh.stats["chart_atlas_rows"] == 1
+    assert mesh.stats["chart_angle_degrees"] == 1.0
+    assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(1.0)
+    assert np.all(mesh.uvs >= 0.0)
+    assert np.all(mesh.uvs <= 1.0)
+    np.testing.assert_array_equal(mesh.faces, faces)
+
+
+def test_make_native_chart_uvs_splits_hard_crease() -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            [0, 1, 2],
+            [2, 1, 3],
+            [0, 4, 1],
+            [1, 4, 5],
+        ],
+        dtype=np.int64,
+    )
+
+    mesh = make_native_chart_uvs(vertices, faces, chart_angle_degrees=30.0, tile_padding=0.05)
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["chart_count"] == 2
+    assert mesh.stats["source_vertices"] == 6
+    assert mesh.stats["output_vertices"] == 8
+    assert mesh.stats["output_faces"] == 4
+    assert mesh.stats["max_chart_faces"] == 2
+    assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(8 / 6)
+    assert mesh.stats["chart_normal_cos_threshold"] == pytest.approx(np.cos(np.deg2rad(30.0)))
+    assert mesh.faces.shape == (4, 3)
+    assert mesh.uvs.shape == (8, 2)
+    assert np.all(mesh.uvs >= 0.0)
+    assert np.all(mesh.uvs <= 1.0)
 
 
 def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> None:

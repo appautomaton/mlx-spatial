@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mlx_spatialkit import NativeUvMesh, bake_pbr_texture, make_face_atlas_uvs, metal_device_available
+from mlx_spatialkit import (
+    NativeUvMesh,
+    bake_pbr_texture,
+    make_face_atlas_uvs,
+    make_native_chart_uvs,
+    metal_device_available,
+)
 
 
 def _uv_mesh():
@@ -153,6 +159,43 @@ def test_bake_pbr_texture_metal_supports_provided_uv_scan_path() -> None:
     assert baked.stats["uv_bin_guard_passed"] is True
     assert baked.stats["sampled_texel_count"] >= 1
     np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([255, 0, 0, 255], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_metal_uses_binned_path_for_native_chart_uvs() -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64)
+    mesh = make_native_chart_uvs(vertices, faces, chart_angle_degrees=1.0, tile_padding=0.0)
+    coordinates, attributes = _texture_fields()
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    baked = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=4,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+    )
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["chart_count"] == 1
+    assert "atlas_cols" not in mesh.stats
+    assert baked.stats["backend"] == "metal-uv-binned-nearest"
+    assert baked.stats["uv_bin_count"] > 0
+    assert baked.stats["uv_bin_face_reference_count"] > 0
+    assert baked.stats["uv_bin_guard_passed"] is True
+    assert baked.stats["sampled_texel_count"] > 0
+    assert baked.stats["visible_base_color_texel_count"] > 0
 
 
 def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texels() -> None:

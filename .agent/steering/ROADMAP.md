@@ -120,6 +120,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/SPEC.md`
 - exit signal: Non-atlas UV bake reports `metal-uv-binned-nearest` with bounded candidate counts, while existing face-atlas and heavy Pixal3D gates still pass and xatlas chart parity remains explicit.
 
+## Phase 13: Native Chart UV Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-uv-gate`
+- objective: Add an opt-in native chart-UV generator that groups connected smooth faces into packed charts and bakes through the binned Metal UV path without claiming xatlas parity.
+- why now: Phase 12 made arbitrary UV raster baking scalable; the next production gap is native chart generation itself before real Pixal3D exports can move away from face-atlas UVs.
+- likely outputs: Native chart UV binding/API, chart diagnostics, focused chart/crease tests, binned texture bake proof, docs, heavy regression.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-uv-gate/SPEC.md`
+- exit signal: `make_native_chart_uvs` produces charted UV meshes with truthful diagnostics, bakes through `metal-uv-binned-nearest`, and existing Pixal3D gates remain unchanged.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

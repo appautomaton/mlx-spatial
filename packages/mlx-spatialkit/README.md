@@ -55,9 +55,13 @@ charting, but it reduces atlas waste and lets the Metal texture bake report
 For arbitrary non-atlas UV meshes, the Metal texture bake path now builds a
 bounded UV-space face-bin index before dispatch. Those bakes report
 `backend=metal-uv-binned-nearest` plus bin grid, face-reference, max-candidate,
-and guard diagnostics, so future chart UVs do not fall back to an
-O(texture_pixels * faces) scan. This is the raster-bake scalability prerequisite
-for xatlas-like charting, not native chart generation itself.
+and guard diagnostics, so chart UVs do not fall back to an
+O(texture_pixels * faces) scan. `make_native_chart_uvs` is available as an
+opt-in native chart candidate: it groups edge-connected smooth faces by a
+normal-angle threshold, duplicates vertices at chart boundaries, packs charts
+into a deterministic grid, and feeds this binned Metal path. Existing Pixal3D
+exports still use the paired-triangle face atlas by default, and this chart
+candidate is not xatlas chart parity.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

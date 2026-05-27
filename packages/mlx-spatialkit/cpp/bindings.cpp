@@ -68,6 +68,14 @@ NB_MODULE(_native, module) {
              nb::arg("tile_padding") = 0.08,
              "Create a deterministic native face-atlas UV mesh.");
 
+  module.def("make_native_chart_uvs",
+             &mlx_spatialkit::make_native_chart_uvs,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("chart_angle_degrees") = 45.0,
+             nb::arg("tile_padding") = 0.04,
+             "Create a deterministic native chart UV mesh.");
+
   module.def("textured_glb_payload",
              &mlx_spatialkit::textured_glb_payload,
              nb::arg("vertices"),

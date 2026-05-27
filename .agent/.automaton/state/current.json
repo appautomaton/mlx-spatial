@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-uv-raster-binning-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-native-chart-uv-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-uv-raster-binning-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-uv-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-uv-gate/PLAN.md"
 }
