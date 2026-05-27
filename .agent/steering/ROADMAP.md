@@ -1,23 +1,23 @@
 # Roadmap
 
-## Phase 38: Readiness Contract Semantics
+## Phase 39: Quad Loop Repair Default
 
 - status: done
-- change: `2026-05-27-mlx-spatialkit-readiness-semantics`
-- objective: Separate scalar export quality readiness from full Pixal3D production-equivalence readiness in diagnostics, tests, and docs.
-- why now: The native export path can pass scalar reference-target checks while xatlas chart parity and upstream-setting parity remain open.
-- likely outputs: `quality.production_equivalence`, `result.production_equivalence_ready`, focused tests, real-fixture gate, docs wording, and compact Automaton evidence.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-readiness-semantics/SPEC.md`
-- exit signal: Current reference-target exports may keep `production_quality_ready=true`, but diagnostics and docs clearly keep production equivalence false until remaining parity boundaries are closed.
+- change: `2026-05-27-mlx-spatialkit-quad-loop-repair`
+- objective: Make bounded triangle/quad loop repair the default topology-aware native export policy.
+- why now: Real Pixal3D diagnostics still show many final boundary loops, and cap-4 probing reduced loops without nonmanifold export blockers.
+- likely outputs: Cap-4 default across Python/native bindings, focused mesh tests, real Pixal3D heavy gate, docs, and package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-quad-loop-repair/SPEC.md`
+- exit signal: Default exports report `small_boundary_loop_fill_max_edges=4`, quad holes fill in unit tests, and the real native-chart reference-target fixture keeps `nonmanifold_edges=0` with lower boundary-loop thresholds.
 
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-readiness-semantics`.
-- Native geometry, chart UV, Metal bake, gutter fill, GLB viewer compatibility, and memory diagnostics are materially in place for real Pixal3D decoded fixtures.
-- The open quality-equivalence boundary is now technical: diagnostics separate scalar reference-target quality from production equivalence, while xatlas chart parity remains false.
+- Last verified change: `2026-05-27-mlx-spatialkit-quad-loop-repair`.
+- Diagnostics now separate scalar reference-target quality from production equivalence.
+- Native geometry repair now defaults to bounded triangle/quad loop repair while keeping arbitrary remesh and xatlas parity deferred.
 
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
 - Zero-padding default switch remains deferred until separately justified.
-- Implementing xatlas parity, full remesh, or CUDA/cuMesh behavior is outside the current readiness-semantics change.
+- Implementing xatlas parity, full remesh, arbitrary N-gon filling, or CUDA/cuMesh behavior is outside the current repair-default change.

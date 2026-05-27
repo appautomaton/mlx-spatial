@@ -316,13 +316,13 @@ export meshes, so visible holes can be evaluated as topology evidence before
 we change simplification, repair, or UV charting.
 For the topology-aware production simplifier, `mlx-spatialkit` also performs a
 bounded small-loop fill after simplification. The repair only targets triangular
-closed boundary loops up to 3 edges, respects the remaining target-face budget, and
-rejects patches that would introduce degenerate, duplicate, or nonmanifold
-faces. Diagnostics report the repair budget, loop counts, rejected loops, and
-faces added. This addresses small geometry holes separately from xatlas chart
-parity or open-boundary remeshing.
+and quad closed boundary loops up to 4 edges by default, respects the remaining
+target-face budget, and rejects patches that would introduce degenerate,
+duplicate, or nonmanifold faces. Diagnostics report the repair budget, loop
+counts, rejected loops, and faces added. This addresses small geometry holes
+separately from xatlas chart parity or open-boundary remeshing.
 The public export parameter `small_boundary_loop_fill_max_edges` defaults to
-`3` for this measured policy; use `0` to disable the fill when comparing
+`4` for this measured policy; use `0` to disable the fill when comparing
 geometry repair against the unpatched simplifier output.
 For texture seam robustness, the native bake fills a bounded no-face gutter
 after UV-surface fill. The gutter copies RGB and metallic/roughness values into

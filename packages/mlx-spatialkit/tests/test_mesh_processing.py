@@ -202,7 +202,7 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert before["boundary_loop_count"] == 2
     assert before["boundary_edges"] == 9
     assert stats["small_boundary_loop_fill_enabled"] is True
-    assert stats["small_boundary_loop_fill_max_edges"] == 3
+    assert stats["small_boundary_loop_fill_max_edges"] == 4
     assert stats["small_boundary_loop_fill_face_budget"] == 2
     assert stats["small_boundary_loops_considered"] == 1
     assert stats["small_boundary_loops_filled"] == 1
@@ -241,7 +241,7 @@ def test_simplify_mesh_can_disable_small_boundary_loop_fill() -> None:
     assert after["nonmanifold_edges"] == 0
 
 
-def test_simplify_mesh_topology_aware_preserves_four_edge_boundary_loop() -> None:
+def test_simplify_mesh_topology_aware_fills_four_edge_boundary_loop_by_default() -> None:
     vertices, faces = _grid_mesh_with_missing_cell(6, missing_x=3, missing_y=3)
     before = mesh_metrics(vertices, faces)
 
@@ -251,6 +251,34 @@ def test_simplify_mesh_topology_aware_preserves_four_edge_boundary_loop() -> Non
         target_faces=faces.shape[0] + 4,
         min_component_faces=1,
         backend="topology-aware",
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_loop_count"] == 2
+    assert before["boundary_edges"] == 28
+    assert stats["small_boundary_loop_fill_enabled"] is True
+    assert stats["small_boundary_loop_fill_max_edges"] == 4
+    assert stats["small_boundary_loops_considered"] == 1
+    assert stats["small_boundary_loops_filled"] == 1
+    assert stats["small_boundary_loop_faces_added"] == 2
+    assert stats["final_faces"] == faces.shape[0] + 2
+    assert after["boundary_loop_count"] == 1
+    assert after["boundary_edges"] == 24
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
+def test_simplify_mesh_topology_aware_respects_triangle_only_boundary_loop_cap() -> None:
+    vertices, faces = _grid_mesh_with_missing_cell(6, missing_x=3, missing_y=3)
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 4,
+        min_component_faces=1,
+        backend="topology-aware",
+        small_boundary_loop_fill_max_edges=3,
     )
     after = mesh_metrics(mesh.vertices, mesh.faces)
 

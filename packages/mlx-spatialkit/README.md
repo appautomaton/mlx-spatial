@@ -123,14 +123,15 @@ fields under `source_metrics.metrics` and `export_metrics.metrics`, so a small
 visible hole can be checked against final mesh topology before changing
 simplification, repair, or UV chart policy.
 The topology-aware production simplifier now applies a bounded native
-small-loop fill after simplification: it only fills triangular closed boundary
-loops up to 3 edges, only while staying inside the target-face budget, and rejects patches
-that would create degenerate, duplicate, or nonmanifold faces. Repair stats
-record the face budget, considered/filled/rejected loops, budget-limited loops,
-and faces added. This reduces small geometry holes; it does not claim full
-remesh, open-boundary repair, or xatlas UV parity.
+small-loop fill after simplification: by default it fills triangular and
+quad closed boundary loops up to 4 edges, only while staying inside the
+target-face budget, and rejects patches that would create degenerate,
+duplicate, or nonmanifold faces. Repair stats record the face budget,
+considered/filled/rejected loops, budget-limited loops, and faces added. This
+reduces small geometry holes; it does not claim full remesh, open-boundary
+repair, or xatlas UV parity.
 The Pixal3D export setting
-`small_boundary_loop_fill_max_edges=3` exposes that policy in diagnostics;
+`small_boundary_loop_fill_max_edges=4` exposes that policy in diagnostics;
 set it to `0` to disable this repair for comparison runs.
 
 The current large-chart splitter, low-fill splitter, bounded rotation search,

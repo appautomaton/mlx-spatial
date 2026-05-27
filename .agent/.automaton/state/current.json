@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-readiness-semantics",
+  "active_change": "2026-05-27-mlx-spatialkit-quad-loop-repair",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-readiness-semantics/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-readiness-semantics/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-quad-loop-repair/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-quad-loop-repair/PLAN.md"
 }

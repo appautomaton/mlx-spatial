@@ -287,9 +287,9 @@ Script defaults:
   `source_metrics.metrics` and `export_metrics.metrics`, so geometry holes are
   not conflated with UV chart coverage or xatlas parity.
   The topology-aware simplifier also runs a bounded native small-loop fill for
-  triangular closed boundary loops up to 3 edges when target-face budget remains, reporting
+  triangular and quad closed boundary loops up to 4 edges when target-face budget remains, reporting
   considered/filled/rejected loops and faces added. Direct decoded-NPZ exports
-  expose this as `small_boundary_loop_fill_max_edges=3`; use `0` to disable the
+  expose this as `small_boundary_loop_fill_max_edges=4`; use `0` to disable the
   repair for comparison runs.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,
   the real fixture also passes production and

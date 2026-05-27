@@ -53,7 +53,7 @@ def simplify_mesh(
     target_faces: int,
     min_component_faces: int = 32,
     backend: str = "spatial-cluster",
-    small_boundary_loop_fill_max_edges: int = 3,
+    small_boundary_loop_fill_max_edges: int = 4,
 ) -> tuple[NativeMesh, dict[str, object]]:
     """Simplify mesh data through the native-owned first-pass interface."""
 
