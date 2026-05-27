@@ -218,6 +218,9 @@ Script defaults:
 - xatlas face guard: `auto`
 - xatlas parallel chunks: `0`
 - texture bake backend: `kdtree`
+- GLB export backend: `internal`; use `--glb-export-backend spatialkit` only
+  when the optional `mlx_spatialkit` package is installed or available from the
+  local companion package
 - MoGe memory profile: `balanced`
 - NAF coordinate chunk size: `8192`
 - manual FOV: optional `--manual-fov 0.2` overrides MoGe auto-camera and does
@@ -227,6 +230,10 @@ Script defaults:
   structured `naf-assets` blocker; with complete Pixal3D, DINOv3, MoGe, and NAF
   assets, the MLX path runs through 512/1024 shape SLat, texture SLat, shape and
   texture decode, and `model.glb` export
+- spatialkit export writes `model.glb` and a `diagnostics.json` sidecar from
+  decoded `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`; if the
+  optional package is missing, the Pixal3D script records the fallback and uses
+  the internal writer
 
 ### LiTo
 

@@ -21,6 +21,7 @@ from .pixal3d_assets import (
 from .pixal3d_inference import (
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
+    PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
     PIXAL3D_DEFAULT_MOGE_ROOT,
@@ -32,6 +33,7 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
+    PIXAL3D_GLB_EXPORT_BACKENDS,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
     Pixal3DInferencePipeline,
@@ -130,6 +132,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=TRELLIS2_TEXTURE_BAKE_BACKENDS,
         default=PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
         help="texture voxel sampling backend for GLB export; default: %(default)s",
+    )
+    generate_parser.add_argument(
+        "--glb-export-backend",
+        choices=PIXAL3D_GLB_EXPORT_BACKENDS,
+        default=PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
+        help="GLB export implementation; internal is the default and spatialkit is optional",
+    )
+    generate_parser.add_argument(
+        "--glb-diagnostics-path",
+        type=Path,
+        help="diagnostics JSON path for --glb-export-backend spatialkit; default: next to output",
     )
     generate_parser.add_argument(
         "--dino-root",
@@ -235,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             xatlas_face_guard=args.xatlas_face_guard,
             xatlas_parallel_chunks=args.xatlas_parallel_chunks,
             texture_bake_backend=args.texture_bake_backend,
+            glb_export_backend=args.glb_export_backend,
+            glb_diagnostics_path=args.glb_diagnostics_path,
             naf_root=args.naf_root,
             naf_coordinate_chunk_size=args.naf_coordinate_chunk_size,
             moge_root=args.moge_root,

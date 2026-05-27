@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import mlx.core as mx
 import numpy as np
@@ -84,6 +84,8 @@ PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT = 1_100_000
 PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
 PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
+PIXAL3D_GLB_EXPORT_BACKENDS = ("internal", "spatialkit")
+PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND = "internal"
 PIXAL3D_DEFAULT_NAF_ROOT = NAF_DEFAULT_ROOT
 PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
 PIXAL3D_DEFAULT_MOGE_ROOT = SAM3D_MOGE_DEFAULT_ROOT
@@ -159,6 +161,8 @@ class Pixal3DInferencePipeline:
         xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
         xatlas_parallel_chunks: int = 0,
         texture_bake_backend: str = PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
+        glb_export_backend: str = PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
+        glb_diagnostics_path: str | Path | None = None,
         naf_root: str | Path | None = PIXAL3D_DEFAULT_NAF_ROOT,
         naf_coordinate_chunk_size: int = PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
         moge_root: str | Path | None = PIXAL3D_DEFAULT_MOGE_ROOT,
@@ -183,6 +187,10 @@ class Pixal3DInferencePipeline:
                 "xatlas_face_guard": xatlas_face_guard,
                 "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
                 "texture_bake_backend": texture_bake_backend,
+                "glb_export_backend": glb_export_backend,
+                "glb_diagnostics_path": str(glb_diagnostics_path) if glb_diagnostics_path is not None else None,
+                "glb_export_backend_requested": glb_export_backend,
+                "glb_export_backend_used": "internal",
             },
             "naf_options": {
                 "naf_root": str(naf_root) if naf_root is not None else None,
@@ -229,6 +237,7 @@ class Pixal3DInferencePipeline:
             glb_target_faces=glb_target_faces,
             xatlas_parallel_chunks=xatlas_parallel_chunks,
             texture_bake_backend=texture_bake_backend,
+            glb_export_backend=glb_export_backend,
         )
         if export_guard_error is not None:
             return self._blocked(
@@ -247,7 +256,9 @@ class Pixal3DInferencePipeline:
                     "glb_target_faces": glb_target_faces,
                     "xatlas_parallel_chunks": xatlas_parallel_chunks,
                     "texture_bake_backend": texture_bake_backend,
+                    "glb_export_backend": glb_export_backend,
                     "supported_texture_bake_backends": TRELLIS2_TEXTURE_BAKE_BACKENDS,
+                    "supported_glb_export_backends": PIXAL3D_GLB_EXPORT_BACKENDS,
                 },
                 metadata=metadata,
             )
@@ -1842,6 +1853,118 @@ class Pixal3DInferencePipeline:
             del texture_features
             _release_pixal3d_mlx_stage_memory(metadata, "after_texture_decoder")
 
+            if glb_export_backend == "spatialkit":
+                spatialkit_exporter, spatialkit_import_error = _load_spatialkit_exporter()
+                if spatialkit_exporter is None:
+                    metadata["export_options"]["glb_export_backend_fallback_reason"] = spatialkit_import_error
+                else:
+                    metadata["export_options"]["glb_export_backend_used"] = "spatialkit"
+                    shape_decode_shape = {
+                        "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
+                        "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
+                        "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
+                        "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
+                    }
+                    del shape_decode, texture_decode
+                    _release_pixal3d_mlx_stage_memory(metadata, "before_spatialkit_glb_export")
+
+                    try:
+                        spatialkit_result = _export_pixal3d_glb_with_spatialkit(
+                            spatialkit_exporter,
+                            artifact_dir,
+                            output_path,
+                            texture_size=texture_size,
+                            target_faces=glb_target_faces,
+                            grid_size=hr_selection.actual_hr_resolution,
+                            diagnostics_path=glb_diagnostics_path,
+                        )
+                    except (ImportError, RuntimeError, ValueError) as error:
+                        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                        metadata["timings_sec"] = timings
+                        return self._blocked(
+                            image_path,
+                            completed,
+                            pipeline_type,
+                            manual_fov,
+                            seed,
+                            max_num_tokens,
+                            output_path,
+                            "mesh-export",
+                            "export decoded Pixal3D NPZ artifacts through mlx-spatialkit",
+                            str(error),
+                            {
+                                **shape_decode_shape,
+                                "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
+                                "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
+                                "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                                "texture_size": texture_size,
+                                "glb_target_faces": glb_target_faces,
+                                "glb_export_backend": glb_export_backend,
+                            },
+                            metadata=metadata,
+                            artifacts=decode_artifacts,
+                        )
+
+                    spatialkit_diagnostics = dict(getattr(spatialkit_result, "diagnostics", {}))
+                    texture_bake_stats = (
+                        spatialkit_diagnostics.get("stages", {})
+                        .get("texture_bake", {})
+                        .get("stats", {})
+                    )
+                    metadata["mesh_export"] = {
+                        "export_backend": "spatialkit",
+                        "spatialkit_diagnostics_path": str(spatialkit_result.diagnostics_path),
+                        "source_mesh_vertices": _diagnostic_int(spatialkit_diagnostics, ("stages", "extract_mesh", "source_vertices")),
+                        "source_mesh_faces": _diagnostic_int(spatialkit_diagnostics, ("stages", "extract_mesh", "source_faces")),
+                        "postprocess_stats": spatialkit_diagnostics.get("stages", {}).get("simplify_mesh", {}).get("stats", {}),
+                        "baked_vertices_shape": tuple(
+                            spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("vertices_shape", ())
+                        ),
+                        "baked_faces_shape": tuple(
+                            spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("faces_shape", ())
+                        ),
+                        "baked_uv_shape": tuple(spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("uvs_shape", ())),
+                        "texture_size": int(texture_bake_stats.get("texture_size", texture_size)),
+                        "voxel_count": int(texture_bake_stats.get("voxel_count", 0)),
+                        "coverage_ratio": float(texture_bake_stats.get("coverage_ratio", 0.0)),
+                        "raw_coverage_ratio": float(texture_bake_stats.get("raw_coverage_ratio", 0.0)),
+                        "bake_backend": str(texture_bake_stats.get("backend", "spatialkit")),
+                        "unwrap_backend": spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("stats", {}).get("backend"),
+                        "unwrap_chunks": 0,
+                        "unwrap_chart_count": 0,
+                        "unwrap_utilization": 0.0,
+                        "xatlas_face_guard": None,
+                        "xatlas_face_guard_mode": "not_used",
+                        "sampled_texel_count": int(texture_bake_stats.get("sampled_texel_count", 0)),
+                        "missing_texel_count": int(texture_bake_stats.get("missing_texel_count", 0)),
+                        "out_of_grid_texel_count": int(texture_bake_stats.get("out_of_grid_texel_count", 0)),
+                        "source_projection_used": False,
+                        "source_projection_detail": "mlx-spatialkit export uses decoded NPZ artifacts directly",
+                    }
+                    completed.append("mesh-export")
+                    completed.append("artifact:textured_glb")
+                    final_artifacts = (*decode_artifacts, spatialkit_result.glb.path, spatialkit_result.diagnostics_path)
+                    metadata["artifact_paths"] = list(final_artifacts)
+                    metadata["textured_glb_artifact"] = spatialkit_result.glb
+                    _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
+                    metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                    metadata["timings_sec"] = timings
+                    return Pixal3DGenerationResult(
+                        trace=Pixal3DInferenceTrace(
+                            root=self.root,
+                            image_path=image_path,
+                            completed_stages=tuple(completed),
+                            pipeline_type=pipeline_type,
+                            manual_fov=manual_fov,
+                            seed=seed,
+                            max_num_tokens=max_num_tokens,
+                            output_path=output_path,
+                            blocker=None,
+                            metadata=metadata,
+                        ),
+                        artifacts=final_artifacts,
+                    )
+
             try:
                 mesh = flexi_dual_grid_fields_to_mesh(
                     shape_decode.coordinates,
@@ -1887,12 +2010,14 @@ class Pixal3DInferencePipeline:
                         "xatlas_face_guard": xatlas_face_guard,
                         "xatlas_parallel_chunks": xatlas_parallel_chunks,
                         "texture_bake_backend": texture_bake_backend,
+                        "glb_export_backend": glb_export_backend,
                     },
                     metadata=metadata,
                     artifacts=decode_artifacts,
                 )
 
             metadata["mesh_export"] = {
+                "export_backend": "internal",
                 "source_mesh_vertices": int(mesh.vertices.shape[0]),
                 "source_mesh_faces": int(mesh.faces.shape[0]),
                 "postprocess_stats": postprocess_result.stats,
@@ -2059,6 +2184,7 @@ def _validate_pixal3d_export_guards(
     glb_target_faces: int,
     xatlas_parallel_chunks: int,
     texture_bake_backend: str,
+    glb_export_backend: str,
 ) -> str | None:
     if texture_size <= 0:
         return f"texture_size must be positive, got {texture_size}"
@@ -2068,7 +2194,46 @@ def _validate_pixal3d_export_guards(
         return f"xatlas_parallel_chunks must be non-negative, got {xatlas_parallel_chunks}"
     if texture_bake_backend not in TRELLIS2_TEXTURE_BAKE_BACKENDS:
         return f"texture_bake_backend must be one of {TRELLIS2_TEXTURE_BAKE_BACKENDS}, got {texture_bake_backend}"
+    if glb_export_backend not in PIXAL3D_GLB_EXPORT_BACKENDS:
+        return f"glb_export_backend must be one of {PIXAL3D_GLB_EXPORT_BACKENDS}, got {glb_export_backend}"
     return None
+
+
+def _load_spatialkit_exporter() -> tuple[Any | None, str | None]:
+    try:
+        from mlx_spatialkit import export_pixal3d_glb
+    except ImportError as error:
+        return None, f"mlx_spatialkit is not importable; falling back to internal Pixal3D GLB export: {error}"
+    return export_pixal3d_glb, None
+
+
+def _export_pixal3d_glb_with_spatialkit(
+    exporter: Any,
+    decoded_dir: Path,
+    output_path: Path,
+    *,
+    texture_size: int,
+    target_faces: int,
+    grid_size: int,
+    diagnostics_path: str | Path | None,
+) -> Any:
+    return exporter(
+        decoded_dir,
+        output_path,
+        texture_size=texture_size,
+        target_faces=target_faces,
+        grid_size=grid_size,
+        diagnostics_path=diagnostics_path,
+    )
+
+
+def _diagnostic_int(diagnostics: dict[str, Any], path: tuple[str, ...]) -> int | None:
+    value: Any = diagnostics
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return int(value) if value is not None else None
 
 
 def _pixal3d_patch_feature_map_bchw(hidden_states: mx.array) -> mx.array:

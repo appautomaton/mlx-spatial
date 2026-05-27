@@ -158,6 +158,8 @@ a Pixal3D-labeled textured GLB.
 - GLB face target: `50000`
 - xatlas face guard: `auto`
 - texture bake backend: `kdtree`
+- GLB export backend: `internal`; optional `spatialkit` uses `mlx-spatialkit`
+  when importable and records a diagnostics JSON sidecar
 - MoGe root: `weights/sam-3d-objects-mlx/moge`
 - MoGe memory profile: `balanced`; alternatives are `safe` and `large`
 - manual FOV override: radians, for example `--manual-fov 0.2`
@@ -200,3 +202,26 @@ Runtime modules are Torch-free:
 
 Dev-only PyTorch reference capture and NAF checkpoint conversion are setup
 workflows. Runtime imports remain Torch-free.
+
+## Native Spatialkit Export
+
+The default GLB path stays internal and requires no `mlx-spatialkit` install.
+For decoded NPZ to GLB work, opt into the native companion backend:
+
+```bash
+python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
+  --root weights/pixal3d \
+  --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --moge-root weights/sam-3d-objects-mlx/moge \
+  --naf-root weights/naf \
+  --output-dir /tmp/mlx-spatialkit-pixal3d \
+  --pipeline-type 1024_cascade \
+  --glb-export-backend spatialkit
+```
+
+`spatialkit` consumes the same `shape_decoder_fields.npz` and
+`texture_decoder_pbr.npz` artifacts and writes `model.glb` plus
+`diagnostics.json` next to the output unless `--glb-diagnostics-path` is set.
+If `mlx_spatialkit` is not importable, the pipeline falls back to the internal
+writer and records the fallback reason in trace metadata. Real fixture tests for
+this path are marked `heavy` and write generated artifacts under `/tmp`.

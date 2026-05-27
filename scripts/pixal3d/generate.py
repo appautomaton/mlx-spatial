@@ -23,8 +23,8 @@ Recommended settings:
     weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
     GLB target faces 50000, kdtree texture baking, MoGe root
     weights/sam-3d-objects-mlx/moge for auto-camera, shape upsample token
-    guard 1000000, decoder token guards 1100000, and manual FOV only when
-    intentionally overriding auto-camera.
+    guard 1000000, decoder token guards 1100000, internal GLB export by
+    default, and manual FOV only when intentionally overriding auto-camera.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from mlx_spatial.pixal3d import main as pixal3d_main  # noqa: E402
 from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
+    PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
     PIXAL3D_DEFAULT_MOGE_ROOT,
@@ -53,6 +54,7 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
+    PIXAL3D_GLB_EXPORT_BACKENDS,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
 )
@@ -149,6 +151,17 @@ def main(argv: list[str] | None = None) -> int:
         help="texture voxel sampling backend for GLB export; default: %(default)s",
     )
     parser.add_argument(
+        "--glb-export-backend",
+        choices=PIXAL3D_GLB_EXPORT_BACKENDS,
+        default=PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
+        help="GLB export implementation; default: %(default)s",
+    )
+    parser.add_argument(
+        "--glb-diagnostics-path",
+        type=Path,
+        help="diagnostics JSON path for the optional spatialkit GLB export backend",
+    )
+    parser.add_argument(
         "--naf-root",
         default=PIXAL3D_DEFAULT_NAF_ROOT,
         help="local converted NAF safetensors root for high-resolution projection features; default: %(default)s",
@@ -189,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         str(args.xatlas_parallel_chunks),
         "--texture-bake-backend",
         args.texture_bake_backend,
+        "--glb-export-backend",
+        args.glb_export_backend,
         "--dino-root",
         str(args.dino_root),
         "--moge-root",
@@ -208,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         cli_args.extend(["--manual-fov", str(args.manual_fov)])
     if args.trace_output is not None:
         cli_args.extend(["--trace-output", str(args.trace_output)])
+    if args.glb_diagnostics_path is not None:
+        cli_args.extend(["--glb-diagnostics-path", str(args.glb_diagnostics_path)])
     return pixal3d_main(cli_args)
 
 
