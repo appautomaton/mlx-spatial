@@ -22,6 +22,8 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+    PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
+    PIXAL3D_DEFAULT_MOGE_ROOT,
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
@@ -31,6 +33,7 @@ from .pixal3d_inference import (
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
     Pixal3DInferencePipeline,
 )
+from .sam3d_moge import SAM3D_MOGE_MEMORY_PROFILES
 from .trellis2_export import TRELLIS2_TEXTURE_BAKE_BACKENDS
 
 
@@ -73,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate_parser.add_argument(
         "--manual-fov",
         type=float,
-        help="manual horizontal FOV in radians; avoids the optional MoGe auto-camera boundary",
+        help="manual horizontal FOV in radians; overrides MoGe auto-camera",
     )
     generate_parser.add_argument("--seed", type=int, default=PIXAL3D_DEFAULT_SEED)
     generate_parser.add_argument("--max-num-tokens", type=int, default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS)
@@ -111,6 +114,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--dino-root",
         default=PIXAL3D_DEFAULT_DINO_ROOT,
         help="local DINOv3 ViT-L/16 root for Pixal3D image conditioning",
+    )
+    generate_parser.add_argument(
+        "--moge-root",
+        default=PIXAL3D_DEFAULT_MOGE_ROOT,
+        help="local converted MoGe safetensors root for Pixal3D auto-camera",
+    )
+    generate_parser.add_argument(
+        "--moge-memory-profile",
+        choices=tuple(SAM3D_MOGE_MEMORY_PROFILES),
+        default=PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
+        help="MLX MoGe memory profile used when --manual-fov is omitted; default: %(default)s",
     )
     generate_parser.add_argument(
         "--naf-root",
@@ -199,6 +213,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             texture_bake_backend=args.texture_bake_backend,
             naf_root=args.naf_root,
             naf_coordinate_chunk_size=args.naf_coordinate_chunk_size,
+            moge_root=args.moge_root,
+            moge_memory_profile=args.moge_memory_profile,
         )
         output_path = result.trace.output_path or Path("outputs/pixal3d/model.glb")
         trace_path = args.trace_output or output_path.with_name("trace.json")

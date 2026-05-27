@@ -122,6 +122,36 @@ def pixal3d_manual_camera_params(
     )
 
 
+def pixal3d_camera_params_from_moge_intrinsics(
+    intrinsics: np.ndarray,
+    *,
+    image_width: int,
+    mesh_scale: float = PIXAL3D_WILD_MESH_SCALE,
+    image_resolution: int = PIXAL3D_WILD_IMAGE_RESOLUTION,
+    extend_pixel: int = PIXAL3D_WILD_EXTEND_PIXEL,
+) -> Pixal3DCameraParams:
+    """Create Pixal3D camera params from MoGe normalized intrinsics."""
+
+    if image_width <= 0:
+        raise ValueError("image_width must be positive")
+    matrix = np.asarray(intrinsics, dtype=np.float64)
+    if matrix.shape != (3, 3):
+        raise ValueError(f"MoGe intrinsics must have shape (3, 3), got {matrix.shape}")
+    if not np.isfinite(matrix).all():
+        raise ValueError("MoGe intrinsics must be finite")
+    fx_normalized = float(matrix[0, 0])
+    if fx_normalized <= 0:
+        raise ValueError("MoGe normalized fx must be positive")
+    fx_pixels = fx_normalized * float(image_width)
+    camera_angle_x = 2.0 * math.atan(float(image_width) / (2.0 * fx_pixels))
+    return pixal3d_manual_camera_params(
+        camera_angle_x,
+        mesh_scale=mesh_scale,
+        image_resolution=image_resolution,
+        extend_pixel=extend_pixel,
+    )
+
+
 def pixal3d_requested_hr_resolution(pipeline_type: str) -> int:
     """Return the upstream HR resolution for a Pixal3D pipeline type."""
 

@@ -9,7 +9,10 @@ texture tensors are available.
 Implemented now:
 
 - local asset validation and checkpoint inspection for `TencentARC/Pixal3D`
-- Pixal3D manual-FOV camera math matching the upstream inference script
+- MoGe-derived auto-camera through the existing converted MLX MoGe
+  pointmap/intrinsics runtime
+- Pixal3D manual-FOV camera math matching the upstream inference script as an
+  explicit override
 - sparse-stage DINOv3 hidden-state extraction through the shared MLX DINOv3
   helper
 - projection conditioning from DINOv3 hidden states: global tokens plus
@@ -39,7 +42,9 @@ Still blocked:
 
 - missing converted NAF weights block NAF-projected stages until
   `weights/naf/naf_release.safetensors` is created locally
-- MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
+- missing converted MoGe weights block auto-camera until
+  `weights/sam-3d-objects-mlx/moge/model.safetensors` is present; pass
+  `--manual-fov` to use the deterministic override
 
 ## Assets
 
@@ -83,6 +88,18 @@ uv run --group torch-ref python scripts/pixal3d/convert_naf.py \
   --output weights/naf/naf_release.safetensors
 ```
 
+Pixal3D auto-camera reuses the package's existing converted MLX MoGe root. The
+default is `weights/sam-3d-objects-mlx/moge`, normally supplied by the public
+`appautomaton/sam-3d-objects-mlx` bundle:
+
+```bash
+uv run hf download appautomaton/sam-3d-objects-mlx \
+  --local-dir weights/sam-3d-objects-mlx
+```
+
+This is a MoGe-derived MLX auto-camera path, not an exact claim of upstream
+`Ruicheng/moge-2-vitl` parity.
+
 ## Recommended Run
 
 Use the vendored sample image from the shallow upstream checkout:
@@ -91,13 +108,14 @@ Use the vendored sample image from the shallow upstream checkout:
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --moge-root weights/sam-3d-objects-mlx/moge \
   --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
-  --pipeline-type 1024_cascade \
-  --manual-fov 0.2
+  --pipeline-type 1024_cascade
 ```
 
-When Pixal3D and DINOv3 assets are present, the current expected output is:
+When Pixal3D, MoGe, DINOv3, and NAF assets are present, the current expected
+output is:
 
 ```text
 outputs/pixal3d/sample/
@@ -113,10 +131,12 @@ outputs/pixal3d/sample/
   model.glb                     # written after mesh extraction and texture baking
 ```
 
-If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
-blocker with the exact root and download command. If converted NAF weights are
-missing, NAF-projected stages return a structured `naf-assets` blocker with the
-expected safetensors path and conversion command. When DINOv3, NAF, sparse-flow,
+If converted MoGe weights are missing, omitted `--manual-fov` returns a
+structured `camera-setup` blocker with the MoGe root and memory profile. If the
+DINOv3 assets are missing, the CLI returns an `image-conditioning` blocker with
+the exact root and download command. If converted NAF weights are missing,
+NAF-projected stages return a structured `naf-assets` blocker with the expected
+safetensors path and conversion command. When MoGe, DINOv3, NAF, sparse-flow,
 and sparse-decoder assets are present, the runtime can write
 `sparse_structure.npz`, build coordinate-sampled NAF projections, probe 512
 shape SLat, write `shape_slat_lr.npz`, upsample guarded HR coordinates, write
@@ -134,7 +154,9 @@ a Pixal3D-labeled textured GLB.
 - GLB face target: `50000`
 - xatlas face guard: `auto`
 - texture bake backend: `kdtree`
-- manual FOV: radians, for example `0.2`
+- MoGe root: `weights/sam-3d-objects-mlx/moge`
+- MoGe memory profile: `balanced`; alternatives are `safe` and `large`
+- manual FOV override: radians, for example `--manual-fov 0.2`
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
 - NAF root: `weights/naf`
 - NAF coordinate chunk size: `8192`
@@ -150,7 +172,8 @@ reached.
 Runtime modules are Torch-free:
 
 - `pixal3d_assets.py`: asset manifest, validation, config parsing, and probes
-- `pixal3d_camera.py`: manual-FOV camera and cascade planning
+- `pixal3d_camera.py`: MoGe intrinsics camera conversion, manual-FOV camera
+  override, and cascade planning
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
   coordinate-indexed feature selection, and explicit NAF map override support
 - `naf.py`: Torch-free converted NAF safetensors loading, image encoder, RoPE,
@@ -158,8 +181,8 @@ Runtime modules are Torch-free:
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR
   coordinate, shape SLat, texture SLat, shape decoder, and texture decoder NPZ
   artifact writing plus Pixal3D-labeled GLB writing
-- `pixal3d_inference.py`: staged orchestration, trace metadata, export settings,
-  and blockers
+- `pixal3d_inference.py`: staged orchestration, MLX MoGe auto-camera handoff,
+  trace metadata, export settings, and blockers
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: shared MLX DINOv3
   hidden-state extraction
 - `trellis2_sparse_structure.py`: shared sparse FlowEuler probing, sparse

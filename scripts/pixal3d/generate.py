@@ -21,8 +21,9 @@ Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,
     DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, converted NAF root
     weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
-    GLB target faces 50000, kdtree texture baking, and manual FOV when avoiding
-    MoGe auto-camera.
+    GLB target faces 50000, kdtree texture baking, MoGe root
+    weights/sam-3d-objects-mlx/moge for auto-camera, and manual FOV only when
+    intentionally overriding auto-camera.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+    PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
+    PIXAL3D_DEFAULT_MOGE_ROOT,
     PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
     PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
@@ -49,6 +52,7 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
 )
+from mlx_spatial.sam3d_moge import SAM3D_MOGE_MEMORY_PROFILES  # noqa: E402
 from mlx_spatial.trellis2_export import TRELLIS2_TEXTURE_BAKE_BACKENDS  # noqa: E402
 
 
@@ -73,7 +77,18 @@ def main(argv: list[str] | None = None) -> int:
         default=PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
         help="1024_cascade is recommended for Apple Silicon; 1536_cascade is explicit high-memory mode",
     )
-    parser.add_argument("--manual-fov", type=float, help="manual horizontal FOV in radians, e.g. 0.2")
+    parser.add_argument("--manual-fov", type=float, help="manual horizontal FOV override in radians, e.g. 0.2")
+    parser.add_argument(
+        "--moge-root",
+        default=PIXAL3D_DEFAULT_MOGE_ROOT,
+        help="local converted MoGe safetensors root for auto-camera; default: %(default)s",
+    )
+    parser.add_argument(
+        "--moge-memory-profile",
+        choices=tuple(SAM3D_MOGE_MEMORY_PROFILES),
+        default=PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
+        help="MLX MoGe memory profile used when --manual-fov is omitted; default: %(default)s",
+    )
     parser.add_argument("--seed", type=int, default=PIXAL3D_DEFAULT_SEED, help="sampling seed; default: %(default)s")
     parser.add_argument(
         "--max-num-tokens",
@@ -148,6 +163,10 @@ def main(argv: list[str] | None = None) -> int:
         args.texture_bake_backend,
         "--dino-root",
         str(args.dino_root),
+        "--moge-root",
+        str(args.moge_root),
+        "--moge-memory-profile",
+        args.moge_memory_profile,
         "--naf-root",
         str(args.naf_root),
         "--naf-coordinate-chunk-size",

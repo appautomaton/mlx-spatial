@@ -16,7 +16,12 @@ from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot
 from .naf import NAF_DEFAULT_ROOT, load_naf_tensors, naf_conversion_command, prepare_naf_image_tensor, project_naf_features_at_points
 from .ovoxel import flexi_dual_grid_fields_to_mesh
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
-from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_select_hr_coordinates, pixal3d_stage_plan
+from .pixal3d_camera import (
+    pixal3d_camera_params_from_moge_intrinsics,
+    pixal3d_manual_camera_params,
+    pixal3d_select_hr_coordinates,
+    pixal3d_stage_plan,
+)
 from .pixal3d_export import (
     write_pixal3d_projection_npz,
     write_pixal3d_shape_decoder_npz,
@@ -37,6 +42,7 @@ from .pixal3d_projection import (
     project_pixal3d_points_to_image,
     select_pixal3d_projected_features_at_coordinates,
 )
+from .sam3d_moge import SAM3D_MOGE_DEFAULT_ROOT, SAM3D_MOGE_MEMORY_PROFILES, run_sam3d_moge_pointmap
 from .trellis2_decode import (
     read_structured_latent_decoder_config,
     run_shape_decoder_to_fields,
@@ -77,6 +83,8 @@ PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
 PIXAL3D_DEFAULT_NAF_ROOT = NAF_DEFAULT_ROOT
 PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
+PIXAL3D_DEFAULT_MOGE_ROOT = SAM3D_MOGE_DEFAULT_ROOT
+PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE = "balanced"
 
 Pixal3DStageStatus = Literal["ready", "blocked", "unimplemented"]
 
@@ -147,6 +155,8 @@ class Pixal3DInferencePipeline:
         texture_bake_backend: str = PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
         naf_root: str | Path | None = PIXAL3D_DEFAULT_NAF_ROOT,
         naf_coordinate_chunk_size: int = PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
+        moge_root: str | Path | None = PIXAL3D_DEFAULT_MOGE_ROOT,
+        moge_memory_profile: str = PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
         projection_hidden_states: mx.array | None = None,
         shape_lr_naf_feature_map: mx.array | None = None,
         shape_hr_naf_feature_map: mx.array | None = None,
@@ -172,6 +182,13 @@ class Pixal3DInferencePipeline:
                 "naf_root": str(naf_root) if naf_root is not None else None,
                 "coordinate_chunk_size": int(naf_coordinate_chunk_size),
                 "full_map_avoidance": True,
+            },
+            "moge_options": {
+                "moge_root": str(moge_root) if moge_root is not None else str(PIXAL3D_DEFAULT_MOGE_ROOT),
+                "memory_profile": moge_memory_profile,
+                "source": "existing MLX SAM3D MoGe pointmap/intrinsics runtime",
+                "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
+                "exact_upstream_v2_parity": False,
             },
         }
         started = time.perf_counter()
@@ -233,6 +250,22 @@ class Pixal3DInferencePipeline:
                 "validate Pixal3D NAF options",
                 f"naf_coordinate_chunk_size must be positive, got {naf_coordinate_chunk_size}",
                 {"naf_coordinate_chunk_size": naf_coordinate_chunk_size},
+                metadata=metadata,
+            )
+
+        if moge_memory_profile not in SAM3D_MOGE_MEMORY_PROFILES:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D MoGe memory profile",
+                f"unsupported MoGe memory profile: {moge_memory_profile}",
+                {"memory_profile": moge_memory_profile, "supported": tuple(SAM3D_MOGE_MEMORY_PROFILES)},
                 metadata=metadata,
             )
 
@@ -301,26 +334,7 @@ class Pixal3DInferencePipeline:
             "tex_slat": config.texture_slat_sampler,
         }
 
-        if manual_fov is None:
-            return self._blocked(
-                image_path,
-                completed,
-                pipeline_type,
-                manual_fov,
-                seed,
-                max_num_tokens,
-                output_path,
-                "camera-setup",
-                "estimate Pixal3D camera parameters",
-                "auto-camera through MoGe is not implemented for Pixal3D yet; pass --manual-fov",
-                {
-                    "manual_fov_required": True,
-                    "moge_model": "Ruicheng/moge-2-vitl",
-                    "upstream_function": "get_camera_params_wild_moge",
-                },
-                metadata=metadata,
-            )
-        if manual_fov <= 0:
+        if manual_fov is not None and manual_fov <= 0:
             return self._blocked(
                 image_path,
                 completed,
@@ -335,23 +349,132 @@ class Pixal3DInferencePipeline:
                 {"manual_fov": manual_fov},
                 metadata=metadata,
             )
-        try:
-            camera = pixal3d_manual_camera_params(manual_fov)
-        except ValueError as error:
-            return self._blocked(
-                image_path,
-                completed,
-                pipeline_type,
-                manual_fov,
-                seed,
-                max_num_tokens,
-                output_path,
-                "camera-setup",
-                "compute Pixal3D manual-FOV camera parameters",
-                str(error),
-                {"manual_fov": manual_fov},
-                metadata=metadata,
-            )
+
+        if manual_fov is None:
+            resolved_moge_root = Path(moge_root) if moge_root is not None else Path(PIXAL3D_DEFAULT_MOGE_ROOT)
+            try:
+                with Image.open(image_path) as pil_image:
+                    image_rgb_pil = pil_image.convert("RGB")
+                    image_rgb = np.array(image_rgb_pil, dtype=np.uint8)
+                    image_width = int(image_rgb_pil.width)
+            except (OSError, UnidentifiedImageError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "camera-setup",
+                    "prepare Pixal3D MoGe RGB input",
+                    f"failed to decode input image for MoGe auto-camera: {error}",
+                    {"image_path": str(image_path), "moge_root": str(resolved_moge_root)},
+                    metadata=metadata,
+                )
+            try:
+                moge_result = run_sam3d_moge_pointmap(
+                    image_rgb,
+                    root=resolved_moge_root,
+                    memory_profile=moge_memory_profile,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "camera-setup",
+                    "run MLX MoGe auto-camera",
+                    str(error),
+                    {"moge_root": str(resolved_moge_root), "memory_profile": moge_memory_profile},
+                    metadata=metadata,
+                )
+            if moge_result.blocker is not None or moge_result.pointmap is None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                blocker = moge_result.blocker
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "camera-setup",
+                    blocker.operation if blocker is not None else "run MLX MoGe auto-camera",
+                    blocker.reason if blocker is not None else "MLX MoGe completed without returning pointmap/intrinsics",
+                    {
+                        "moge_root": str(resolved_moge_root),
+                        "memory_profile": moge_memory_profile,
+                        "upstream_function": "get_camera_params_wild_moge",
+                        "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
+                        "mlx_source": "SAM3D MoGe converted pointmap/intrinsics runtime",
+                        **(blocker.metadata if blocker is not None else {}),
+                    },
+                    metadata=metadata,
+                )
+            try:
+                camera = pixal3d_camera_params_from_moge_intrinsics(
+                    moge_result.pointmap.intrinsics,
+                    image_width=image_width,
+                )
+            except ValueError as error:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "camera-setup",
+                    "compute Pixal3D camera parameters from MoGe intrinsics",
+                    str(error),
+                    {"image_width": image_width, "moge_root": str(resolved_moge_root), "memory_profile": moge_memory_profile},
+                    metadata=metadata,
+                )
+            metadata["camera_source"] = "moge"
+            metadata["moge_camera"] = {
+                "root": str(resolved_moge_root),
+                "memory_profile": moge_memory_profile,
+                "image_size": tuple(int(value) for value in image_rgb.shape[:2]),
+                "intrinsics": np.asarray(moge_result.pointmap.intrinsics, dtype=np.float32).tolist(),
+                "pointmap_metadata": dict(moge_result.pointmap.metadata),
+                "upstream_function": "get_camera_params_wild_moge",
+                "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
+                "exact_upstream_v2_parity": False,
+            }
+            clear_mlx_cache()
+        else:
+            try:
+                camera = pixal3d_manual_camera_params(manual_fov)
+            except ValueError as error:
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "camera-setup",
+                    "compute Pixal3D manual-FOV camera parameters",
+                    str(error),
+                    {"manual_fov": manual_fov},
+                    metadata=metadata,
+                )
+            metadata["camera_source"] = "manual_fov"
         completed.append("camera-setup")
         timings["camera-setup"] = time.perf_counter() - started
         metadata["camera"] = camera

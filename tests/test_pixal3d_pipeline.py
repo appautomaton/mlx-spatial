@@ -11,6 +11,8 @@ from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS, Pixal3DProjectionStageConfig
+from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
+from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
 from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
@@ -39,6 +41,114 @@ def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
     assert result.trace.metadata["stage_plan"].requested_hr_resolution == 1536
     assert "memory_before" in result.trace.metadata
     assert "memory_after" in result.trace.metadata
+
+
+def test_pixal3d_pipeline_manual_fov_does_not_invoke_moge(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"placeholder")
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + 32 * 32
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("manual FOV path must not invoke MoGe")
+
+    monkeypatch.setattr(pixal3d_inference, "run_sam3d_moge_pointmap", fail_if_called)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "sparse-structure-flow"
+    assert result.trace.metadata["camera_source"] == "manual_fov"
+
+
+def test_pixal3d_pipeline_uses_moge_auto_camera_when_manual_fov_omitted(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    Image.new("RGB", (16, 8), (128, 64, 32)).save(image)
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + 32 * 32
+    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
+    calls = {}
+
+    def fake_moge(image_rgb, *, root, memory_profile):
+        calls["shape"] = tuple(int(dim) for dim in image_rgb.shape)
+        calls["root"] = str(root)
+        calls["memory_profile"] = memory_profile
+        return Sam3dMogeResult(
+            pointmap=Sam3dMogePointmap(
+                pointmap=np.zeros((8, 16, 3), dtype=np.float32),
+                intrinsics=np.array([[2.5, 0.0, 0.5], [0.0, 2.5, 0.5], [0.0, 0.0, 1.0]], dtype=np.float32),
+                mask=np.ones((8, 16), dtype=bool),
+                depth=np.ones((8, 16), dtype=np.float32),
+                metadata={"fixture": True},
+            )
+        )
+
+    monkeypatch.setattr(pixal3d_inference, "run_sam3d_moge_pointmap", fake_moge)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        projection_hidden_states=hidden_states,
+        moge_root=tmp_path / "moge",
+        moge_memory_profile="safe",
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "sparse-structure-flow"
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "camera-setup",
+        "projection-conditioning:ss",
+        "artifact:sparse_projection",
+    )
+    assert calls == {"shape": (8, 16, 3), "root": str(tmp_path / "moge"), "memory_profile": "safe"}
+    assert result.trace.metadata["camera_source"] == "moge"
+    assert result.trace.metadata["camera"].camera_angle_x > 0
+    assert result.trace.metadata["moge_camera"]["root"] == str(tmp_path / "moge")
+    assert result.trace.metadata["moge_camera"]["memory_profile"] == "safe"
+    assert result.trace.metadata["moge_camera"]["exact_upstream_v2_parity"] is False
+
+
+def test_pixal3d_pipeline_reports_moge_camera_blocker_when_manual_fov_omitted(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_root(tmp_path / "weights")
+    image = tmp_path / "image.png"
+    Image.new("RGB", (16, 8), (128, 64, 32)).save(image)
+
+    def fake_blocked_moge(image_rgb, *, root, memory_profile):
+        return Sam3dMogeResult(
+            blocker=Sam3dAssetBlocker(
+                stage="moge-pointmap",
+                operation="validate converted MoGe safetensors checkpoint",
+                reason="fixture missing MoGe checkpoint",
+                metadata={"expected": str(Path(root) / "model.safetensors")},
+            )
+        )
+
+    monkeypatch.setattr(pixal3d_inference, "run_sam3d_moge_pointmap", fake_blocked_moge)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        moge_root=tmp_path / "missing-moge",
+        moge_memory_profile="balanced",
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "camera-setup"
+    assert result.trace.blocker.operation == "validate converted MoGe safetensors checkpoint"
+    assert result.trace.blocker.metadata["moge_root"] == str(tmp_path / "missing-moge")
+    assert result.trace.blocker.metadata["memory_profile"] == "balanced"
+    assert result.trace.blocker.metadata["expected"] == str(tmp_path / "missing-moge" / "model.safetensors")
+    assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config")
 
 
 def test_pixal3d_pipeline_reports_missing_dinov3_assets_with_manual_fov(tmp_path):

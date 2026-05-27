@@ -116,9 +116,11 @@ dependencies; they belong only to explicit `torch-ref` parity workflows.
 Entry point: `mlx_spatial.pixal3d:main`, exposed as `mlx-spatial-pixal3d`.
 
 Pixal3D is a projection-conditioned image-to-3D implementation track. The
-runtime currently validates TencentARC Pixal3D assets, computes manual-FOV
-camera params, runs sparse-stage DINOv3 hidden-state extraction through the
-shared MLX DINOv3 helper, builds view-aligned projection conditioning, supports
+runtime currently validates TencentARC Pixal3D assets, derives camera params
+from the existing converted MLX MoGe pointmap/intrinsics runtime when manual
+FOV is omitted, preserves manual-FOV camera params as an override, runs
+sparse-stage DINOv3 hidden-state extraction through the shared MLX DINOv3
+helper, builds view-aligned projection conditioning, supports
 `image_attn_mode="proj"` in the shared sparse-structure and SLat flow
 boundaries, can execute the sparse FlowEuler probe when assets are mapped,
 extracts sparse decoder coordinates when compatible sparse decoder assets are
@@ -128,13 +130,14 @@ coordinates through the shared shape decoder helper, runs the 1024 texture SLat
 probe, runs shared shape/texture decoder execution, reuses shared mesh
 extraction and texture baking, records cascade stage plans, and writes
 trace/NPZ intermediate artifacts plus a Pixal3D-labeled textured GLB after
-decoded tensors are available. MoGe auto-camera remains separate.
+decoded tensors are available. The auto-camera path is MoGe-derived through the
+available converted runtime and does not claim exact upstream MoGe v2 parity.
 
 Main modules:
 
 - `pixal3d.py`: CLI command routing for download, validate, inspect, probe, and generation.
 - `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
-- `pixal3d_camera.py`: upstream-compatible manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
+- `pixal3d_camera.py`: upstream-compatible MoGe-intrinsics and manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
 - `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and explicit NAF map override support.
 - `naf.py`: converted NAF safetensors loading, image encoder/RoPE, and coordinate-sampled neighborhood attention without Torch or NATTEN runtime imports.
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, shape-decoder, texture-decoder, and textured-GLB artifact writers.

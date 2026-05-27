@@ -183,10 +183,10 @@ uv run --group torch-ref python scripts/pixal3d/convert_naf.py \
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --moge-root weights/sam-3d-objects-mlx/moge \
   --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
-  --pipeline-type 1024_cascade \
-  --manual-fov 0.2
+  --pipeline-type 1024_cascade
 ```
 
 Pixal3D inputs:
@@ -194,6 +194,7 @@ Pixal3D inputs:
 - input: a single object-centric RGB/RGBA image
 - root: `weights/pixal3d`
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
+- MoGe root: `weights/sam-3d-objects-mlx/moge`
 - NAF root: `weights/naf`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 - output: `trace.json`; completed MLX intermediate boundaries write
@@ -214,12 +215,15 @@ Script defaults:
 - xatlas face guard: `auto`
 - xatlas parallel chunks: `0`
 - texture bake backend: `kdtree`
+- MoGe memory profile: `balanced`
 - NAF coordinate chunk size: `8192`
-- manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: missing converted NAF weights produce a structured
-  `naf-assets` blocker; with NAF present, downstream model asset readiness
-  determines how far the 512/1024 shape SLat, texture SLat, decoder, and GLB
-  export path can run
+- manual FOV: optional `--manual-fov 0.2` overrides MoGe auto-camera and does
+  not run MoGe
+- current blocker: missing converted MoGe weights produce a structured
+  `camera-setup` blocker when `--manual-fov` is omitted; missing converted NAF
+  weights produce a structured `naf-assets` blocker; with MoGe and NAF present,
+  downstream model asset readiness determines how far the 512/1024 shape SLat,
+  texture SLat, decoder, and GLB export path can run
 
 ### LiTo
 

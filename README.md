@@ -20,7 +20,7 @@ The package covers six model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | Pixal3D/DINOv3 safetensors plus converted NAF |
+| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | Pixal3D/DINOv3 safetensors plus converted NAF and MoGe |
 
 Choose by job:
 
@@ -51,14 +51,14 @@ Honest status:
 - MapAnything runs checkpoint-backed scene generation with the public
   `facebook/map-anything` weights. The supported artifact is a scene `.npz`
   tensor bundle, not a mesh or Gaussian splat export.
-- Pixal3D is partially wired: assets, manual camera, projection conditioning,
+- Pixal3D is partially wired: assets, MoGe-derived auto-camera via the existing
+  converted MLX MoGe runtime, manual FOV override, projection conditioning,
   projection attention, sparse FlowEuler probing, sparse decoder coordinates,
   MLX NAF-projected features from converted local NAF weights, 512/1024 shape
   SLat probing, shape decoder HR coordinate upsample, texture SLat probing,
   shared shape/texture decoder execution, cascade planning, trace output,
   sparse/shape/texture/decode NPZ artifacts, and textured GLB export after
-  decoded tensors are implemented. MoGe auto-camera remains separate; pass
-  manual FOV for now.
+  decoded tensors are implemented.
 
 ## Install
 
@@ -283,16 +283,18 @@ world points. The MLX file uses clean top-level keys and also records
 
 ### Pixal3D Implementation Track
 
-Use the vendored upstream sample image and explicit manual FOV:
+Use the vendored upstream sample image. By default, Pixal3D derives camera
+parameters from the converted MLX MoGe root; pass `--manual-fov 0.2` only when
+you want the explicit override.
 
 ```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --moge-root weights/sam-3d-objects-mlx/moge \
   --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
-  --pipeline-type 1024_cascade \
-  --manual-fov 0.2
+  --pipeline-type 1024_cascade
 ```
 
 Current expected output starts with `trace.json` plus `sparse_projection.npz`.
