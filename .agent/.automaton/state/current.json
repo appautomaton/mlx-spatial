@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-branched-cycle-repair",
+  "active_change": "2026-05-27-mlx-spatialkit-repair-cap-alignment",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-branched-cycle-repair/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-branched-cycle-repair/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-repair-cap-alignment/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-repair-cap-alignment/PLAN.md"
 }

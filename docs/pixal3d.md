@@ -325,17 +325,17 @@ bounded small-loop fill after simplification. The repair uses projected
 ear-clipping for closed boundary loops up to 8 edges by default, respects the
 remaining target-face budget, and rejects patches that would introduce
 degenerate, duplicate, or nonmanifold faces. If projected ear-clipping fails,
-a conservative centroid-fan fallback may fill loops up to 6 edges under the
-same guards. The repair also makes one bounded second pass and may fill small
-simple cycles, up to 4 edges, discovered inside branched open-boundary
-components. Diagnostics report the primary algorithm, fallback algorithm,
-method counts, branch-cycle counts, rejection reason counts, budget, and faces
-added. This addresses small geometry holes separately from xatlas chart parity,
-endpoint-chain repair, or open-boundary remeshing.
+a conservative centroid-fan fallback may fill loops up to the same 8-edge
+policy cap under the same guards. The repair also makes one bounded second pass
+and may fill small simple cycles, with a more conservative 6-edge policy cap,
+discovered inside branched open-boundary components. Diagnostics report policy
+caps, effective caps, method counts, branch-cycle counts, rejection reason
+counts, budget, and faces added. This addresses small geometry holes separately
+from xatlas chart parity, endpoint-chain repair, or open-boundary remeshing.
 The public export parameter `small_boundary_loop_fill_max_edges` defaults to
-`8` for this measured policy; the fallback stays internally capped at 6 edges,
-and `0` disables the fill when comparing geometry repair against the unpatched
-simplifier output.
+`8` for this measured policy, clamps the effective fallback and branched-cycle
+caps, and `0` disables the fill when comparing geometry repair against the
+unpatched simplifier output.
 For texture seam robustness, the native bake fills a bounded no-face gutter
 after UV-surface fill. The gutter copies RGB and metallic/roughness values into
 padding texels that can be touched by linear texture filtering, but keeps alpha

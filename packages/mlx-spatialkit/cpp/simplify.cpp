@@ -104,8 +104,8 @@ struct BackendSelection {
 
 constexpr const char *kSmallBoundaryLoopFillAlgorithm = "projected-ear-clipping";
 constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "centroid-fan";
-constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 6;
-constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 4;
+constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 8;
+constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 6;
 constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 2;
 
 enum class PatchRejectReason {
@@ -665,6 +665,10 @@ std::vector<std::vector<int64_t>> branched_component_cycles(
   return cycles;
 }
 
+int64_t effective_repair_cap(int64_t public_cap, int64_t policy_cap) {
+  return std::min(std::max<int64_t>(0, public_cap), policy_cap);
+}
+
 SmallLoopFillResult fill_small_boundary_loops_single_pass(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
@@ -675,6 +679,9 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
   if (result.face_budget <= 0 || result.mesh.faces.empty()) {
     return result;
   }
+  const int64_t fallback_max_edges = effective_repair_cap(max_loop_edges, kSmallBoundaryLoopFillFallbackMaxEdges);
+  const int64_t branched_cycle_max_edges =
+      effective_repair_cap(max_loop_edges, kSmallBoundaryBranchedCycleFillMaxEdges);
 
   std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> edge_counts =
       mesh_common::edge_counts(result.mesh.faces);
@@ -713,7 +720,7 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
     std::vector<std::array<int64_t, 3>> patch_faces = triangulate_loop_patch(result.mesh, loop);
     bool centroid_fan_patch = false;
     if (patch_faces.empty()) {
-      if (loop_edges > kSmallBoundaryLoopFillFallbackMaxEdges) {
+      if (loop_edges > fallback_max_edges) {
         result.loops_rejected += 1;
         result.loops_rejected_fallback_cap += 1;
         if (branched_cycle) {
@@ -890,8 +897,11 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
       continue;
     }
 
+    if (branched_cycle_max_edges < 3) {
+      continue;
+    }
     std::vector<std::vector<int64_t>> cycles =
-        branched_component_cycles(adjacency, component_vertices, kSmallBoundaryBranchedCycleFillMaxEdges);
+        branched_component_cycles(adjacency, component_vertices, branched_cycle_max_edges);
     for (const auto &cycle : cycles) {
       apply_loop_patch(cycle, true);
     }
@@ -1013,9 +1023,15 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loop_fill_algorithm"] = kSmallBoundaryLoopFillAlgorithm;
   stats["small_boundary_loop_fill_fallback_algorithm"] = kSmallBoundaryLoopFillFallbackAlgorithm;
   stats["small_boundary_loop_fill_fallback_enabled"] = enabled;
+  stats["small_boundary_loop_fill_fallback_policy_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
   stats["small_boundary_loop_fill_fallback_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
+  stats["small_boundary_loop_fill_fallback_effective_max_edges"] =
+      enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryLoopFillFallbackMaxEdges) : 0;
   stats["small_boundary_branched_cycle_fill_enabled"] = enabled;
+  stats["small_boundary_branched_cycle_fill_policy_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
   stats["small_boundary_branched_cycle_fill_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
+  stats["small_boundary_branched_cycle_fill_effective_max_edges"] =
+      enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryBranchedCycleFillMaxEdges) : 0;
   stats["small_boundary_loop_repair_max_passes"] = kSmallBoundaryLoopRepairMaxPasses;
   stats["small_boundary_loop_repair_pass_count"] = fill.repair_pass_count;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
