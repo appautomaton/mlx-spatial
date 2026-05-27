@@ -1,7 +1,7 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/SPEC.md",
+  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/PLAN.md"
 }

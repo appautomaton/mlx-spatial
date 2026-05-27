@@ -73,3 +73,20 @@ RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`
 high-water RSS. These numbers explain host-process memory behavior during
 stages such as `texture_bake` and `write_glb`; they are not full system memory
 pressure, Activity Monitor app-memory equivalence, or Metal allocator telemetry.
+
+For browser-rendered visual proof, keep the browser stack outside the package
+runtime and install it under `/tmp`:
+
+```bash
+npm install --prefix /tmp/mlx-spatialkit-render-deps playwright@1.60.0 three@0.181.2
+NODE_PATH=/tmp/mlx-spatialkit-render-deps/node_modules \
+  node ../../scripts/spatialkit/render_glb_visual_parity.cjs \
+  --candidate /tmp/export/model.glb \
+  --reference ../../inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/model.glb \
+  --output-dir /tmp/export/visual_parity/browser_render \
+  --visual-report /tmp/export/visual_parity/visual_parity.json
+```
+
+The script writes a browser screenshot, HTML report, and JSON checks under the
+given `/tmp` output directory. It proves that Chrome/Three.js can render both
+GLBs nonblank across fixed views; it is not exact perceptual scoring.

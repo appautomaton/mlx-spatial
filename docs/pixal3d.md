@@ -270,3 +270,13 @@ It records aggregate process RSS samples, observed per-stage RSS peaks, and
 `extract_mesh`, `texture_bake`, and `write_glb` within one run. It does not
 measure full system memory pressure, exact Activity Monitor app-memory values,
 MLX allocator state, or Metal heap residency.
+
+Browser-rendered visual proof is available as dev tooling, not a package
+runtime dependency. Install pinned Playwright/Three dependencies under `/tmp`
+and run `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated
+`model.glb` and the checked-in reference GLB. The script writes
+`browser_render_report.json`, `comparison.png`, and `index.html` under
+`visual_parity/browser_render/`; when the render checks pass, it augments
+`visual_parity.json` and removes only the browser-rendered-proof deferral. This
+still does not claim xatlas chart parity, 4096-texture parity, 1M-face setting
+parity, or exact perceptual equivalence.

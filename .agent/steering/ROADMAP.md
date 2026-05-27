@@ -60,6 +60,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-peak-memory-telemetry-gate/SPEC.md`
 - exit signal: Heavy reference-target export writes `diagnostics.memory.stage_peaks` under `/tmp`, with full package/root/build verification passing.
 
+## Phase 7: Browser Render Visual Proof Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate`
+- objective: Add dev-only browser-rendered screenshot proof for Pixal3D reference-target GLBs so visual comparability is backed by real browser rendering, not only GLB/texture metrics.
+- why now: The existing visual parity report passes deterministic checks but still explicitly defers browser-rendered visual proof.
+- likely outputs: Playwright/Three render script, `/tmp` screenshot/report artifacts, real fixture browser proof, augmented visual parity report, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/SPEC.md`
+- exit signal: Real reference-target export renders candidate/reference GLBs in Chrome, writes browser render artifacts under `/tmp`, and removes the browser-rendered proof deferral from the generated visual parity report.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

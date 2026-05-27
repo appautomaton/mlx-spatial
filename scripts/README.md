@@ -247,6 +247,11 @@ Script defaults:
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting.
+  For dev-only browser visual proof, install Playwright/Three under
+  `/tmp/mlx-spatialkit-render-deps` and run
+  `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated GLB
+  and checked-in reference GLB. It writes screenshot/JSON/HTML artifacts under
+  `visual_parity/browser_render/` and does not add package runtime deps.
 
 ### LiTo
 
