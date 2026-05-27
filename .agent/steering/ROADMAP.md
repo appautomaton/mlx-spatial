@@ -10,15 +10,25 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/SPEC.md`
 - exit signal: Fast package tests, heavy real fixture test, package artifact cleanliness check, and docs verification pass with generated artifacts under `/tmp`.
 
-## Phase 2: Production Remesh And Texture Parity
+## Phase 2: Reference-Target Readiness Gate
 
-- status: active
+- status: done
 - change: `2026-05-27-mlx-spatialkit-production-remesh-parity`
-- objective: Move spatialkit toward upstream-style production export quality with quality-aware native simplification/remeshing, higher face targets, and stronger texture parity.
-- why now: Deferred from the immediate sparse-color fix because full 1M-face / 4096-texture parity is larger than this hardening cycle.
-- likely outputs: Bounded native QEM/remesh implementation or equivalent, production quality tier, reference GLB/trace comparison, runtime/memory benchmarks.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/SPEC.md`
-- exit signal: Spatialkit real-fixture output is visually comparable to the intended Pixal3D export path at production-quality settings.
+- objective: Add a Pixal3D reference-target preset and threshold-gated production-readiness diagnostics so preview output cannot be mistaken for production parity.
+- why now: The preview spatial-cluster export is artifact-ready, but it needs a real reference-target gate before deeper native remesh/UV/texture work can be judged honestly.
+- likely outputs: Reference-target preset, threshold diagnostics, explicit native geometry blocker, real-fixture heavy gate, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-production-remesh-parity/SPEC.md`
+- exit signal: Reference-target heavy fixture passes as artifact-ready but keeps production readiness false with explicit threshold failures and `/tmp` artifacts.
+
+## Phase 3: Native Remesh And Texture Parity
+
+- status: pending
+- change:
+- objective: Improve the native remesh, UV, and texture path until spatialkit real-fixture output is visually comparable to the intended Pixal3D export path.
+- why now: Deferred from the readiness-gate cycle because current evidence shows face-count/topology can pass while preview-tier backend and global texture coverage still fail production thresholds.
+- likely outputs: Non-preview native remesh backend or equivalent, higher UV utilization, stronger Metal texture bake/fill path, production quality tier, runtime/memory benchmarks.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-production-remesh-parity/PLAN.md`
+- exit signal: Reference-target heavy fixture passes production thresholds or records a narrower verified blocker for the next native backend cycle.
 
 ## Deferred or Not Now
 

@@ -85,6 +85,47 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert "after_write_glb" in diagnostics["memory_samples"]
 
 
+@pytest.mark.heavy
+def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-reference-target-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="reference-target",
+        texture_size=1024,
+        min_component_faces=32,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+
+    assert diagnostics["settings"]["quality_preset"] == "reference-target"
+    assert diagnostics["settings"]["target_faces"] == 212_542
+    assert diagnostics["settings"]["target_faces_source"] == "reference_final_faces"
+    assert diagnostics["settings"]["reference_available"] is True
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is False
+    assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "blocked"
+    assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_blocked"
+    thresholds = diagnostics["quality"]["production_thresholds"]["checks"]
+    assert thresholds["reference_available"]["passed"] is True
+    assert thresholds["quality_preset"]["passed"] is True
+    assert thresholds["topology_exportability"]["passed"] is True
+    assert thresholds["face_count_ratio"]["passed"] is True
+    assert 0.80 <= thresholds["face_count_ratio"]["actual"] <= 1.25
+    assert thresholds["backend_tier"]["passed"] is False
+    assert thresholds["final_coverage_ratio"]["passed"] is False
+    assert thresholds["final_coverage_ratio"]["actual"] > 0.20
+    assert thresholds["raw_coverage_ratio"]["passed"] is True
+    assert "production_thresholds_failed" in diagnostics["result"]["quality_warnings"]
+    assert diagnostics["reference_comparison"]["reference_bake_backend"] == "xatlas-kdtree"
+    assert "after_write_glb" in diagnostics["memory_samples"]
+
+
 def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
     decoded_dir = tmp_path / "decoded"
     decoded_dir.mkdir()
@@ -148,6 +189,7 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert summary["production_quality_ready"] is False
     assert summary["simplifier_backend"] == "spatial-cluster"
     assert summary["simplifier_quality_tier"] == "geometry_aware_preview"
+    assert summary["native_geometry_candidate"]["status"] == "not_requested"
     assert "preview_simplifier_quality_tier" in summary["warnings"]
 
     blocked = _export_quality_summary(
@@ -159,6 +201,28 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert blocked["production_quality_ready"] is False
     assert blocked["export_blocking_reasons"] == ("nonmanifold_edges_present",)
     assert "export_blocking_reasons_present" in blocked["warnings"]
+
+    blocked_candidate = _export_quality_summary(
+        {
+            "backend": "spatial-cluster",
+            "quality_tier": "geometry_aware_preview",
+            "final_faces": 198_618,
+        },
+        {"export_blocking_reasons": []},
+        {"coverage_ratio": 0.75, "raw_coverage_ratio": 0.20},
+        {"final_faces": 212_542, "coverage_ratio": 1.0, "raw_coverage_ratio": 0.40},
+        quality_preset="reference-target",
+    )
+    assert blocked_candidate["artifact_ready"] is True
+    assert blocked_candidate["production_quality_ready"] is False
+    candidate = blocked_candidate["native_geometry_candidate"]
+    assert candidate["status"] == "blocked"
+    assert candidate["reason"] == "native_geometry_candidate_blocked"
+    assert candidate["detail"] == "reference-target export still uses a preview-tier native simplifier"
+    assert candidate["current_backend"] == "spatial-cluster"
+    assert candidate["current_quality_tier"] == "geometry_aware_preview"
+    assert candidate["face_count_ratio"] == pytest.approx(198_618 / 212_542)
+    assert candidate["topology_exportability_passed"] is True
 
     production = _export_quality_summary(
         {
@@ -173,6 +237,7 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     )
     assert production["artifact_ready"] is True
     assert production["production_quality_ready"] is True
+    assert production["native_geometry_candidate"]["status"] == "candidate"
     thresholds = production["production_thresholds"]
     assert thresholds["all_passed"] is True
     assert thresholds["checks"]["face_count_ratio"]["actual"] == pytest.approx(1.0)

@@ -236,8 +236,10 @@ Script defaults:
   the internal writer. Current spatialkit output is preview-quality: native
   Metal texture fallback/fill is enabled, while simplification is reported as
   `spatial-cluster` with `quality_tier=geometry_aware_preview`; diagnostics
-  compare against the checked-in Pixal3D reference trace when available and keep
-  `production_quality_ready=false`.
+  compare against the checked-in Pixal3D reference trace when available. The
+  companion API also exposes `quality_preset="reference-target"` for decoded NPZ
+  validation; it records production threshold pass/fail details and currently
+  keeps `production_quality_ready=false`.
 
 ### LiTo
 

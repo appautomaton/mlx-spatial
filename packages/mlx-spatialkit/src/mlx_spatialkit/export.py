@@ -672,9 +672,46 @@ def _export_quality_summary(
         "quality_preset": preset,
         "simplifier_backend": simplifier_backend,
         "simplifier_quality_tier": simplifier_quality,
+        "native_geometry_candidate": _native_geometry_candidate_status(simplify_stats, thresholds, preset),
         "export_blocking_reasons": blockers,
         "production_thresholds": thresholds,
         "warnings": tuple(warnings),
+    }
+
+
+def _native_geometry_candidate_status(
+    simplify_stats: dict[str, Any],
+    thresholds: dict[str, Any],
+    quality_preset: str,
+) -> dict[str, Any]:
+    checks = thresholds.get("checks", {})
+    backend_check = checks.get("backend_tier", {})
+    face_check = checks.get("face_count_ratio", {})
+    topology_check = checks.get("topology_exportability", {})
+    if quality_preset != "reference-target":
+        return {
+            "status": "not_requested",
+            "reason": "quality_preset_is_preview",
+            "current_backend": simplify_stats.get("backend"),
+            "current_quality_tier": simplify_stats.get("quality_tier"),
+        }
+    if bool(backend_check.get("passed")):
+        return {
+            "status": "candidate",
+            "reason": "native_geometry_candidate_available",
+            "current_backend": simplify_stats.get("backend"),
+            "current_quality_tier": simplify_stats.get("quality_tier"),
+            "face_count_ratio": face_check.get("actual"),
+            "topology_exportability_passed": bool(topology_check.get("passed")),
+        }
+    return {
+        "status": "blocked",
+        "reason": "native_geometry_candidate_blocked",
+        "detail": "reference-target export still uses a preview-tier native simplifier",
+        "current_backend": simplify_stats.get("backend"),
+        "current_quality_tier": simplify_stats.get("quality_tier"),
+        "face_count_ratio": face_check.get("actual"),
+        "topology_exportability_passed": bool(topology_check.get("passed")),
     }
 
 

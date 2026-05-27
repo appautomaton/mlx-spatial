@@ -51,6 +51,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-production-remesh-parity/DESIGN.md`. 
 
 **Touches:** `packages/mlx-spatialkit/cpp/simplify.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/mesh.py`, `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests/test_mesh_processing.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`
 
+**Status:** complete
+**Evidence:** Added `native_geometry_candidate` diagnostics in `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`. For preview/default exports it reports `not_requested`; for `quality_preset="reference-target"` with the current `spatial-cluster` backend it reports `status=blocked`, `reason=native_geometry_candidate_blocked`, current backend/tier, face-count ratio, and topology pass state. This keeps the production preset honest until a non-preview native remesh backend exists. Existing native mesh tests still prove the current C++ path consumes structured geometry and returns export-clean topology. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `11 passed, 1 deselected`.
+**Risks / next:** Slice 3 must run the heavy reference-target preset and document that the current blocker is explicit, not production-ready.
+
 ### Slice 3: Real Fixture Production-Preset Gate And Docs
 
 **Objective:** Verify the reference-target preset on the real Pixal3D fixture, document the production-readiness boundary, and keep package/root artifacts clean.
@@ -66,6 +70,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-production-remesh-parity/DESIGN.md`. 
 **Depends on:** Slice 2
 
 **Touches:** `packages/mlx-spatialkit/README.md`, `docs/pixal3d.md`, `scripts/README.md`, package tests, root Pixal3D tests as needed
+
+**Status:** complete
+**Evidence:** Added a heavy reference-target fixture test in `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py` and documented the preset/threshold boundary in `packages/mlx-spatialkit/README.md`, `docs/pixal3d.md`, and `scripts/README.md`. Full verification passed: `git diff --check`; package tests `41 passed, 2 deselected`; heavy real fixture tests `2 passed, 3 deselected`; root Pixal3D tests `35 passed`; package build passed; wheel/sdist artifact inspection returned `bad=[]`. Latest reference-target heavy diagnostics at `/tmp/mlx-spatialkit-reference-target-export-16970/diagnostics.json` show `artifact_ready=true`, `production_quality_ready=false`, `target_faces=212542`, `target_faces_source=reference_final_faces`, native geometry candidate `blocked`, face-count threshold ratio `0.9344882423238701` passed, topology passed, final coverage ratio `0.26881885528564453` failed, raw coverage ratio `0.028096823847337898` reported, and `after_write_glb` RSS about `3.53 GB`.
+**Risks / next:** Production readiness correctly remains false; next cycle should improve the native remesh/UV/texture path rather than relaxing thresholds.
 
 ## Requirement Traceability
 
