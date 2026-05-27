@@ -45,6 +45,7 @@ struct BakeConfig {
   int32_t grid_z;
   int32_t grid_y;
   int32_t grid_x;
+  uint32_t fallback_radius;
 };
 
 struct VoxelRecord {
@@ -280,6 +281,80 @@ id<MTLBuffer> make_output_buffer(id<MTLDevice> device, size_t bytes, NSString *l
   return buffer;
 }
 
+int64_t dilate_missing_surface_texels(
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness,
+    std::vector<uint8_t> &coverage,
+    int64_t texture_size,
+    int64_t max_passes,
+    int64_t *passes_run) {
+  const size_t side = checked_size(static_cast<uint64_t>(texture_size), "texture dilation side");
+  int64_t total_filled = 0;
+  *passes_run = 0;
+  for (int64_t pass = 0; pass < max_passes; ++pass) {
+    std::vector<uint8_t> next_base = base_color;
+    std::vector<uint8_t> next_mr = metallic_roughness;
+    std::vector<uint8_t> next_coverage = coverage;
+    int64_t pass_filled = 0;
+    for (size_t y = 0; y < side; ++y) {
+      for (size_t x = 0; x < side; ++x) {
+        const size_t texel = y * side + x;
+        if (coverage[texel] != 2 && coverage[texel] != 3) {
+          continue;
+        }
+        bool found = false;
+        size_t source = 0;
+        for (int dy = -1; dy <= 1 && !found; ++dy) {
+          const int64_t sy = static_cast<int64_t>(y) + dy;
+          if (sy < 0 || sy >= texture_size) {
+            continue;
+          }
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int64_t sx = static_cast<int64_t>(x) + dx;
+            if (sx < 0 || sx >= texture_size) {
+              continue;
+            }
+            const size_t neighbor = static_cast<size_t>(sy) * side + static_cast<size_t>(sx);
+            if (coverage[neighbor] == 1 || coverage[neighbor] == 4) {
+              source = neighbor;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          continue;
+        }
+        const size_t dst_base = texel * 4;
+        const size_t src_base = source * 4;
+        next_base[dst_base + 0] = base_color[src_base + 0];
+        next_base[dst_base + 1] = base_color[src_base + 1];
+        next_base[dst_base + 2] = base_color[src_base + 2];
+        next_base[dst_base + 3] = base_color[src_base + 3];
+        const size_t dst_mr = texel * 3;
+        const size_t src_mr = source * 3;
+        next_mr[dst_mr + 0] = metallic_roughness[src_mr + 0];
+        next_mr[dst_mr + 1] = metallic_roughness[src_mr + 1];
+        next_mr[dst_mr + 2] = metallic_roughness[src_mr + 2];
+        next_coverage[texel] = 4;
+        pass_filled += 1;
+      }
+    }
+    if (pass_filled == 0) {
+      break;
+    }
+    base_color.swap(next_base);
+    metallic_roughness.swap(next_mr);
+    coverage.swap(next_coverage);
+    total_filled += pass_filled;
+    *passes_run = pass + 1;
+  }
+  return total_filled;
+}
+
 }  // namespace
 
 bool metal_device_available() {
@@ -428,6 +503,7 @@ nb::dict bake_pbr_texture_metal(
         grid_z,
         grid_y,
         grid_x,
+        12,
     };
 
     id<MTLBuffer> vertex_buffer = make_buffer(device, vertices.data(), vertices.size() * sizeof(float), @"mlx-spatialkit vertices");
@@ -477,33 +553,84 @@ nb::dict bake_pbr_texture_metal(
     std::vector<uint8_t> metallic_roughness(mr_ptr, mr_ptr + mr_bytes);
     std::vector<uint8_t> coverage(coverage_ptr, coverage_ptr + coverage_bytes);
 
+    int64_t exact_missing_before_fill = 0;
+    for (uint8_t value : coverage) {
+      if (value == 2 || value == 4) {
+        exact_missing_before_fill += 1;
+      }
+    }
+    int64_t dilation_passes = 0;
+    const int64_t dilation_filled = dilate_missing_surface_texels(
+        base_color,
+        metallic_roughness,
+        coverage,
+        texture_size,
+        8,
+        &dilation_passes);
+
+    int64_t no_face = 0;
     int64_t sampled = 0;
+    int64_t fallback_filled = 0;
     int64_t missing = 0;
     int64_t out_of_grid = 0;
     for (uint8_t value : coverage) {
-      if (value == 1) {
+      if (value == 0) {
+        no_face += 1;
+      } else if (value == 1) {
         sampled += 1;
       } else if (value == 2) {
         missing += 1;
       } else if (value == 3) {
         out_of_grid += 1;
+      } else if (value == 4) {
+        fallback_filled += 1;
       }
     }
+    int64_t visible_base_color = 0;
+    int64_t nonzero_rgb = 0;
+    for (uint64_t pixel = 0; pixel < pixel_count; ++pixel) {
+      const size_t offset = static_cast<size_t>(pixel) * 4;
+      if (base_color[offset + 3] != 0) {
+        visible_base_color += 1;
+      }
+      if (base_color[offset + 0] != 0 || base_color[offset + 1] != 0 || base_color[offset + 2] != 0) {
+        nonzero_rgb += 1;
+      }
+    }
+    const int64_t surface = sampled + missing + out_of_grid + fallback_filled;
+    const int64_t exact_missing = exact_missing_before_fill;
+    const double pixel_denominator = static_cast<double>(pixel_count);
+    const double surface_denominator = surface > 0 ? static_cast<double>(surface) : 1.0;
 
     nb::dict stats;
     stats["backend"] = atlas_cols > 0 && atlas_rows > 0 ? "metal-face-atlas-nearest" : "metal-uv-nearest";
     stats["metal_device"] = metal_device_name();
     stats["texture_size"] = texture_size;
+    stats["texture_pixel_count"] = static_cast<int64_t>(pixel_count);
     stats["voxel_count"] = static_cast<int64_t>(records.size());
+    stats["no_face_texel_count"] = no_face;
+    stats["uv_surface_texel_count"] = surface;
+    stats["exact_sampled_texel_count"] = sampled;
     stats["sampled_texel_count"] = sampled;
+    stats["fallback_filled_texel_count"] = fallback_filled;
+    stats["dilation_filled_texel_count"] = dilation_filled;
+    stats["dilation_pass_count"] = dilation_passes;
+    stats["exact_missing_texel_count"] = exact_missing;
     stats["missing_texel_count"] = missing;
     stats["out_of_grid_texel_count"] = out_of_grid;
-    stats["raw_coverage_ratio"] = static_cast<double>(sampled) / static_cast<double>(pixel_count);
-    stats["coverage_ratio"] = static_cast<double>(sampled) / static_cast<double>(pixel_count);
+    stats["visible_base_color_texel_count"] = visible_base_color;
+    stats["nonzero_rgb_texel_count"] = nonzero_rgb;
+    stats["raw_coverage_ratio"] = static_cast<double>(sampled) / pixel_denominator;
+    stats["final_visible_coverage_ratio"] = static_cast<double>(visible_base_color) / pixel_denominator;
+    stats["uv_surface_exact_coverage_ratio"] = static_cast<double>(sampled) / surface_denominator;
+    stats["uv_surface_final_visible_coverage_ratio"] = static_cast<double>(visible_base_color) / surface_denominator;
+    stats["coverage_ratio"] = static_cast<double>(visible_base_color) / pixel_denominator;
     stats["origin"] = nb::make_tuple(origin[0], origin[1], origin[2]);
     stats["voxel_size"] = resolved_voxel_size;
     stats["atlas_cols"] = atlas_cols;
     stats["atlas_rows"] = atlas_rows;
+    stats["fallback_radius"] = config.fallback_radius;
+    stats["dilation_max_passes"] = 8;
 
     nb::dict result;
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);

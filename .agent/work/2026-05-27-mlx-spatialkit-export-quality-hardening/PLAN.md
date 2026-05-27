@@ -33,6 +33,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 
 **Touches:** `packages/mlx-spatialkit/metal/texture_bake.mm`, `packages/mlx-spatialkit/metal/kernels/texture_bake.metal`, `packages/mlx-spatialkit/src/mlx_spatialkit/texture.py`, `packages/mlx-spatialkit/tests/test_texture_bake.py`
 
+**Status:** complete
+**Evidence:** Added native texture diagnostics in `packages/mlx-spatialkit/metal/texture_bake.mm` for texture pixel count, no-face texels, UV surface texels, exact sampled texels, fallback-filled texels, exact/missing texels, visible base-color texels, nonzero RGB texels, raw coverage, final visible coverage, and UV-surface coverage ratios. Expanded `packages/mlx-spatialkit/tests/test_texture_bake.py` to assert the new stats and cover missing sparse surface texels separately from no-face texels. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_texture_bake.py -q` passed with `5 passed`.
+**Risks / next:** Slice 2 must change native bake behavior so missing surface texels can be filled instead of only reported.
+
 ### Slice 2: Native Texture Fill/Fallback
 
 **Objective:** Fill missing UV-rasterized surface texels through a native fallback path so the base-color texture is visually coherent instead of sparse dots.
@@ -48,6 +52,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 **Depends on:** Slice 1
 
 **Touches:** `packages/mlx-spatialkit/metal`, `packages/mlx-spatialkit/cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/texture.py`, `packages/mlx-spatialkit/tests`
+
+**Status:** complete
+**Evidence:** Added bounded neighbor sparse-voxel fallback directly in `packages/mlx-spatialkit/metal/kernels/texture_bake.metal`: exact hits remain coverage status `1`, fallback-filled surface texels become status `4`, and unfilled exact misses remain status `2`. Updated `packages/mlx-spatialkit/metal/texture_bake.mm` to count fallback fills, exact misses, final visible coverage, and fallback radius. Updated texture tests to assert fallback-filled texels receive visible alpha and improve UV-surface visible coverage. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_texture_bake.py tests/test_glb_writer.py -q` passed with `10 passed`.
+**Risks / next:** Slice 3 must verify the embedded GLB baseColor PNG payload so array-level texture success cannot hide a bad exported GLB.
 
 ### Slice 3: GLB Embedded Texture Quality Gate
 
@@ -65,6 +73,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 
 **Touches:** `packages/mlx-spatialkit/tests/test_glb_writer.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`, optional test helper under `packages/mlx-spatialkit/tests/`
 
+**Status:** complete
+**Evidence:** Added `packages/mlx-spatialkit/tests/glb_texture_utils.py` to parse GLB JSON/BIN chunks, extract embedded image payloads, decode the package writer's PNG format, and compute RGB/alpha coverage without external viewers. Updated `tests/test_glb_writer.py` to assert embedded baseColor PNG coverage on synthetic GLBs. Updated `tests/test_real_pixal3d_export.py` so the heavy real-fixture check compares diagnostics coverage to embedded baseColor PNG coverage and rejects sparse outputs. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_glb_writer.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `6 passed, 1 deselected`.
+**Risks / next:** Slice 4 must run the heavy turtle fixture and may expose whether fallback radius or coverage thresholds need adjustment.
+
 ### Slice 4: Real Turtle Export Quality Verification
 
 **Objective:** Run the real decoded Pixal3D turtle fixture through spatialkit and prove the output is visually coherent by diagnostics and embedded texture inspection.
@@ -80,6 +92,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 **Depends on:** Slice 3
 
 **Touches:** `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`, `/tmp/mlx-spatialkit-*`
+
+**Status:** complete
+**Evidence:** Ran the real turtle fixture through spatialkit after native sparse-neighbor fallback and dilation. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy` passed with `1 passed, 1 deselected`. The generated artifact was `/tmp/mlx-spatialkit-real-pixal3d-export-5723/model.glb` with diagnostics at `/tmp/mlx-spatialkit-real-pixal3d-export-5723/diagnostics.json`. Texture diagnostics showed raw exact coverage `0.011466`, final visible full-texture coverage `0.193770`, UV-surface final visible coverage `0.567126`, fallback radius `12`, texture bake time about `0.98s`, and after-write RSS about `3.25 GB`.
+**Risks / next:** The output is now materially colored instead of sparse dots, but the mesh simplifier remains a preview-quality face-stride reducer; Slice 5 must make that explicit and prevent production-readiness claims.
 
 ### Slice 5: Mesh Simplifier Quality Tier And Export Readiness Semantics
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
+from glb_texture_utils import glb_image_payload, png_coverage
 
 
 def _repo_root() -> Path:
@@ -48,7 +49,20 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert diagnostics["stages"]["simplify_mesh"]["simplified_faces"] == 50_000
     assert diagnostics["stages"]["uv"]["stats"]["backend"] == "face-atlas"
     assert diagnostics["stages"]["texture_bake"]["stats"]["backend"] == "metal-face-atlas-nearest"
-    assert diagnostics["stages"]["texture_bake"]["stats"]["sampled_texel_count"] > 0
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    assert texture_stats["sampled_texel_count"] > 0
+    assert texture_stats["fallback_filled_texel_count"] > 0
+    assert texture_stats["uv_surface_texel_count"] > texture_stats["sampled_texel_count"]
+    assert texture_stats["final_visible_coverage_ratio"] > texture_stats["raw_coverage_ratio"]
+    assert texture_stats["final_visible_coverage_ratio"] > 0.10
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] > 0.50
+    base_color_coverage = png_coverage(glb_image_payload(result.glb.path.read_bytes(), "baseColorTexture"))
+    assert base_color_coverage.alpha_coverage_ratio > 0.10
+    assert base_color_coverage.rgb_coverage_ratio > 0.10
+    assert base_color_coverage.alpha_coverage_ratio == pytest.approx(
+        texture_stats["final_visible_coverage_ratio"],
+        abs=0.005,
+    )
     assert diagnostics["stages"]["write_glb"]["artifact"]["mesh_name"] == "Pixal3D_TexturedMesh"
     assert "after_write_glb" in diagnostics["memory_samples"]
 

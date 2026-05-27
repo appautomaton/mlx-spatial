@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from mlx_spatialkit import NativeUvMesh, make_face_atlas_uvs, textured_glb_payload, write_textured_glb
+from glb_texture_utils import glb_image_payload, png_coverage
 
 
 def _fixture_mesh() -> tuple[np.ndarray, np.ndarray]:
@@ -119,6 +120,13 @@ def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> 
         start = view["byteOffset"]
         end = start + view["byteLength"]
         assert bin_blob[start:end].startswith(b"\x89PNG\r\n\x1a\n")
+    coverage = png_coverage(glb_image_payload(payload, "baseColorTexture"))
+    assert coverage.width == 2
+    assert coverage.height == 2
+    assert coverage.channels == 4
+    assert coverage.alpha_nonzero_count == 4
+    assert coverage.rgb_nonzero_count == 4
+    assert coverage.alpha_coverage_ratio == 1.0
 
 
 def test_write_textured_glb_writes_payload_and_metadata(tmp_path) -> None:

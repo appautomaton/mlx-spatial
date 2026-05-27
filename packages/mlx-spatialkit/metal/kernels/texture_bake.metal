@@ -19,6 +19,7 @@ struct BakeConfig {
   int grid_z;
   int grid_y;
   int grid_x;
+  uint fallback_radius;
 };
 
 static inline bool barycentric_uv(float2 p, float2 a, float2 b, float2 c, thread float3 &weights) {
@@ -52,6 +53,70 @@ static inline int find_voxel_key(device const ulong *keys, uint count, ulong key
     return int(left);
   }
   return -1;
+}
+
+static inline int find_nearest_voxel_key(
+    device const ulong *keys,
+    uint count,
+    int center_x,
+    int center_y,
+    int center_z,
+    constant BakeConfig &config) {
+  int best_index = -1;
+  int best_distance = 2147483647;
+  int radius = int(config.fallback_radius);
+  for (int dz = -radius; dz <= radius; ++dz) {
+    int z = center_z + dz;
+    if (z < 0 || z >= config.grid_z) {
+      continue;
+    }
+    for (int dy = -radius; dy <= radius; ++dy) {
+      int y = center_y + dy;
+      if (y < 0 || y >= config.grid_y) {
+        continue;
+      }
+      for (int dx = -radius; dx <= radius; ++dx) {
+        int x = center_x + dx;
+        if (x < 0 || x >= config.grid_x) {
+          continue;
+        }
+        ulong key = ulong(z) * config.stride_z + ulong(y) * config.stride_y + ulong(x) * config.stride_x;
+        int voxel_index = find_voxel_key(keys, count, key);
+        if (voxel_index < 0) {
+          continue;
+        }
+        int distance = dx * dx + dy * dy + dz * dz;
+        if (distance < best_distance) {
+          best_distance = distance;
+          best_index = voxel_index;
+        }
+      }
+    }
+  }
+  return best_index;
+}
+
+static inline void write_pbr_texel(
+    device const float *voxel_attributes,
+    uint voxel_index,
+    uint texel,
+    device uchar *base_color_rgba,
+    device uchar *metallic_roughness) {
+  device const float *attr = voxel_attributes + voxel_index * 6;
+  float r = clamp(attr[0], 0.0f, 1.0f);
+  float g = clamp(attr[1], 0.0f, 1.0f);
+  float bch = clamp(attr[2], 0.0f, 1.0f);
+  float metallic = clamp(attr[3], 0.0f, 1.0f);
+  float roughness = clamp(attr[4], 0.0f, 1.0f);
+  float alpha = clamp(attr[5], 0.0f, 1.0f);
+
+  base_color_rgba[texel * 4 + 0] = uchar(r * 255.0f + 0.5f);
+  base_color_rgba[texel * 4 + 1] = uchar(g * 255.0f + 0.5f);
+  base_color_rgba[texel * 4 + 2] = uchar(bch * 255.0f + 0.5f);
+  base_color_rgba[texel * 4 + 3] = uchar(alpha * 255.0f + 0.5f);
+  metallic_roughness[texel * 3 + 0] = 0;
+  metallic_roughness[texel * 3 + 1] = uchar(roughness * 255.0f + 0.5f);
+  metallic_roughness[texel * 3 + 2] = uchar(metallic * 255.0f + 0.5f);
 }
 
 kernel void mlx_spatialkit_bake_pbr_texture(
@@ -138,24 +203,16 @@ kernel void mlx_spatialkit_bake_pbr_texture(
   ulong key = ulong(z) * config.stride_z + ulong(y) * config.stride_y + ulong(x) * config.stride_x;
   int voxel_index = find_voxel_key(voxel_keys, config.voxel_count, key);
   if (voxel_index < 0) {
-    coverage[texel] = 2;
+    voxel_index = find_nearest_voxel_key(voxel_keys, config.voxel_count, x, y, z, config);
+    if (voxel_index < 0) {
+      coverage[texel] = 2;
+      return;
+    }
+    coverage[texel] = 4;
+    write_pbr_texel(voxel_attributes, uint(voxel_index), texel, base_color_rgba, metallic_roughness);
     return;
   }
 
-  device const float *attr = voxel_attributes + uint(voxel_index) * 6;
-  float r = clamp(attr[0], 0.0f, 1.0f);
-  float g = clamp(attr[1], 0.0f, 1.0f);
-  float bch = clamp(attr[2], 0.0f, 1.0f);
-  float metallic = clamp(attr[3], 0.0f, 1.0f);
-  float roughness = clamp(attr[4], 0.0f, 1.0f);
-  float alpha = clamp(attr[5], 0.0f, 1.0f);
-
   coverage[texel] = 1;
-  base_color_rgba[texel * 4 + 0] = uchar(r * 255.0f + 0.5f);
-  base_color_rgba[texel * 4 + 1] = uchar(g * 255.0f + 0.5f);
-  base_color_rgba[texel * 4 + 2] = uchar(bch * 255.0f + 0.5f);
-  base_color_rgba[texel * 4 + 3] = uchar(alpha * 255.0f + 0.5f);
-  metallic_roughness[texel * 3 + 0] = 0;
-  metallic_roughness[texel * 3 + 1] = uchar(roughness * 255.0f + 0.5f);
-  metallic_roughness[texel * 3 + 2] = uchar(metallic * 255.0f + 0.5f);
+  write_pbr_texel(voxel_attributes, uint(voxel_index), texel, base_color_rgba, metallic_roughness);
 }
