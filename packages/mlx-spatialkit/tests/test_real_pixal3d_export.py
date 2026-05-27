@@ -12,6 +12,7 @@ from mlx_spatialkit.export import (
     _export_quality_summary,
     _glb_viewer_compatibility_summary,
     _native_chart_uv_candidate_status,
+    _production_equivalence_summary,
     _resolve_pixal3d_export_settings,
     _resolve_tile_padding,
     _resolve_pixal3d_uv_backend,
@@ -280,9 +281,25 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert diagnostics["settings"]["reference_available"] is True
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
+    assert diagnostics["result"]["production_equivalence_ready"] is False
+    assert diagnostics["result"]["remaining_parity_boundaries"] == [
+        "not_xatlas_chart_parity",
+        "not_1m_face_export_setting_parity",
+    ]
+    assert diagnostics["result"]["equivalence_blockers"] == [
+        "upstream_export_settings_not_ready",
+        "xatlas_chart_parity_not_ready",
+        "deferred_parity_boundaries_present",
+    ]
     assert diagnostics["result"]["quality_warnings"] == []
     assert diagnostics["quality"]["upstream_export_settings"]["all_passed"] is False
     assert diagnostics["quality"]["upstream_export_settings"]["checks"]["target_faces"]["passed"] is False
+    equivalence = diagnostics["quality"]["production_equivalence"]
+    assert equivalence["ready"] is False
+    assert equivalence["scalar_production_quality_ready"] is True
+    assert equivalence["upstream_export_settings_ready"] is False
+    assert equivalence["xatlas_chart_parity_ready"] is False
+    assert equivalence["visual_comparison_ready"] is True
     assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "candidate"
     assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_available"
@@ -364,6 +381,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     diagnostics = json.loads(result.diagnostics_path.read_text())
 
     assert result.glb.path == output_dir / "model.glb"
+    assert diagnostics["stages"]["write_glb"]["artifact"]["production_equivalence_ready"] is False
     assert diagnostics["settings"]["quality_preset"] == "reference-target"
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
     assert diagnostics["settings"]["target_faces"] == 212_542
@@ -372,9 +390,25 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 3
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
+    assert diagnostics["result"]["production_equivalence_ready"] is False
+    assert diagnostics["result"]["remaining_parity_boundaries"] == [
+        "not_xatlas_chart_parity",
+        "not_1m_face_export_setting_parity",
+    ]
+    assert diagnostics["result"]["equivalence_blockers"] == [
+        "upstream_export_settings_not_ready",
+        "xatlas_chart_parity_not_ready",
+        "deferred_parity_boundaries_present",
+    ]
     assert diagnostics["result"]["quality_warnings"] == []
     assert diagnostics["quality"]["upstream_export_settings"]["all_passed"] is False
     assert diagnostics["quality"]["upstream_export_settings"]["checks"]["target_faces"]["passed"] is False
+    equivalence = diagnostics["quality"]["production_equivalence"]
+    assert equivalence["ready"] is False
+    assert equivalence["scalar_production_quality_ready"] is True
+    assert equivalence["upstream_export_settings_ready"] is False
+    assert equivalence["xatlas_chart_parity_ready"] is False
+    assert equivalence["visual_comparison_ready"] is True
 
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
     assert simplify_stats["small_boundary_loop_fill_enabled"] is True
@@ -541,6 +575,9 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     assert diagnostics["settings"]["texture_size"] == 4096
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is False
+    assert diagnostics["result"]["production_equivalence_ready"] is False
+    assert diagnostics["result"]["remaining_parity_boundaries"] == ["not_xatlas_chart_parity"]
+    assert "xatlas_chart_parity_not_ready" in diagnostics["result"]["equivalence_blockers"]
     assert upstream["all_passed"] is True
     assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     for check in upstream["checks"].values():
@@ -602,6 +639,9 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is False
+    assert diagnostics["result"]["production_equivalence_ready"] is False
+    assert diagnostics["result"]["remaining_parity_boundaries"] == ["not_xatlas_chart_parity"]
+    assert "xatlas_chart_parity_not_ready" in diagnostics["result"]["equivalence_blockers"]
     assert diagnostics["result"]["quality_warnings"] == ["production_thresholds_failed"]
 
     assert upstream["all_passed"] is True
@@ -861,6 +901,65 @@ def test_upstream_export_settings_summary_separates_setting_readiness_from_refer
     assert failing["all_passed"] is False
     assert failing["checks"]["target_faces"]["passed"] is False
     assert failing["checks"]["texture_size"]["passed"] is False
+
+
+def test_production_equivalence_summary_keeps_parity_boundaries_strict() -> None:
+    quality = {
+        "artifact_ready": True,
+        "production_quality_ready": True,
+        "upstream_export_settings": {"all_passed": False},
+        "xatlas_chart_parity": {"parity_ready": False},
+    }
+    visual = {
+        "summary": {"all_passed": True},
+        "deferred_parity_boundaries": ["not_xatlas_chart_parity", "not_1m_face_export_setting_parity"],
+    }
+
+    summary = _production_equivalence_summary(quality, visual)
+
+    assert summary["ready"] is False
+    assert summary["artifact_ready"] is True
+    assert summary["scalar_production_quality_ready"] is True
+    assert summary["upstream_export_settings_ready"] is False
+    assert summary["xatlas_chart_parity_ready"] is False
+    assert summary["visual_comparison_available"] is True
+    assert summary["visual_comparison_ready"] is True
+    assert summary["remaining_parity_boundaries"] == (
+        "not_xatlas_chart_parity",
+        "not_1m_face_export_setting_parity",
+    )
+    assert summary["blockers"] == (
+        "upstream_export_settings_not_ready",
+        "xatlas_chart_parity_not_ready",
+        "deferred_parity_boundaries_present",
+    )
+    assert summary["checks"]["remaining_parity_boundaries"]["passed"] is False
+
+    missing_visual = _production_equivalence_summary(
+        {
+            "artifact_ready": True,
+            "production_quality_ready": True,
+            "upstream_export_settings": {"all_passed": True},
+            "xatlas_chart_parity": {"parity_ready": False},
+        },
+        None,
+    )
+    assert missing_visual["ready"] is False
+    assert missing_visual["remaining_parity_boundaries"] == ("not_xatlas_chart_parity",)
+    assert "visual_comparison_missing" in missing_visual["blockers"]
+
+    ready = _production_equivalence_summary(
+        {
+            "artifact_ready": True,
+            "production_quality_ready": True,
+            "upstream_export_settings": {"all_passed": True},
+            "xatlas_chart_parity": {"parity_ready": True},
+        },
+        {"summary": {"all_passed": True}, "deferred_parity_boundaries": []},
+    )
+    assert ready["ready"] is True
+    assert ready["remaining_parity_boundaries"] == ()
+    assert ready["blockers"] == ()
 
 
 def test_native_chart_uv_candidate_status_reports_readiness_states() -> None:

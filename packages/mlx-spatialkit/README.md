@@ -105,6 +105,10 @@ Chart exports report separate artifact and quality readiness under
 artifact-ready and quality-ready for the scalar native-chart coverage checks
 after UV-surface fill, while still reporting raw/exact coverage and keeping
 `xatlas_chart_parity=false`.
+Full Pixal3D production equivalence is stricter:
+`quality.production_equivalence.ready` and
+`result.production_equivalence_ready` stay false while xatlas chart parity,
+upstream 1M/4096 settings, or visual-comparison boundaries remain open.
 With `quality_preset="reference-target"` and `uv_backend="native-chart"`, the
 real fixture now also passes production threshold checks and deterministic
 visual comparison against the checked-in reference GLB. This is a native-chart
@@ -162,9 +166,12 @@ face-count ratio, raw/final texture coverage, and backend tier. The current
 reference-target heavy fixture passes face-count, topology, and final global
 coverage thresholds, with final visible coverage around `0.602` versus the older
 one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
-gate with `production_quality_ready=true`. The opt-in native-chart reference
-target path also passes production and deterministic visual-comparison checks
-while keeping xatlas and 1M/4096 parity deferred. The 4096 heavy fixture
+gate with `production_quality_ready=true`. That flag means scalar
+reference-target quality, not full Pixal3D production equivalence. The stricter
+`production_equivalence_ready` result remains false while xatlas and 1M/4096
+parity boundaries remain. The opt-in native-chart reference target path also
+passes production and deterministic visual-comparison checks while keeping xatlas
+and 1M/4096 parity deferred. The 4096 heavy fixture
 separately passes production texture coverage. Explicit upstream-style
 `target_faces=1000000`, `texture_size=4096` export also has a separate
 `quality.upstream_export_settings` gate; when that gate passes, the 1M-face

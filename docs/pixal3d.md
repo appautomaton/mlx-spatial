@@ -302,8 +302,11 @@ and raw/exact/final coverage diagnostics.
 When paired with `quality_preset="reference-target"`, the opt-in native-chart
 path also passes production threshold checks and deterministic GLB/PNG visual
 comparison on the real fixture. That closes the reference-target native-chart
-readiness gate, but xatlas chart parity and 1M/4096 upstream-setting parity
-remain separate boundaries.
+readiness gate, but it is still scalar readiness. The stricter
+`quality.production_equivalence.ready` and
+`result.production_equivalence_ready` fields remain false while xatlas chart
+parity, 1M/4096 upstream-setting parity, or deterministic visual-comparison
+boundaries remain open.
 
 The export diagnostics now keep geometry-hole evidence separate from UV chart
 coverage. Native `mesh_metrics` reports boundary vertices, closed boundary
@@ -343,6 +346,10 @@ reporting. Current reference-target diagnostics are expected to stay
 `artifact_ready=true`; on the current heavy fixture they also reach
 `production_quality_ready=true` because backend tier, face-count, topology,
 final coverage, raw coverage reporting, preset, and reference checks all pass.
+`production_quality_ready` is the scalar reference-target threshold result; use
+`production_equivalence_ready` to decide whether the export can be treated as
+full Pixal3D production-equivalent. Current diagnostics keep that stricter flag
+false because xatlas parity is still deferred.
 Both the default face-atlas path and the opt-in native-chart path have
 reference-target real-fixture gates.
 Explicit upstream-style `target_faces=1000000`, `texture_size=4096` export has

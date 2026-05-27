@@ -467,6 +467,7 @@ def export_pixal3d_glb(
         baked.stats,
         quality,
     )
+    quality["production_equivalence"] = _production_equivalence_summary(quality, None)
     diagnostics["quality"] = quality
 
     glb = _timed_stage(
@@ -496,6 +497,7 @@ def export_pixal3d_glb(
                 "simplifier_backend": quality["simplifier_backend"],
                 "simplifier_quality_tier": quality["simplifier_quality_tier"],
                 "production_quality_ready": bool(quality["production_quality_ready"]),
+                "production_equivalence_ready": bool(quality["production_equivalence"]["ready"]),
             },
         ),
         memory_monitor=memory_monitor,
@@ -524,11 +526,19 @@ def export_pixal3d_glb(
                 visual_report,
                 quality.get("upstream_export_settings"),
             )
+            quality["production_equivalence"] = _production_equivalence_summary(
+                quality,
+                diagnostics["visual_comparison"],
+            )
+            diagnostics["quality"] = quality
 
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
         "artifact_ready": bool(quality["artifact_ready"]),
         "production_quality_ready": bool(quality["production_quality_ready"]),
+        "production_equivalence_ready": bool(quality["production_equivalence"]["ready"]),
+        "remaining_parity_boundaries": quality["production_equivalence"]["remaining_parity_boundaries"],
+        "equivalence_blockers": quality["production_equivalence"]["blockers"],
         "quality_warnings": quality["warnings"],
         "model_glb": str(glb.path),
         "diagnostics_json": str(resolved_diagnostics_path),
@@ -1665,6 +1675,106 @@ def _visual_comparison_summary(
         "artifacts": report.get("artifacts", {}),
         "deferred_parity_boundaries": deferred_boundaries,
     }
+
+
+def _production_equivalence_summary(
+    quality: dict[str, Any],
+    visual_comparison: dict[str, Any] | None,
+) -> dict[str, Any]:
+    artifact_ready = bool(quality.get("artifact_ready"))
+    scalar_quality_ready = bool(quality.get("production_quality_ready"))
+    upstream_settings = quality.get("upstream_export_settings", {})
+    upstream_settings_ready = bool(upstream_settings.get("all_passed"))
+    xatlas_parity = quality.get("xatlas_chart_parity", {})
+    xatlas_chart_parity_ready = xatlas_parity.get("parity_ready") is True
+    visual_available = visual_comparison is not None
+    visual_summary = visual_comparison.get("summary", {}) if visual_comparison is not None else {}
+    visual_comparison_ready = visual_available and bool(visual_summary.get("all_passed"))
+
+    remaining_boundaries: list[str] = []
+    if visual_comparison is not None:
+        remaining_boundaries.extend(str(item) for item in visual_comparison.get("deferred_parity_boundaries", ()))
+    if not upstream_settings_ready:
+        remaining_boundaries.append("not_1m_face_export_setting_parity")
+    if not xatlas_chart_parity_ready:
+        remaining_boundaries.append("not_xatlas_chart_parity")
+    remaining_boundaries = _unique_strings(remaining_boundaries)
+
+    blockers: list[str] = []
+    if not artifact_ready:
+        blockers.append("artifact_not_ready")
+    if not scalar_quality_ready:
+        blockers.append("scalar_production_quality_not_ready")
+    if not upstream_settings_ready:
+        blockers.append("upstream_export_settings_not_ready")
+    if not xatlas_chart_parity_ready:
+        blockers.append("xatlas_chart_parity_not_ready")
+    if not visual_available:
+        blockers.append("visual_comparison_missing")
+    elif not visual_comparison_ready:
+        blockers.append("visual_comparison_not_all_passed")
+    if remaining_boundaries:
+        blockers.append("deferred_parity_boundaries_present")
+    blockers = _unique_strings(blockers)
+
+    ready = (
+        artifact_ready
+        and scalar_quality_ready
+        and upstream_settings_ready
+        and xatlas_chart_parity_ready
+        and visual_comparison_ready
+        and not remaining_boundaries
+    )
+    return {
+        "ready": ready,
+        "artifact_ready": artifact_ready,
+        "scalar_production_quality_ready": scalar_quality_ready,
+        "upstream_export_settings_ready": upstream_settings_ready,
+        "xatlas_chart_parity_ready": xatlas_chart_parity_ready,
+        "visual_comparison_available": visual_available,
+        "visual_comparison_ready": visual_comparison_ready,
+        "remaining_parity_boundaries": tuple(remaining_boundaries),
+        "blockers": tuple(blockers),
+        "checks": {
+            "artifact_ready": {"passed": artifact_ready, "actual": artifact_ready, "required": True},
+            "scalar_production_quality_ready": {
+                "passed": scalar_quality_ready,
+                "actual": scalar_quality_ready,
+                "required": True,
+            },
+            "upstream_export_settings_ready": {
+                "passed": upstream_settings_ready,
+                "actual": upstream_settings_ready,
+                "required": True,
+            },
+            "xatlas_chart_parity_ready": {
+                "passed": xatlas_chart_parity_ready,
+                "actual": xatlas_chart_parity_ready,
+                "required": True,
+            },
+            "visual_comparison_ready": {
+                "passed": visual_comparison_ready,
+                "actual": visual_comparison_ready,
+                "required": True,
+            },
+            "remaining_parity_boundaries": {
+                "passed": not remaining_boundaries,
+                "actual": tuple(remaining_boundaries),
+                "required": [],
+            },
+        },
+    }
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
 
 
 def _reference_comparison(diagnostics: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:

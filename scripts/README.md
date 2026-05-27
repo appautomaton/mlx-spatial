@@ -280,7 +280,9 @@ Script defaults:
   or visible-coverage ratios; visual comparison keeps raw RGB footprint separate
   from visible RGB coverage. Chart diagnostics separate `artifact_ready` from `quality_ready`;
   the current real fixture clears scalar native-chart coverage while xatlas
-  chart parity remains deferred. Native export diagnostics also include
+  chart parity remains deferred. `result.production_equivalence_ready` is the
+  stricter production-equivalence gate and remains false while xatlas,
+  upstream-setting, or visual-comparison boundaries remain open. Native export diagnostics also include
   boundary-loop topology under
   `source_metrics.metrics` and `export_metrics.metrics`, so geometry holes are
   not conflated with UV chart coverage or xatlas parity.
@@ -291,7 +293,8 @@ Script defaults:
   repair for comparison runs.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,
   the real fixture also passes production and
-  deterministic visual-comparison gates; this does not remove xatlas or
+  deterministic visual-comparison gates; this means scalar native readiness, not
+  full Pixal3D production equivalence, and it does not remove xatlas or
   1M/4096 upstream-setting parity boundaries. With explicit
   `target_faces=1000000` and `texture_size=4096`, the same backend passes its
   upstream-setting gate and leaves only xatlas chart parity deferred.
