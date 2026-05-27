@@ -20,7 +20,7 @@ The package covers six model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | Pixal3D/DINOv3 safetensors plus converted NAF |
 
 Choose by job:
 
@@ -53,12 +53,12 @@ Honest status:
   tensor bundle, not a mesh or Gaussian splat export.
 - Pixal3D is partially wired: assets, manual camera, projection conditioning,
   projection attention, sparse FlowEuler probing, sparse decoder coordinates,
-  512/1024 shape SLat probing when explicit NAF features are supplied, shape
-  decoder HR coordinate upsample, texture SLat probing when explicit texture
-  NAF features are supplied, shared shape/texture decoder execution, cascade
-  planning, trace output, sparse/shape/texture/decode NPZ artifacts, and
-  textured GLB export after decoded tensors are implemented. The normal CLI
-  still needs MLX NAF features before it can reach shape SLat.
+  MLX NAF-projected features from converted local NAF weights, 512/1024 shape
+  SLat probing, shape decoder HR coordinate upsample, texture SLat probing,
+  shared shape/texture decoder execution, cascade planning, trace output,
+  sparse/shape/texture/decode NPZ artifacts, and textured GLB export after
+  decoded tensors are implemented. MoGe auto-camera remains separate; pass
+  manual FOV for now.
 
 ## Install
 
@@ -114,6 +114,7 @@ weights/dinov3-vitl16-pretrain-lvd1689m/
 weights/hy-world-2/
 weights/map-anything/
 weights/pixal3d/
+weights/naf/
 ```
 
 SAM3D uses the converted `appautomaton/sam-3d-objects-mlx` runtime bundle:
@@ -288,6 +289,7 @@ Use the vendored upstream sample image and explicit manual FOV:
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
@@ -295,15 +297,14 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
 
 Current expected output starts with `trace.json` plus `sparse_projection.npz`.
 When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
-also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. The
-normal CLI then reports the missing MLX NAF feature boundary. The lower-level
-runtime can write `shape_slat_lr.npz`, `shape_slat_hr_coordinates.npz`, and
-`shape_slat_hr.npz` after explicit LR/HR NAF features are supplied, and
-`texture_slat.npz` after explicit texture NAF features are supplied. When
-compatible decoder assets are present, it also writes `shape_decoder_fields.npz`
-and `texture_decoder_pbr.npz`, then uses shared mesh extraction and texture
-baking to write `model.glb`. The remaining structured blocker for ordinary CLI
-runs is the missing MLX NAF feature path before shape SLat.
+also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. With
+converted NAF weights at `weights/naf/naf_release.safetensors`, the runtime
+builds coordinate-sampled MLX NAF features instead of materializing full
+high-resolution feature maps, then can write `shape_slat_lr.npz`,
+`shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and `texture_slat.npz`
+as downstream stage assets permit. Compatible decoder assets then write
+`shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, followed by shared
+mesh extraction and texture baking to write `model.glb`.
 
 ## Repository Layout
 

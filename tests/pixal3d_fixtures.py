@@ -5,6 +5,7 @@ import mlx.core as mx
 from safetensors.mlx import save_file
 
 from mlx_spatial.model_assets import PIXAL3D_ASSETS
+from mlx_spatial.naf import NAF_WEIGHTS_FILENAME, NafRuntimeConfig, naf_required_tensor_shapes
 
 
 def write_fake_pixal3d_root(root: Path, *, sparse_steps: int = 12, shape_steps: int = 12, texture_steps: int = 12) -> Path:
@@ -60,6 +61,18 @@ def write_fake_pixal3d_dinov3_root(root: Path) -> Path:
         },
         root / "model.safetensors",
     )
+    return root
+
+
+def write_fake_naf_root(root: Path, *, config: NafRuntimeConfig = NafRuntimeConfig()) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    tensors = {}
+    for name, shape in naf_required_tensor_shapes(config).items():
+        if name.endswith(".periods"):
+            tensors[name] = mx.ones(shape, dtype=mx.float32)
+        else:
+            tensors[name] = mx.zeros(shape, dtype=mx.float32)
+    save_file(tensors, root / NAF_WEIGHTS_FILENAME)
     return root
 
 

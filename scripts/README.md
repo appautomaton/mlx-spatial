@@ -175,9 +175,15 @@ uv run hf download TencentARC/Pixal3D \
 ```
 
 ```bash
+uv run --group torch-ref python scripts/pixal3d/convert_naf.py \
+  --output weights/naf/naf_release.safetensors
+```
+
+```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
@@ -188,10 +194,11 @@ Pixal3D inputs:
 - input: a single object-centric RGB/RGBA image
 - root: `weights/pixal3d`
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
+- NAF root: `weights/naf`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 - output: `trace.json`; completed MLX intermediate boundaries write
   `sparse_projection.npz`, after sparse decoding `sparse_structure.npz`, and
-  after explicit NAF feature boundaries `shape_slat_lr.npz`,
+  after MLX NAF projection boundaries `shape_slat_lr.npz`,
   `shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and
   `texture_slat.npz`; compatible decoder assets then write
   `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`; when decoded
@@ -207,11 +214,12 @@ Script defaults:
 - xatlas face guard: `auto`
 - xatlas parallel chunks: `0`
 - texture bake backend: `kdtree`
+- NAF coordinate chunk size: `8192`
 - manual FOV: explicit `--manual-fov` avoids the not-yet-wired MoGe auto-camera path
-- current blocker: normal script runs stop at the missing MLX NAF feature path
-  before shape SLat; lower-level runtime tests can pass explicit NAF features
-  and reach the 512/1024 shape SLat, 1024 texture SLat, shared shape decoder,
-  shared texture decoder, and textured GLB export path
+- current blocker: missing converted NAF weights produce a structured
+  `naf-assets` blocker; with NAF present, downstream model asset readiness
+  determines how far the 512/1024 shape SLat, texture SLat, decoder, and GLB
+  export path can run
 
 ### LiTo
 

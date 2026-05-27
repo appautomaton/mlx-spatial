@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-mesh-export-boundary",
+  "active_change": "2026-05-26-pixal3d-mlx-naf-bridge",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-mesh-export-boundary/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-mesh-export-boundary/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-mlx-naf-bridge/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-mlx-naf-bridge/PLAN.md"
 }

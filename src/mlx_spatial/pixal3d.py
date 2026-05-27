@@ -22,6 +22,8 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+    PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
+    PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
@@ -110,6 +112,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=PIXAL3D_DEFAULT_DINO_ROOT,
         help="local DINOv3 ViT-L/16 root for Pixal3D image conditioning",
     )
+    generate_parser.add_argument(
+        "--naf-root",
+        default=PIXAL3D_DEFAULT_NAF_ROOT,
+        help="local converted NAF safetensors root for high-resolution projection features",
+    )
+    generate_parser.add_argument(
+        "--naf-coordinate-chunk-size",
+        type=int,
+        default=PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
+        help="coordinate chunk size for MLX NAF projected-feature sampling; default: %(default)s",
+    )
     generate_parser.add_argument("--trace-output", type=Path, help="trace JSON path; default: <output-dir>/trace.json")
 
     args = parser.parse_args(argv)
@@ -184,6 +197,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             xatlas_face_guard=args.xatlas_face_guard,
             xatlas_parallel_chunks=args.xatlas_parallel_chunks,
             texture_bake_backend=args.texture_bake_backend,
+            naf_root=args.naf_root,
+            naf_coordinate_chunk_size=args.naf_coordinate_chunk_size,
         )
         output_path = result.trace.output_path or Path("outputs/pixal3d/model.glb")
         trace_path = args.trace_output or output_path.with_name("trace.json")

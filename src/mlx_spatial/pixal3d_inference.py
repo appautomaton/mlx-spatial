@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Literal
 
 import mlx.core as mx
+import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from .model_assets import DINOv3_VITL16_ASSETS
 from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot
+from .naf import NAF_DEFAULT_ROOT, load_naf_tensors, naf_conversion_command, prepare_naf_image_tensor, project_naf_features_at_points
 from .ovoxel import flexi_dual_grid_fields_to_mesh
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
 from .pixal3d_camera import pixal3d_manual_camera_params, pixal3d_select_hr_coordinates, pixal3d_stage_plan
@@ -26,10 +28,13 @@ from .pixal3d_export import (
     write_pixal3d_textured_glb,
 )
 from .pixal3d_projection import (
+    PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS,
     PIXAL3D_DINOV3_EMBED_DIM,
     build_pixal3d_projection_conditioning,
+    pixal3d_projection_grid_points,
     pixal3d_projection_stage_config,
     pixal3d_stage_with_grid_resolution,
+    project_pixal3d_points_to_image,
     select_pixal3d_projected_features_at_coordinates,
 )
 from .trellis2_decode import (
@@ -70,6 +75,8 @@ PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
 PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
 PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
+PIXAL3D_DEFAULT_NAF_ROOT = NAF_DEFAULT_ROOT
+PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
 
 Pixal3DStageStatus = Literal["ready", "blocked", "unimplemented"]
 
@@ -138,6 +145,8 @@ class Pixal3DInferencePipeline:
         xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
         xatlas_parallel_chunks: int = 0,
         texture_bake_backend: str = PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
+        naf_root: str | Path | None = PIXAL3D_DEFAULT_NAF_ROOT,
+        naf_coordinate_chunk_size: int = PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
         projection_hidden_states: mx.array | None = None,
         shape_lr_naf_feature_map: mx.array | None = None,
         shape_hr_naf_feature_map: mx.array | None = None,
@@ -158,6 +167,11 @@ class Pixal3DInferencePipeline:
                 "xatlas_face_guard": xatlas_face_guard,
                 "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
                 "texture_bake_backend": texture_bake_backend,
+            },
+            "naf_options": {
+                "naf_root": str(naf_root) if naf_root is not None else None,
+                "coordinate_chunk_size": int(naf_coordinate_chunk_size),
+                "full_map_avoidance": True,
             },
         }
         started = time.perf_counter()
@@ -203,6 +217,22 @@ class Pixal3DInferencePipeline:
                     "texture_bake_backend": texture_bake_backend,
                     "supported_texture_bake_backends": TRELLIS2_TEXTURE_BAKE_BACKENDS,
                 },
+                metadata=metadata,
+            )
+
+        if naf_coordinate_chunk_size <= 0:
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "input-validation",
+                "validate Pixal3D NAF options",
+                f"naf_coordinate_chunk_size must be positive, got {naf_coordinate_chunk_size}",
+                {"naf_coordinate_chunk_size": naf_coordinate_chunk_size},
                 metadata=metadata,
             )
 
@@ -424,6 +454,104 @@ class Pixal3DInferencePipeline:
                 "dtype": str(projection_hidden_states.dtype).removeprefix("mlx.core."),
             }
 
+        naf_tensors: dict[str, mx.array] | None = None
+        naf_image_cache: dict[int, mx.array] = {}
+
+        def runtime_naf_projected_features(
+            *,
+            stage,
+            coordinates: mx.array,
+            lr_projected_features: mx.array | None,
+            stage_label: str,
+        ) -> tuple[mx.array | None, dict[str, object], Pixal3DInferenceBlocker | None]:
+            nonlocal naf_tensors
+            naf_root_path = Path(naf_root) if naf_root is not None else Path(PIXAL3D_DEFAULT_NAF_ROOT)
+            if lr_projected_features is None:
+                return (
+                    None,
+                    {"source": "unavailable", "stage": stage.name},
+                    Pixal3DInferenceBlocker(
+                        stage="naf-projection",
+                        operation="build Pixal3D LR projected features before NAF",
+                        reason="LR projected features were not available for NAF concatenation",
+                        metadata={"stage": stage.name},
+                    ),
+                )
+            try:
+                if naf_tensors is None:
+                    naf_tensors = load_naf_tensors(naf_root_path)
+                if stage.image_size not in naf_image_cache:
+                    with Image.open(image_path) as pil_image:
+                        naf_image_cache[stage.image_size] = prepare_naf_image_tensor(pil_image, image_size=stage.image_size)
+                image_tensor = naf_image_cache[stage.image_size]
+                patch_features = _pixal3d_patch_feature_map_bchw(projection_hidden_states)
+                projected_points = _pixal3d_project_sparse_coordinates(
+                    coordinates,
+                    stage=stage,
+                    camera_angle_x=camera.camera_angle_x,
+                    distance=camera.distance,
+                    mesh_scale=camera.mesh_scale,
+                )
+                target_size = int(stage.naf_target_size or stage.image_size)
+                naf_projection = project_naf_features_at_points(
+                    image_tensor,
+                    patch_features,
+                    projected_points,
+                    image_resolution=stage.image_size,
+                    output_size=target_size,
+                    tensors=naf_tensors,
+                    chunk_size=naf_coordinate_chunk_size,
+                )
+                selected_lr = select_pixal3d_projected_features_at_coordinates(
+                    lr_projected_features,
+                    coordinates,
+                    grid_resolution=stage.grid_resolution,
+                )
+                selected = mx.concatenate((selected_lr, naf_projection.features[0]), axis=-1)
+                return (
+                    selected,
+                    {
+                        "source": "mlx-naf",
+                        "stage": stage.name,
+                        "stage_label": stage_label,
+                        "naf_root": str(naf_root_path),
+                        "target_size": naf_projection.target_size,
+                        "point_count": naf_projection.point_count,
+                        "coordinate_chunk_size": naf_projection.chunk_size,
+                        "kernel_size": naf_projection.kernel_size,
+                        "lr_projected_shape": tuple(int(dim) for dim in selected_lr.shape),
+                        "hr_projected_shape": tuple(int(dim) for dim in naf_projection.features.shape),
+                        "selected_projected_shape": tuple(int(dim) for dim in selected.shape),
+                        "full_map_avoidance": True,
+                    },
+                    None,
+                )
+            except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+                operation = "load converted NAF safetensors" if isinstance(error, FileNotFoundError) else "run MLX NAF coordinate projection"
+                stage_name = "naf-assets" if isinstance(error, FileNotFoundError) else "naf-projection"
+                return (
+                    None,
+                    {
+                        "source": "mlx-naf",
+                        "stage": stage.name,
+                        "stage_label": stage_label,
+                        "naf_root": str(naf_root_path),
+                    },
+                    Pixal3DInferenceBlocker(
+                        stage=stage_name,
+                        operation=operation,
+                        reason=str(error),
+                        metadata={
+                            "stage": stage.name,
+                            "stage_label": stage_label,
+                            "naf_root": str(naf_root_path),
+                            "expected_weights": str(naf_root_path / "naf_release.safetensors"),
+                            "conversion_command": " ".join(naf_conversion_command(naf_root_path)),
+                            "coordinate_chunk_size": naf_coordinate_chunk_size,
+                        },
+                    ),
+                )
+
         ss_conditioning = build_pixal3d_projection_conditioning(
             projection_hidden_states,
             "ss",
@@ -625,7 +753,56 @@ class Pixal3DInferencePipeline:
                 else None,
                 "blocker": shape_conditioning.blocker,
             }
+            shape_projected = None
             if shape_conditioning.blocker is not None:
+                if shape_lr_naf_feature_map is None:
+                    shape_projected, naf_projection_metadata, naf_blocker = runtime_naf_projected_features(
+                        stage=shape_conditioning.stage,
+                        coordinates=decoder_probe.coordinates,
+                        lr_projected_features=shape_conditioning.projected_lr_features,
+                        stage_label="shape_lr",
+                    )
+                    metadata["shape_lr_projection"].update(naf_projection_metadata)
+                    if naf_blocker is None:
+                        metadata["shape_lr_projection"]["ready"] = True
+                        metadata["shape_lr_projection"]["blocker"] = None
+                    else:
+                        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                        metadata["timings_sec"] = timings
+                        return self._blocked(
+                            image_path,
+                            completed,
+                            pipeline_type,
+                            manual_fov,
+                            seed,
+                            max_num_tokens,
+                            output_path,
+                            naf_blocker.stage,
+                            naf_blocker.operation,
+                            naf_blocker.reason,
+                            naf_blocker.metadata,
+                            metadata=metadata,
+                            artifacts=(projection_artifact.path, sparse_structure_artifact.path),
+                        )
+                else:
+                    metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                    metadata["timings_sec"] = timings
+                    return self._blocked(
+                        image_path,
+                        completed,
+                        pipeline_type,
+                        manual_fov,
+                        seed,
+                        max_num_tokens,
+                        output_path,
+                        "shape-projection-conditioning",
+                        shape_conditioning.blocker.operation,
+                        shape_conditioning.blocker.reason,
+                        shape_conditioning.blocker.metadata,
+                        metadata=metadata,
+                        artifacts=(projection_artifact.path, sparse_structure_artifact.path),
+                    )
+            if shape_conditioning.blocker is not None and shape_projected is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
                 metadata["timings_sec"] = timings
                 return self._blocked(
@@ -646,13 +823,14 @@ class Pixal3DInferencePipeline:
             completed.append("projection-conditioning:shape_512")
             timings["projection-conditioning:shape_512"] = time.perf_counter() - started
 
-            assert shape_conditioning.projected_features is not None
             assert shape_conditioning.global_tokens is not None
-            shape_projected = select_pixal3d_projected_features_at_coordinates(
-                shape_conditioning.projected_features,
-                decoder_probe.coordinates,
-                grid_resolution=shape_conditioning.stage.grid_resolution,
-            )
+            if shape_projected is None:
+                assert shape_conditioning.projected_features is not None
+                shape_projected = select_pixal3d_projected_features_at_coordinates(
+                    shape_conditioning.projected_features,
+                    decoder_probe.coordinates,
+                    grid_resolution=shape_conditioning.stage.grid_resolution,
+                )
             metadata["shape_lr_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in shape_projected.shape)
 
             shape_slat_model = _pixal3d_model_asset(config.models, "shape_slat_flow_model_512")
@@ -854,39 +1032,76 @@ class Pixal3DInferencePipeline:
                 else None,
                 "blocker": shape_hr_conditioning.blocker,
             }
+            shape_hr_projected = None
             if shape_hr_conditioning.blocker is not None:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "shape-hr-projection-conditioning",
-                    shape_hr_conditioning.blocker.operation,
-                    shape_hr_conditioning.blocker.reason,
-                    shape_hr_conditioning.blocker.metadata,
-                    metadata=metadata,
-                    artifacts=(
-                        projection_artifact.path,
-                        sparse_structure_artifact.path,
-                        shape_slat_artifact.path,
-                        shape_hr_coordinates_artifact.path,
-                    ),
-                )
+                if shape_hr_naf_feature_map is None:
+                    shape_hr_projected, naf_projection_metadata, naf_blocker = runtime_naf_projected_features(
+                        stage=shape_hr_conditioning.stage,
+                        coordinates=hr_selection.coordinates,
+                        lr_projected_features=shape_hr_conditioning.projected_lr_features,
+                        stage_label="shape_hr",
+                    )
+                    metadata["shape_hr_projection"].update(naf_projection_metadata)
+                    if naf_blocker is None:
+                        metadata["shape_hr_projection"]["ready"] = True
+                        metadata["shape_hr_projection"]["blocker"] = None
+                    else:
+                        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                        metadata["timings_sec"] = timings
+                        return self._blocked(
+                            image_path,
+                            completed,
+                            pipeline_type,
+                            manual_fov,
+                            seed,
+                            max_num_tokens,
+                            output_path,
+                            naf_blocker.stage,
+                            naf_blocker.operation,
+                            naf_blocker.reason,
+                            naf_blocker.metadata,
+                            metadata=metadata,
+                            artifacts=(
+                                projection_artifact.path,
+                                sparse_structure_artifact.path,
+                                shape_slat_artifact.path,
+                                shape_hr_coordinates_artifact.path,
+                            ),
+                        )
+                else:
+                    metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                    metadata["timings_sec"] = timings
+                    return self._blocked(
+                        image_path,
+                        completed,
+                        pipeline_type,
+                        manual_fov,
+                        seed,
+                        max_num_tokens,
+                        output_path,
+                        "shape-hr-projection-conditioning",
+                        shape_hr_conditioning.blocker.operation,
+                        shape_hr_conditioning.blocker.reason,
+                        shape_hr_conditioning.blocker.metadata,
+                        metadata=metadata,
+                        artifacts=(
+                            projection_artifact.path,
+                            sparse_structure_artifact.path,
+                            shape_slat_artifact.path,
+                            shape_hr_coordinates_artifact.path,
+                        ),
+                    )
             completed.append("projection-conditioning:shape_1024")
             timings["projection-conditioning:shape_1024"] = time.perf_counter() - started
 
-            assert shape_hr_conditioning.projected_features is not None
             assert shape_hr_conditioning.global_tokens is not None
-            shape_hr_projected = select_pixal3d_projected_features_at_coordinates(
-                shape_hr_conditioning.projected_features,
-                hr_selection.coordinates,
-                grid_resolution=shape_hr_conditioning.stage.grid_resolution,
-            )
+            if shape_hr_projected is None:
+                assert shape_hr_conditioning.projected_features is not None
+                shape_hr_projected = select_pixal3d_projected_features_at_coordinates(
+                    shape_hr_conditioning.projected_features,
+                    hr_selection.coordinates,
+                    grid_resolution=shape_hr_conditioning.stage.grid_resolution,
+                )
             metadata["shape_hr_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in shape_hr_projected.shape)
 
             shape_hr_slat_model = _pixal3d_model_asset(config.models, "shape_slat_flow_model_1024")
@@ -1027,40 +1242,78 @@ class Pixal3DInferencePipeline:
                 else None,
                 "blocker": texture_conditioning.blocker,
             }
+            texture_projected = None
             if texture_conditioning.blocker is not None:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "texture-projection-conditioning",
-                    texture_conditioning.blocker.operation,
-                    texture_conditioning.blocker.reason,
-                    texture_conditioning.blocker.metadata,
-                    metadata=metadata,
-                    artifacts=(
-                        projection_artifact.path,
-                        sparse_structure_artifact.path,
-                        shape_slat_artifact.path,
-                        shape_hr_coordinates_artifact.path,
-                        shape_hr_slat_artifact.path,
-                    ),
-                )
+                if texture_naf_feature_map is None:
+                    texture_projected, naf_projection_metadata, naf_blocker = runtime_naf_projected_features(
+                        stage=texture_conditioning.stage,
+                        coordinates=hr_selection.coordinates,
+                        lr_projected_features=texture_conditioning.projected_lr_features,
+                        stage_label="texture",
+                    )
+                    metadata["texture_projection"].update(naf_projection_metadata)
+                    if naf_blocker is None:
+                        metadata["texture_projection"]["ready"] = True
+                        metadata["texture_projection"]["blocker"] = None
+                    else:
+                        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                        metadata["timings_sec"] = timings
+                        return self._blocked(
+                            image_path,
+                            completed,
+                            pipeline_type,
+                            manual_fov,
+                            seed,
+                            max_num_tokens,
+                            output_path,
+                            naf_blocker.stage,
+                            naf_blocker.operation,
+                            naf_blocker.reason,
+                            naf_blocker.metadata,
+                            metadata=metadata,
+                            artifacts=(
+                                projection_artifact.path,
+                                sparse_structure_artifact.path,
+                                shape_slat_artifact.path,
+                                shape_hr_coordinates_artifact.path,
+                                shape_hr_slat_artifact.path,
+                            ),
+                        )
+                else:
+                    metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                    metadata["timings_sec"] = timings
+                    return self._blocked(
+                        image_path,
+                        completed,
+                        pipeline_type,
+                        manual_fov,
+                        seed,
+                        max_num_tokens,
+                        output_path,
+                        "texture-projection-conditioning",
+                        texture_conditioning.blocker.operation,
+                        texture_conditioning.blocker.reason,
+                        texture_conditioning.blocker.metadata,
+                        metadata=metadata,
+                        artifacts=(
+                            projection_artifact.path,
+                            sparse_structure_artifact.path,
+                            shape_slat_artifact.path,
+                            shape_hr_coordinates_artifact.path,
+                            shape_hr_slat_artifact.path,
+                        ),
+                    )
             completed.append("projection-conditioning:tex_1024")
             timings["projection-conditioning:tex_1024"] = time.perf_counter() - started
 
-            assert texture_conditioning.projected_features is not None
             assert texture_conditioning.global_tokens is not None
-            texture_projected = select_pixal3d_projected_features_at_coordinates(
-                texture_conditioning.projected_features,
-                hr_selection.coordinates,
-                grid_resolution=texture_conditioning.stage.grid_resolution,
-            )
+            if texture_projected is None:
+                assert texture_conditioning.projected_features is not None
+                texture_projected = select_pixal3d_projected_features_at_coordinates(
+                    texture_conditioning.projected_features,
+                    hr_selection.coordinates,
+                    grid_resolution=texture_conditioning.stage.grid_resolution,
+                )
             metadata["texture_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in texture_projected.shape)
 
             texture_slat_model = _pixal3d_model_asset(config.models, "tex_slat_flow_model_1024")
@@ -1596,6 +1849,50 @@ def _validate_pixal3d_export_guards(
     if texture_bake_backend not in TRELLIS2_TEXTURE_BAKE_BACKENDS:
         return f"texture_bake_backend must be one of {TRELLIS2_TEXTURE_BAKE_BACKENDS}, got {texture_bake_backend}"
     return None
+
+
+def _pixal3d_patch_feature_map_bchw(hidden_states: mx.array) -> mx.array:
+    if hidden_states.ndim != 3:
+        raise ValueError(f"projection_hidden_states must have shape [B,N,C], got {hidden_states.shape}")
+    batch, token_count, channels = (int(dim) for dim in hidden_states.shape)
+    global_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
+    patch_count = token_count - global_count
+    side = int(patch_count**0.5)
+    if patch_count <= 0 or side * side != patch_count:
+        raise ValueError("projection_hidden_states patch token count must be square for NAF")
+    patch_tokens = hidden_states[:, global_count:, :].reshape(batch, side, side, channels)
+    return mx.transpose(patch_tokens, (0, 3, 1, 2))
+
+
+def _pixal3d_project_sparse_coordinates(
+    coordinates: mx.array,
+    *,
+    stage,
+    camera_angle_x: float | mx.array,
+    distance: float | mx.array,
+    mesh_scale: float | mx.array,
+) -> mx.array:
+    coords = np.array(coordinates, dtype=np.int64)
+    if coords.ndim != 2 or coords.shape[1] != 4:
+        raise ValueError(f"sparse coordinates must have shape [N,4], got {coordinates.shape}")
+    if coords.shape[0] == 0:
+        return mx.zeros((1, 0, 2), dtype=mx.float32)
+    if np.any(coords[:, 0] != 0):
+        raise ValueError("NAF coordinate projection currently supports batch index 0 only")
+    spatial = coords[:, 1:]
+    grid_resolution = int(stage.grid_resolution)
+    if np.any(spatial < 0) or np.any(spatial >= grid_resolution):
+        raise ValueError(f"sparse coordinates out of bounds for grid_resolution={grid_resolution}")
+    flat_index = spatial[:, 0] * grid_resolution * grid_resolution + spatial[:, 1] * grid_resolution + spatial[:, 2]
+    grid_points = pixal3d_projection_grid_points(grid_resolution)
+    selected_points = grid_points[mx.array(flat_index.astype(np.int32))]
+    return project_pixal3d_points_to_image(
+        selected_points,
+        camera_angle_x=camera_angle_x,
+        distance=distance,
+        mesh_scale=mesh_scale,
+        image_resolution=stage.image_size,
+    ).points_2d
 
 
 def _remove_pixal3d_slat_normalization(features: mx.array, normalization: object, *, name: str) -> mx.array:

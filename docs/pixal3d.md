@@ -1,9 +1,10 @@
 # Pixal3D
 
 Pixal3D is TencentARC's projection-conditioned image-to-3D pipeline. In
-`mlx-spatial`, Pixal3D is currently an implementation track. The lower-level
-runtime can write textured GLB after explicit NAF inputs allow it to reach
-decoded shape and texture tensors; the normal CLI still needs the MLX NAF path.
+`mlx-spatial`, Pixal3D is currently an implementation track. The runtime can
+use converted local NAF safetensors to build high-resolution projected DINOv3
+features without Torch, and can write textured GLB after decoded shape and
+texture tensors are available.
 
 Implemented now:
 
@@ -18,14 +19,12 @@ Implemented now:
 - sparse-structure FlowEuler probing through the shared MLX sparse flow helper
 - sparse decoder coordinate extraction when a compatible sparse decoder
   checkpoint/config is available
-- coordinate-indexed 512 shape SLat probing when explicit NAF-upsampled
-  features are supplied to the lower-level runtime
+- coordinate-indexed 512 shape SLat probing with either explicit NAF-upsampled
+  features or MLX NAF-projected features from local converted weights
 - shared shape decoder LR-to-HR coordinate upsample, Pixal3D HR token
   quantization, and HR coordinate artifact writing
-- coordinate-indexed 1024 shape SLat probing when explicit HR NAF-upsampled
-  features are supplied to the lower-level runtime
-- coordinate-indexed 1024 texture SLat probing when explicit texture
-  NAF-upsampled features are supplied to the lower-level runtime
+- coordinate-indexed 1024 shape SLat and texture SLat probing through the same
+  explicit-override or MLX NAF-projection path
 - shared FlexiDualGrid shape decoder execution after HR shape SLat, writing
   decoded 7-channel shape fields
 - shared guided texture decoder execution after texture SLat, writing decoded
@@ -38,8 +37,8 @@ Implemented now:
 
 Still blocked:
 
-- normal CLI runs still need an MLX NAF-equivalent feature path before shape
-  SLat can run without explicit lower-level test features
+- missing converted NAF weights block NAF-projected stages until
+  `weights/naf/naf_release.safetensors` is created locally
 - MoGe auto-camera is not wired for Pixal3D; use `--manual-fov`
 
 ## Assets
@@ -76,6 +75,14 @@ uv run hf download facebook/dinov3-vitl16-pretrain-lvd1689m \
   --local-dir weights/dinov3-vitl16-pretrain-lvd1689m
 ```
 
+Pixal3D's upstream projection stages use Valeo NAF. Convert the NAF release
+checkpoint locally for the Torch-free runtime:
+
+```bash
+uv run --group torch-ref python scripts/pixal3d/convert_naf.py \
+  --output weights/naf/naf_release.safetensors
+```
+
 ## Recommended Run
 
 Use the vendored sample image from the shallow upstream checkout:
@@ -84,6 +91,7 @@ Use the vendored sample image from the shallow upstream checkout:
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --naf-root weights/naf \
   --output-dir outputs/pixal3d/sample \
   --pipeline-type 1024_cascade \
   --manual-fov 0.2
@@ -96,29 +104,25 @@ outputs/pixal3d/sample/
   trace.json
   sparse_projection.npz
   sparse_structure.npz          # written after sparse decoder coordinates are available
-  shape_slat_lr.npz             # written only after LR NAF features are supplied
+  shape_slat_lr.npz             # written after LR NAF projection succeeds
   shape_slat_hr_coordinates.npz # written after compatible shape decoder upsample
-  shape_slat_hr.npz             # written only after HR NAF features are supplied
-  texture_slat.npz              # written only after texture NAF features are supplied
+  shape_slat_hr.npz             # written after HR NAF projection succeeds
+  texture_slat.npz              # written after texture NAF projection succeeds
   shape_decoder_fields.npz      # written after shared FlexiDualGrid shape decode
   texture_decoder_pbr.npz       # written after guided texture PBR voxel decode
   model.glb                     # written after mesh extraction and texture baking
 ```
 
 If the DINOv3 assets are missing, the CLI returns an `image-conditioning`
-blocker with the exact root and download command. If DINOv3 conditioning
-completes and sparse-flow assets are mapped, the runtime can execute the sparse
-FlowEuler boundary. If the sparse decoder also produces coordinates, the runtime
-writes `sparse_structure.npz`. Normal CLI runs then stop at
-`shape-projection-conditioning` until MLX NAF features are available. With
-explicit lower-level NAF features, the runtime can probe 512 shape SLat, write
-`shape_slat_lr.npz`, upsample guarded HR coordinates with the shared shape
-decoder helper, write `shape_slat_hr_coordinates.npz`, optionally probe 1024
-shape SLat and write `shape_slat_hr.npz`, optionally probe 1024 texture SLat
-and write `texture_slat.npz`, run the shared shape and texture decoders, write
-`shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, then write a
-Pixal3D-labeled textured GLB with the shared mesh extraction and texture baking
-helpers.
+blocker with the exact root and download command. If converted NAF weights are
+missing, NAF-projected stages return a structured `naf-assets` blocker with the
+expected safetensors path and conversion command. When DINOv3, NAF, sparse-flow,
+and sparse-decoder assets are present, the runtime can write
+`sparse_structure.npz`, build coordinate-sampled NAF projections, probe 512
+shape SLat, write `shape_slat_lr.npz`, upsample guarded HR coordinates, write
+`shape_slat_hr_coordinates.npz`, probe 1024 shape and texture SLat stages as
+downstream assets permit, run the shared shape and texture decoders, then write
+a Pixal3D-labeled textured GLB.
 
 ## Settings
 
@@ -132,6 +136,8 @@ helpers.
 - texture bake backend: `kdtree`
 - manual FOV: radians, for example `0.2`
 - DINOv3 root: `weights/dinov3-vitl16-pretrain-lvd1689m`
+- NAF root: `weights/naf`
+- NAF coordinate chunk size: `8192`
 - sample image: `vendors/Pixal3D/assets/images/0_img.png`
 
 The cascade planner starts at 1024 or 1536 output resolution, quantizes HR
@@ -146,7 +152,9 @@ Runtime modules are Torch-free:
 - `pixal3d_assets.py`: asset manifest, validation, config parsing, and probes
 - `pixal3d_camera.py`: manual-FOV camera and cascade planning
 - `pixal3d_projection.py`: projection grid, FOV projection, feature sampling,
-  coordinate-indexed feature selection, and NAF blocker
+  coordinate-indexed feature selection, and explicit NAF map override support
+- `naf.py`: Torch-free converted NAF safetensors loading, image encoder, RoPE,
+  and coordinate-sampled neighborhood attention
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR
   coordinate, shape SLat, texture SLat, shape decoder, and texture decoder NPZ
   artifact writing plus Pixal3D-labeled GLB writing
@@ -163,5 +171,5 @@ Runtime modules are Torch-free:
 - `trellis2_slat.py`: shared SLat flow boundary with config-gated Pixal3D
   projection attention
 
-Dev-only PyTorch reference capture is guarded by `PIXAL3D_TORCH_REF=1` and
-belongs in `tools/`, not runtime imports.
+Dev-only PyTorch reference capture and NAF checkpoint conversion are setup
+workflows. Runtime imports remain Torch-free.

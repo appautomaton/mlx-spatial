@@ -76,6 +76,14 @@ PIXAL3D_ASSETS = ModelAssetManifest(
     ),
 )
 
+NAF_ASSETS = ModelAssetManifest(
+    name="NAF",
+    root_hint="weights/naf",
+    required_paths=(
+        "naf_release.safetensors",
+    ),
+)
+
 DINOv3_VITL16_ASSETS = ModelAssetManifest(
     name="DINOv3 ViT-L/16",
     root_hint="weights/dinov3-vitl16-pretrain-lvd1689m",

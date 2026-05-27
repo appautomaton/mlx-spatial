@@ -10,11 +10,12 @@ import mlx_spatial.pixal3d_inference as pixal3d_inference
 from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import Pixal3DInferencePipeline
-from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
+from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS, Pixal3DProjectionStageConfig
 from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_decode_root,
+    write_fake_naf_root,
     write_fake_pixal3d_root,
     write_fake_pixal3d_shape_hr_root,
     write_fake_pixal3d_shape_slat_root,
@@ -176,8 +177,8 @@ def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decod
         "artifact:sparse_structure",
     )
     assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "shape-projection-conditioning"
-    assert result.trace.blocker.operation == "build Pixal3D high-resolution projected features"
+    assert result.trace.blocker.stage == "naf-assets"
+    assert result.trace.blocker.operation == "load converted NAF safetensors"
     assert len(result.artifacts) == 2
     assert [path.name for path in result.artifacts] == ["sparse_projection.npz", "sparse_structure.npz"]
     payload = np.load(result.artifacts[1])
@@ -239,6 +240,49 @@ def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_
     assert result.trace.metadata["shape_slat_lr"]["sampled_feature_shape"] == (4096, 32)
 
 
+def test_pixal3d_pipeline_uses_mlx_naf_when_shape_lr_map_is_not_supplied(tmp_path, monkeypatch):
+    root = write_fake_pixal3d_shape_slat_root(tmp_path / "weights", proj_in_channels=4, sparse_steps=1, shape_steps=1)
+    naf_root = write_fake_naf_root(tmp_path / "naf")
+    image = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), (128, 64, 32)).save(image)
+    patch_grid = 2
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    hidden_states = mx.zeros((1, token_count, 4), dtype=mx.float32)
+    original_stage_config = pixal3d_inference.pixal3d_projection_stage_config
+
+    def fake_stage_config(name):
+        stage = original_stage_config(name)
+        if name == "shape_512":
+            return Pixal3DProjectionStageConfig(
+                name=stage.name,
+                image_size=8,
+                grid_resolution=stage.grid_resolution,
+                use_naf_upsample=stage.use_naf_upsample,
+                naf_target_size=8,
+            )
+        return stage
+
+    monkeypatch.setattr(pixal3d_inference, "pixal3d_projection_stage_config", fake_stage_config)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        naf_root=naf_root,
+        naf_coordinate_chunk_size=1024,
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "shape-slat-cascade"
+    assert "projection-conditioning:shape_512" in result.trace.completed_stages
+    assert "artifact:shape_slat_lr" in result.trace.completed_stages
+    assert result.trace.metadata["shape_lr_projection"]["source"] == "mlx-naf"
+    assert result.trace.metadata["shape_lr_projection"]["selected_projected_shape"] == (4096, 8)
+    assert result.trace.metadata["shape_lr_projection"]["full_map_avoidance"] is True
+
+
 def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path):
     root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
     image = tmp_path / "image.png"
@@ -258,7 +302,8 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
 
     assert not result.ready
     assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "shape-hr-projection-conditioning"
+    assert result.trace.blocker.stage == "naf-assets"
+    assert result.trace.blocker.operation == "load converted NAF safetensors"
     assert result.trace.completed_stages == (
         "input-image",
         "asset-validation",
@@ -313,7 +358,8 @@ def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_sha
 
     assert not result.ready
     assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "texture-projection-conditioning"
+    assert result.trace.blocker.stage == "naf-assets"
+    assert result.trace.blocker.operation == "load converted NAF safetensors"
     assert result.trace.completed_stages == (
         "input-image",
         "asset-validation",

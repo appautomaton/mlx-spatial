@@ -19,9 +19,10 @@ Output:
 
 Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,
-    DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, seed 42,
-    max-num-tokens 49152, texture size 1024, GLB target faces 50000,
-    kdtree texture baking, and manual FOV when avoiding MoGe auto-camera.
+    DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, converted NAF root
+    weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
+    GLB target faces 50000, kdtree texture baking, and manual FOV when avoiding
+    MoGe auto-camera.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+    PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
+    PIXAL3D_DEFAULT_NAF_ROOT,
     PIXAL3D_DEFAULT_SEED,
     PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
@@ -108,6 +111,17 @@ def main(argv: list[str] | None = None) -> int:
         default=PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
         help="texture voxel sampling backend for GLB export; default: %(default)s",
     )
+    parser.add_argument(
+        "--naf-root",
+        default=PIXAL3D_DEFAULT_NAF_ROOT,
+        help="local converted NAF safetensors root for high-resolution projection features; default: %(default)s",
+    )
+    parser.add_argument(
+        "--naf-coordinate-chunk-size",
+        type=int,
+        default=PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
+        help="coordinate chunk size for MLX NAF projected-feature sampling; default: %(default)s",
+    )
     parser.add_argument("--trace-output", type=Path, help="trace JSON path; default: next to output")
     args = parser.parse_args(argv)
 
@@ -134,6 +148,10 @@ def main(argv: list[str] | None = None) -> int:
         args.texture_bake_backend,
         "--dino-root",
         str(args.dino_root),
+        "--naf-root",
+        str(args.naf_root),
+        "--naf-coordinate-chunk-size",
+        str(args.naf_coordinate_chunk_size),
     ]
     if args.output_dir is not None:
         cli_args.extend(["--output-dir", str(args.output_dir)])

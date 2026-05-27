@@ -122,22 +122,21 @@ shared MLX DINOv3 helper, builds view-aligned projection conditioning, supports
 `image_attn_mode="proj"` in the shared sparse-structure and SLat flow
 boundaries, can execute the sparse FlowEuler probe when assets are mapped,
 extracts sparse decoder coordinates when compatible sparse decoder assets are
-available, runs the 512 shape SLat probe when NAF-upsampled features are
-provided, upsamples guarded HR coordinates through the shared shape decoder
-helper, runs the 1024 shape SLat probe when HR NAF features are provided,
-runs the 1024 texture SLat probe when texture NAF features are provided, runs
-shared shape/texture decoder execution, reuses shared mesh extraction and
-texture baking, records cascade stage plans, and writes trace/NPZ intermediate
-artifacts plus a Pixal3D-labeled textured GLB after decoded tensors are
-available. Normal CLI runs still need the MLX NAF feature path before shape
-SLat can run.
+available, builds coordinate-sampled MLX NAF projections from converted local
+NAF weights, runs the 512 and 1024 shape SLat probes, upsamples guarded HR
+coordinates through the shared shape decoder helper, runs the 1024 texture SLat
+probe, runs shared shape/texture decoder execution, reuses shared mesh
+extraction and texture baking, records cascade stage plans, and writes
+trace/NPZ intermediate artifacts plus a Pixal3D-labeled textured GLB after
+decoded tensors are available. MoGe auto-camera remains separate.
 
 Main modules:
 
 - `pixal3d.py`: CLI command routing for download, validate, inspect, probe, and generation.
 - `pixal3d_assets.py`: upstream asset manifest, pipeline config parsing, checkpoint probes, and license/access note.
 - `pixal3d_camera.py`: upstream-compatible manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
-- `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and NAF blocker.
+- `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and explicit NAF map override support.
+- `naf.py`: converted NAF safetensors loading, image encoder/RoPE, and coordinate-sampled neighborhood attention without Torch or NATTEN runtime imports.
 - `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, shape-decoder, texture-decoder, and textured-GLB artifact writers.
 - `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, export settings, and blockers.
 - `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
