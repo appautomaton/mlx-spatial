@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-mlx-spatial-0-0-4-release-metadata",
+  "active_change": "2026-05-26-pixal3d-memory-hygiene",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-mlx-spatial-0-0-4-release-metadata/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-mlx-spatial-0-0-4-release-metadata/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-memory-hygiene/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-memory-hygiene/PLAN.md"
 }

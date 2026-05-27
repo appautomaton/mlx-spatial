@@ -773,6 +773,19 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
     assert calls["bake_xatlas_face_guard"] == 456
     assert calls["bake_xatlas_parallel_chunks"] == 1
     assert calls["bake_texture_bake_backend"] == "kdtree"
+    checkpoints = result.trace.metadata["memory_checkpoints"]
+    assert tuple(checkpoints) == (
+        "after_sparse_structure",
+        "after_shape_slat_lr",
+        "after_shape_hr_coordinates",
+        "after_shape_slat_hr",
+        "after_texture_slat",
+        "after_shape_decoder",
+        "after_texture_decoder",
+        "after_glb_export",
+    )
+    for checkpoint in checkpoints.values():
+        assert set(checkpoint) == {"active_bytes", "peak_bytes"}
 
 
 def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):

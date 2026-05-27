@@ -518,7 +518,8 @@ class Pixal3DInferencePipeline:
                 "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
                 "exact_upstream_v2_parity": False,
             }
-            clear_mlx_cache()
+            del moge_result, image_rgb, image_rgb_pil
+            _release_pixal3d_mlx_stage_memory(metadata, "after_moge_camera")
         else:
             try:
                 camera = pixal3d_manual_camera_params(manual_fov)
@@ -633,6 +634,8 @@ class Pixal3DInferencePipeline:
                 "detail": dino_result.detail,
                 "image_size": ss_stage.image_size,
             }
+            del dino_result, dino_inspection, image_tensor, ss_stage
+            _release_pixal3d_mlx_stage_memory(metadata, "after_dino_conditioning")
         else:
             metadata["dino_conditioning"] = {
                 "source": "caller-supplied projection_hidden_states",
@@ -917,6 +920,8 @@ class Pixal3DInferencePipeline:
             completed.append("artifact:sparse_structure")
             metadata["artifact_paths"] = [projection_artifact.path, sparse_structure_artifact.path]
             metadata["sparse_structure_artifact"] = sparse_structure_artifact
+            del sparse_probe, sparse_config, decoder_config, ss_conditioning
+            _release_pixal3d_mlx_stage_memory(metadata, "after_sparse_structure")
 
             shape_conditioning = build_pixal3d_projection_conditioning(
                 projection_hidden_states,
@@ -1113,6 +1118,8 @@ class Pixal3DInferencePipeline:
             completed.append("artifact:shape_slat_lr")
             metadata["artifact_paths"] = [projection_artifact.path, sparse_structure_artifact.path, shape_slat_artifact.path]
             metadata["shape_slat_lr_artifact"] = shape_slat_artifact
+            del shape_probe, shape_conditioning, shape_projected, shape_slat_config, shape_lr_naf_feature_map
+            _release_pixal3d_mlx_stage_memory(metadata, "after_shape_slat_lr")
             shape_decoder_model = _pixal3d_model_asset(config.models, "shape_slat_decoder")
             try:
                 shape_decoder_config = read_structured_latent_decoder_config(self.root, shape_decoder_model.config_path)
@@ -1194,6 +1201,8 @@ class Pixal3DInferencePipeline:
                 shape_hr_coordinates_artifact.path,
             ]
             metadata["shape_slat_hr_coordinates_artifact"] = shape_hr_coordinates_artifact
+            del shape_upsample, shape_features, decoder_probe
+            _release_pixal3d_mlx_stage_memory(metadata, "after_shape_hr_coordinates")
 
             shape_hr_stage = pixal3d_stage_with_grid_resolution(
                 pixal3d_projection_stage_config("shape_1024"),
@@ -1405,6 +1414,8 @@ class Pixal3DInferencePipeline:
                 shape_hr_slat_artifact.path,
             ]
             metadata["shape_slat_hr_artifact"] = shape_hr_slat_artifact
+            del shape_hr_probe, shape_hr_conditioning, shape_hr_projected, shape_hr_slat_config, shape_hr_naf_feature_map
+            _release_pixal3d_mlx_stage_memory(metadata, "after_shape_slat_hr")
             texture_stage = pixal3d_stage_with_grid_resolution(
                 pixal3d_projection_stage_config("tex_1024"),
                 hr_selection.actual_hr_grid_resolution,
@@ -1640,6 +1651,16 @@ class Pixal3DInferencePipeline:
                 shape_hr_slat_artifact.path,
                 texture_slat_artifact.path,
             )
+            del (
+                texture_probe,
+                texture_conditioning,
+                texture_projected,
+                texture_slat_config,
+                texture_naf_feature_map,
+                shape_hr_features_for_texture,
+            )
+            del projection_hidden_states, naf_tensors, naf_image_cache
+            _release_pixal3d_mlx_stage_memory(metadata, "after_texture_slat")
 
             try:
                 shape_decode = run_shape_decoder_to_fields(
@@ -1714,6 +1735,8 @@ class Pixal3DInferencePipeline:
             shape_decode_artifacts = (*texture_slat_artifacts, shape_decoder_artifact.path)
             metadata["artifact_paths"] = list(shape_decode_artifacts)
             metadata["shape_decoder_artifact"] = shape_decoder_artifact
+            del shape_hr_features
+            _release_pixal3d_mlx_stage_memory(metadata, "after_shape_decoder")
 
             texture_decoder_model = None
             try:
@@ -1816,7 +1839,8 @@ class Pixal3DInferencePipeline:
             decode_artifacts = (*shape_decode_artifacts, texture_decoder_artifact.path)
             metadata["artifact_paths"] = list(decode_artifacts)
             metadata["texture_decoder_artifact"] = texture_decoder_artifact
-            clear_mlx_cache()
+            del texture_features
+            _release_pixal3d_mlx_stage_memory(metadata, "after_texture_decoder")
 
             try:
                 mesh = flexi_dual_grid_fields_to_mesh(
@@ -1938,6 +1962,8 @@ class Pixal3DInferencePipeline:
             final_artifacts = (*decode_artifacts, glb_artifact.path)
             metadata["artifact_paths"] = list(final_artifacts)
             metadata["textured_glb_artifact"] = glb_artifact
+            del shape_decode, texture_decode, mesh, postprocess_result, baked_texture
+            _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
             metadata["timings_sec"] = timings
             return Pixal3DGenerationResult(
@@ -2101,6 +2127,19 @@ def _remove_pixal3d_slat_normalization(features: mx.array, normalization: object
     mean = mx.array(mean_values, dtype=mx.float32)[None, :]
     std = mx.array(std_values, dtype=mx.float32)[None, :]
     return (features.astype(mx.float32) - mean) / std
+
+
+def _release_pixal3d_mlx_stage_memory(metadata: dict[str, object], label: str) -> None:
+    clear_mlx_cache()
+    _record_pixal3d_mlx_memory(metadata, label)
+
+
+def _record_pixal3d_mlx_memory(metadata: dict[str, object], label: str) -> None:
+    checkpoints = metadata.get("memory_checkpoints")
+    if not isinstance(checkpoints, dict):
+        checkpoints = {}
+        metadata["memory_checkpoints"] = checkpoints
+    checkpoints[label] = mlx_memory_snapshot().as_dict()
 
 
 def _resolve_output_path(
