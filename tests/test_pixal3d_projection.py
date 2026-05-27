@@ -71,6 +71,31 @@ def test_pixal3d_projection_maps_origin_to_image_center():
     assert bool(np.array(projection.valid_mask[0, 0]))
 
 
+def test_pixal3d_projection_supports_custom_rigid_transform_without_linalg_inv():
+    transform = mx.array(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 2.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=mx.float32,
+    )
+
+    projection = project_pixal3d_points_to_image(
+        mx.array([[0.0, 0.0, 0.0]], dtype=mx.float32),
+        camera_angle_x=0.8,
+        distance=99.0,
+        mesh_scale=1.0,
+        image_resolution=512,
+        transform_matrix=transform,
+    )
+
+    np.testing.assert_allclose(np.array(projection.points_2d[0, 0]), [256.0, 256.0], atol=1e-4)
+    np.testing.assert_allclose(np.array(projection.depth[0, 0]), 2.0, atol=1e-6)
+    assert bool(np.array(projection.valid_mask[0, 0]))
+
+
 def test_pixal3d_feature_sampling_matches_grid_sample_pixel_centers():
     fmap_bhwc = mx.array(
         [[[[0.0], [1.0]], [[2.0], [3.0]]]],

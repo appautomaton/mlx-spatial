@@ -240,6 +240,7 @@ def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        naf_root=tmp_path / "missing-naf",
     )
 
     assert not result.ready
@@ -272,6 +273,7 @@ def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decod
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        naf_root=tmp_path / "missing-naf",
     )
 
     assert not result.ready
@@ -316,6 +318,7 @@ def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
         shape_lr_naf_feature_map=naf,
+        naf_root=tmp_path / "missing-naf",
     )
 
     assert not result.ready
@@ -408,6 +411,7 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
         shape_lr_naf_feature_map=naf,
+        naf_root=tmp_path / "missing-naf",
     )
 
     assert not result.ready
@@ -464,6 +468,7 @@ def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_sha
         projection_hidden_states=hidden_states,
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
+        naf_root=tmp_path / "missing-naf",
     )
 
     assert not result.ready

@@ -161,10 +161,12 @@ def project_pixal3d_points_to_image(
         transform_matrix = mx.broadcast_to(transform[None, :, :], (batch, 4, 4))
     elif transform_matrix.ndim == 2:
         transform_matrix = mx.broadcast_to(transform_matrix[None, :, :], (batch, 4, 4))
+    if transform_matrix.ndim != 3 or tuple(int(dim) for dim in transform_matrix.shape[-2:]) != (4, 4):
+        raise ValueError(f"transform_matrix must have shape [B,4,4] or [4,4], got {transform_matrix.shape}")
 
     ones = mx.ones((*points.shape[:2], 1), dtype=points.dtype)
     points_h = mx.concatenate([points, ones], axis=-1)
-    world_to_camera = mx.linalg.inv(transform_matrix.astype(mx.float32)).astype(points.dtype)
+    world_to_camera = _invert_rigid_transform_4x4(transform_matrix).astype(points.dtype)
     points_camera = mx.matmul(points_h, mx.swapaxes(world_to_camera, -1, -2))[..., :3]
 
     x_cam = points_camera[..., 0]
@@ -186,6 +188,19 @@ def project_pixal3d_points_to_image(
         & (depth > 0)
     )
     return Pixal3DProjectedPoints(points_2d=points_2d, depth=depth, valid_mask=valid)
+
+
+def _invert_rigid_transform_4x4(transform_matrix: mx.array) -> mx.array:
+    """Invert a batched rigid camera transform without GPU-unsupported linalg ops."""
+
+    matrix = transform_matrix.astype(mx.float32)
+    rotation = matrix[:, :3, :3]
+    translation = matrix[:, :3, 3]
+    rotation_inv = mx.swapaxes(rotation, -1, -2)
+    translation_inv = -mx.matmul(rotation_inv, translation[..., None])[..., 0]
+    top = mx.concatenate([rotation_inv, translation_inv[..., None]], axis=-1)
+    bottom = mx.broadcast_to(mx.array([0.0, 0.0, 0.0, 1.0], dtype=mx.float32)[None, None, :], (int(matrix.shape[0]), 1, 4))
+    return mx.concatenate([top, bottom], axis=1)
 
 
 def sample_pixal3d_feature_map(

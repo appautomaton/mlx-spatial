@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-26-pixal3d-moge-auto-camera",
+  "active_change": "2026-05-26-pixal3d-gpu-safe-projection",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-pixal3d-moge-auto-camera/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-pixal3d-moge-auto-camera/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-26-pixal3d-gpu-safe-projection/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-26-pixal3d-gpu-safe-projection/PLAN.md"
 }
