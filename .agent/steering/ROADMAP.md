@@ -270,6 +270,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-split-axis-gate/SPEC.md`
 - exit signal: Native-chart reference-target export improves beyond the Phase 26 chart-fill or xatlas-utilization baseline while parity stays explicitly false.
 
+## Phase 28: Native Chart Split Position Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-split-position-gate`
+- objective: Improve native low-fill chart splitting by evaluating bounded split positions per local axis.
+- why now: Phase 27 searches both axes, but the splitter still only tries the median cut even when off-center cuts may better reduce chart empty space.
+- likely outputs: Three-position split search, partition candidate diagnostics, real-fixture fill gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-split-position-gate/SPEC.md`
+- exit signal: Native-chart reference-target export improves beyond the Phase 27 chart-fill or xatlas-utilization baseline while parity stays explicitly false.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

@@ -176,10 +176,16 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert uv_stats["low_fill_split_min_child_faces"] == 3
     assert uv_stats["low_fill_split_max_depth"] == 3
     assert uv_stats["low_fill_split_axis_candidates"] == 2
+    assert uv_stats["low_fill_split_position_candidates"] == 3
     assert uv_stats["low_fill_split_candidate_count"] > 0
     assert uv_stats["low_fill_split_axis_candidate_count"] == (
         uv_stats["low_fill_split_candidate_count"] * uv_stats["low_fill_split_axis_candidates"]
     )
+    assert uv_stats["low_fill_split_partition_candidate_count"] == (
+        uv_stats["low_fill_split_axis_candidate_count"] * uv_stats["low_fill_split_position_candidates"]
+    )
+    assert uv_stats["low_fill_split_partition_evaluated_count"] > uv_stats["low_fill_split_axis_candidate_count"]
+    assert uv_stats["low_fill_split_partition_evaluated_count"] <= uv_stats["low_fill_split_partition_candidate_count"]
     assert uv_stats["low_fill_source_chart_count"] > 0
     assert uv_stats["low_fill_split_accepted_count"] > 0
     assert uv_stats["low_fill_chart_split_count"] == uv_stats["chart_count"] - uv_stats["pre_low_fill_chart_count"]
@@ -358,7 +364,12 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert uv_stats["backend"] == "native-chart-atlas"
     assert uv_stats["chart_count"] > 0
     assert uv_stats["output_faces"] == diagnostics["stages"]["simplify_mesh"]["simplified_faces"]
-    assert uv_stats["chart_rect_fill_ratio"] > 0.5647715200751198
+    assert uv_stats["chart_rect_fill_ratio"] > 0.5670824417746222
+    assert uv_stats["low_fill_split_position_candidates"] == 3
+    assert uv_stats["low_fill_split_partition_candidate_count"] == (
+        uv_stats["low_fill_split_axis_candidate_count"] * uv_stats["low_fill_split_position_candidates"]
+    )
+    assert uv_stats["low_fill_split_partition_evaluated_count"] > uv_stats["low_fill_split_axis_candidate_count"]
     assert uv_stats["low_fill_split_accepted_count"] > 0
 
     texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
@@ -392,7 +403,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
     assert diagnostics["quality"]["xatlas_chart_parity"]["ratios"][
         "uv_surface_occupancy_vs_reference_utilization"
-    ] > 0.6131533138496904
+    ] > 0.6202011322387381
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True
@@ -572,6 +583,11 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert uv_stats["chart_count"] > 0
     assert uv_stats["output_faces"] == simplify_stats["final_faces"]
     assert uv_stats["chart_rect_fill_ratio"] > 0.50
+    assert uv_stats["low_fill_split_position_candidates"] == 3
+    assert uv_stats["low_fill_split_partition_candidate_count"] == (
+        uv_stats["low_fill_split_axis_candidate_count"] * uv_stats["low_fill_split_position_candidates"]
+    )
+    assert uv_stats["low_fill_split_partition_evaluated_count"] > uv_stats["low_fill_split_axis_candidate_count"]
 
     assert texture_stats["backend"] == "metal-uv-binned-nearest"
     assert texture_stats["texture_size"] == 4096
