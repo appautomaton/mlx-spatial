@@ -30,6 +30,19 @@ result = export_pixal3d_glb(
 print(result.diagnostics["quality"]["production_thresholds"])
 ```
 
+To exercise the native chart UV candidate on decoded Pixal3D tensors, opt in
+explicitly:
+
+```python
+result = export_pixal3d_glb(
+    "inputs/mlx-spatialkit/pixal3d-1024-cascade-decoded-pbr",
+    "/tmp/mlx-spatialkit-pixal3d-chart",
+    uv_backend="native-chart",
+    chart_angle_degrees=45.0,
+)
+print(result.diagnostics["quality"]["native_chart_uv_candidate"])
+```
+
 The real fixture test is opt-in with `pytest -m heavy` and writes generated
 GLB/diagnostic artifacts under `/tmp`.
 
@@ -61,7 +74,10 @@ opt-in native chart candidate: it groups edge-connected smooth faces by a
 normal-angle threshold, duplicates vertices at chart boundaries, packs charts
 into a deterministic grid, and feeds this binned Metal path. Existing Pixal3D
 exports still use the paired-triangle face atlas by default, and this chart
-candidate is not xatlas chart parity.
+candidate is not xatlas chart parity. `export_pixal3d_glb(...,
+uv_backend="native-chart")` wires the same candidate into the real decoded
+Pixal3D export path and records chart count, duplicate ratio, UV-bin
+diagnostics, and `xatlas_chart_parity=false`.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

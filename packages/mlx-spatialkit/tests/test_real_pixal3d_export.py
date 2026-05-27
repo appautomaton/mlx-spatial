@@ -8,9 +8,11 @@ import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
 from mlx_spatialkit.export import (
+    _resolve_chart_angle_degrees,
     _export_quality_summary,
     _glb_viewer_compatibility_summary,
     _resolve_pixal3d_export_settings,
+    _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
     _upstream_export_settings_summary,
 )
@@ -95,6 +97,57 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert comparison["final_coverage_ratio_vs_reference"] > 0.10
     assert "after_write_glb" in diagnostics["memory_samples"]
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb"))
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-native-chart-pixal3d-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        texture_size=1024,
+        target_faces=50_000,
+        min_component_faces=32,
+        uv_backend="native-chart",
+        chart_angle_degrees=45.0,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+
+    assert result.glb.path == output_dir / "model.glb"
+    assert result.glb.path.read_bytes()[:4] == b"glTF"
+    assert result.glb.bytes_written > 1_000_000
+    assert diagnostics["settings"]["requested_uv_backend"] == "native-chart"
+    assert diagnostics["settings"]["uv_backend"] == "native-chart"
+    assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
+    assert diagnostics["result"]["artifact_ready"] is True
+    uv_stats = diagnostics["stages"]["uv"]["stats"]
+    assert uv_stats["backend"] == "native-chart-atlas"
+    assert uv_stats["chart_count"] > 0
+    assert uv_stats["output_faces"] == diagnostics["stages"]["simplify_mesh"]["simplified_faces"]
+    assert uv_stats["output_vertices"] <= uv_stats["source_faces"] * 3
+    assert uv_stats["duplicated_vertex_ratio"] >= 1.0
+    assert "atlas_cols" not in uv_stats
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    assert texture_stats["backend"] == "metal-uv-binned-nearest"
+    assert texture_stats["uv_bin_count"] > 0
+    assert texture_stats["uv_bin_face_reference_count"] > 0
+    assert texture_stats["uv_bin_guard_passed"] is True
+    assert texture_stats["sampled_texel_count"] > 0
+    assert diagnostics["stages"]["write_glb"]["artifact"]["uv_backend"] == "native-chart"
+    assert diagnostics["stages"]["write_glb"]["artifact"]["uv_stats_backend"] == "native-chart-atlas"
+    candidate = diagnostics["quality"]["native_chart_uv_candidate"]
+    assert candidate["status"] == "candidate"
+    assert candidate["uv_backend"] == "native-chart-atlas"
+    assert candidate["texture_bake_backend"] == "metal-uv-binned-nearest"
+    assert candidate["xatlas_chart_parity"] is False
+    assert "not_xatlas_chart_parity" in diagnostics["visual_comparison"]["deferred_parity_boundaries"]
+    _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb"))
 
 
 @pytest.mark.heavy
@@ -291,6 +344,26 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="max_texture_pixels must be positive"):
         export_pixal3d_glb(decoded_dir, tmp_path / "out", max_texture_pixels=0)
+
+
+def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+
+    assert _resolve_pixal3d_uv_backend("face-atlas") == "face-atlas"
+    assert _resolve_pixal3d_uv_backend("native_chart") == "native-chart"
+    assert _resolve_chart_angle_degrees(45.0) == 45.0
+
+    with pytest.raises(ValueError, match="uv_backend"):
+        _resolve_pixal3d_uv_backend("xatlas")
+    with pytest.raises(ValueError, match="chart_angle_degrees"):
+        _resolve_chart_angle_degrees(float("nan"))
+    with pytest.raises(ValueError, match="chart_angle_degrees"):
+        _resolve_chart_angle_degrees(181.0)
+    with pytest.raises(ValueError, match="uv_backend"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", uv_backend="xatlas")
+    with pytest.raises(ValueError, match="chart_angle_degrees"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", uv_backend="native-chart", chart_angle_degrees=-1.0)
 
 
 def test_reference_target_preset_resolves_target_faces_from_trace(tmp_path) -> None:

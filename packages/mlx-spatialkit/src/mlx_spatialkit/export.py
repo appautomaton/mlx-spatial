@@ -212,6 +212,8 @@ def export_pixal3d_glb(
     quality_preset: str = "preview",
     grid_size: int | None = None,
     min_component_faces: int = 32,
+    uv_backend: str = "face-atlas",
+    chart_angle_degrees: float = 45.0,
     tile_padding: float = 0.08,
     max_texture_pixels: int | None = None,
     diagnostics_path: str | Path | None = None,
@@ -231,6 +233,8 @@ def export_pixal3d_glb(
         raise ValueError("min_component_faces must be positive")
     if max_texture_pixels is not None and max_texture_pixels <= 0:
         raise ValueError("max_texture_pixels must be positive")
+    resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
+    resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
     glb_path, resolved_diagnostics_path = _resolve_pixal3d_export_paths(output, diagnostics_path)
     shape_path = source_dir / "shape_decoder_fields.npz"
     texture_path = source_dir / "texture_decoder_pbr.npz"
@@ -264,6 +268,9 @@ def export_pixal3d_glb(
             "reference_xatlas_face_guard": reference.get("xatlas_face_guard") if reference is not None else None,
             "grid_size": int(grid_size) if grid_size is not None else None,
             "min_component_faces": int(min_component_faces),
+            "requested_uv_backend": str(uv_backend),
+            "uv_backend": resolved_uv_backend,
+            "chart_angle_degrees": resolved_chart_angle_degrees,
             "tile_padding": float(tile_padding),
             "max_texture_pixels": int(max_texture_pixels) if max_texture_pixels is not None else None,
         },
@@ -379,12 +386,17 @@ def export_pixal3d_glb(
     )
     diagnostics["stages"]["export_metrics"]["metrics"] = post_metrics
 
-    uv_mesh = _timed_stage(
-        diagnostics,
-        "uv",
-        lambda: make_face_atlas_uvs(simplified.vertices, simplified.faces, tile_padding=tile_padding),
-        memory_monitor=memory_monitor,
-    )
+    def build_uv_mesh() -> NativeUvMesh:
+        if resolved_uv_backend == "native-chart":
+            return make_native_chart_uvs(
+                simplified.vertices,
+                simplified.faces,
+                chart_angle_degrees=resolved_chart_angle_degrees,
+                tile_padding=tile_padding,
+            )
+        return make_face_atlas_uvs(simplified.vertices, simplified.faces, tile_padding=tile_padding)
+
+    uv_mesh = _timed_stage(diagnostics, "uv", build_uv_mesh, memory_monitor=memory_monitor)
     diagnostics["stages"]["uv"].update(_uv_shape(uv_mesh))
     del simplified
     gc.collect()
@@ -420,6 +432,11 @@ def export_pixal3d_glb(
         reference,
         quality_preset=resolved_quality_preset,
     )
+    quality["native_chart_uv_candidate"] = _native_chart_uv_candidate_status(
+        uv_mesh.stats,
+        baked.stats,
+        resolved_uv_backend,
+    )
     quality["upstream_export_settings"] = _upstream_export_settings_summary(
         resolved_target_faces,
         texture_size,
@@ -447,6 +464,9 @@ def export_pixal3d_glb(
                 "texture_size": int(baked.texture_size),
                 "target_faces": resolved_target_faces,
                 "quality_preset": resolved_quality_preset,
+                "uv_backend": resolved_uv_backend,
+                "uv_stats_backend": str(uv_mesh.stats.get("backend")),
+                "chart_angle_degrees": resolved_chart_angle_degrees,
                 "bake_backend": str(baked.stats.get("backend")),
                 "coverage_ratio": float(baked.stats.get("coverage_ratio", 0.0)),
                 "raw_coverage_ratio": float(baked.stats.get("raw_coverage_ratio", 0.0)),
@@ -890,6 +910,20 @@ def _normalize_quality_preset(value: str) -> str:
     raise ValueError("quality_preset must be 'preview' or 'reference-target'")
 
 
+def _resolve_pixal3d_uv_backend(value: str) -> str:
+    backend = str(value).strip().lower().replace("_", "-")
+    if backend in ("face-atlas", "native-chart"):
+        return backend
+    raise ValueError("uv_backend must be 'face-atlas' or 'native-chart'")
+
+
+def _resolve_chart_angle_degrees(value: float) -> float:
+    angle = float(value)
+    if not np.isfinite(angle) or angle < 0.0 or angle > 180.0:
+        raise ValueError("chart_angle_degrees must be finite and in [0, 180]")
+    return angle
+
+
 def _simplifier_backend_for_quality_preset(quality_preset: str) -> str:
     preset = _normalize_quality_preset(quality_preset)
     if preset == "reference-target":
@@ -978,6 +1012,36 @@ def _native_geometry_candidate_status(
         "backend_selection_status": simplify_stats.get("backend_selection_status"),
         "face_count_ratio": face_check.get("actual"),
         "topology_exportability_passed": bool(topology_check.get("passed")),
+    }
+
+
+def _native_chart_uv_candidate_status(
+    uv_stats: dict[str, Any],
+    texture_stats: dict[str, Any],
+    uv_backend: str,
+) -> dict[str, Any]:
+    uv_stats_backend = str(uv_stats.get("backend", "unknown"))
+    texture_backend = str(texture_stats.get("backend", "unknown"))
+    if uv_backend != "native-chart":
+        return {
+            "status": "not_requested",
+            "requested_uv_backend": uv_backend,
+            "uv_backend": uv_stats_backend,
+            "texture_bake_backend": texture_backend,
+            "xatlas_chart_parity": False,
+        }
+    return {
+        "status": "candidate",
+        "requested_uv_backend": uv_backend,
+        "uv_backend": uv_stats_backend,
+        "texture_bake_backend": texture_backend,
+        "chart_count": _maybe_int(uv_stats.get("chart_count")),
+        "output_vertices": _maybe_int(uv_stats.get("output_vertices")),
+        "output_faces": _maybe_int(uv_stats.get("output_faces")),
+        "duplicated_vertex_ratio": _maybe_float(uv_stats.get("duplicated_vertex_ratio")),
+        "uv_bin_face_reference_count": _maybe_int(texture_stats.get("uv_bin_face_reference_count")),
+        "uv_bin_max_candidate_faces": _maybe_int(texture_stats.get("uv_bin_max_candidate_faces")),
+        "xatlas_chart_parity": False,
     }
 
 

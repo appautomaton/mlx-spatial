@@ -265,6 +265,12 @@ the binned Metal path. Existing Pixal3D exports still use the paired-triangle
 face-atlas fast path; this candidate does not replace xatlas charting or prove
 CUDA/cuMesh remesh parity.
 
+For direct decoded-NPZ conversion, `mlx_spatialkit.export_pixal3d_glb` accepts
+`uv_backend="native-chart"` and `chart_angle_degrees=45.0` as an opt-in chart
+candidate export. That path records `native_chart_uv_candidate` diagnostics,
+bakes through `metal-uv-binned-nearest`, and keeps `xatlas_chart_parity=false`.
+The default remains `uv_backend="face-atlas"` for stability.
+
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from
 the checked-in reference trace when available and records

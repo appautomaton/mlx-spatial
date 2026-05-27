@@ -130,6 +130,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-uv-gate/SPEC.md`
 - exit signal: `make_native_chart_uvs` produces charted UV meshes with truthful diagnostics, bakes through `metal-uv-binned-nearest`, and existing Pixal3D gates remain unchanged.
 
+## Phase 14: Chart UV Export Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-uv-export-gate`
+- objective: Add an opt-in native chart UV backend to `export_pixal3d_glb` and prove it on the real Pixal3D decoded fixture without changing the default face-atlas backend.
+- why now: The chart UV primitive is verified, but it is not yet wired into the real Pixal3D export path or proven with real fixture diagnostics.
+- likely outputs: UV backend API contract, chart backend diagnostics/metadata, real fixture heavy gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-export-gate/SPEC.md`
+- exit signal: Real fixture export with `uv_backend="native-chart"` writes a GLB under `/tmp`, bakes through `metal-uv-binned-nearest`, and keeps xatlas chart parity deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
