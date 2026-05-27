@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -195,19 +196,46 @@ int64_t initial_grid_resolution(int64_t target_faces) {
   return std::max<int64_t>(2, static_cast<int64_t>(resolution));
 }
 
+std::string normalize_backend(const std::string &backend) {
+  if (backend.empty() || backend == "spatial-cluster" || backend == "preview") {
+    return "spatial-cluster";
+  }
+  if (backend == "topology-aware") {
+    return "topology-aware";
+  }
+  throw nb::value_error("simplifier backend must be 'spatial-cluster' or 'topology-aware'");
+}
+
+void add_backend_stats(nb::dict &stats, const std::string &requested_backend) {
+  stats["requested_backend"] = requested_backend;
+  stats["backend"] = "spatial-cluster";
+  stats["algorithm"] = "native_spatial_vertex_clustering";
+  stats["quality_tier"] = "geometry_aware_preview";
+  stats["production_ready"] = false;
+  if (requested_backend == "spatial-cluster") {
+    stats["backend_selection_status"] = "selected";
+    stats["backend_selection_reason"] = "preview_backend_requested";
+  } else {
+    stats["backend_selection_status"] = "fallback_preview_unimplemented";
+    stats["backend_selection_reason"] = "topology-aware backend contract exists but implementation is pending";
+  }
+}
+
 }  // namespace
 
 nb::dict simplify_mesh(
     nb::object vertices,
     nb::object faces,
     int64_t target_faces,
-    int64_t min_component_faces) {
+    int64_t min_component_faces,
+    const std::string &backend) {
   if (target_faces <= 0) {
     throw nb::value_error("target_faces must be positive");
   }
   if (min_component_faces <= 0) {
     throw nb::value_error("min_component_faces must be positive");
   }
+  const std::string requested_backend = normalize_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
 
   if (static_cast<int64_t>(input.faces.size()) <= target_faces) {
@@ -215,10 +243,7 @@ nb::dict simplify_mesh(
     mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
     nb::dict result = mesh_common::mesh_result(compact);
     nb::dict stats;
-    stats["backend"] = "spatial-cluster";
-    stats["algorithm"] = "native_spatial_vertex_clustering";
-    stats["quality_tier"] = "geometry_aware_preview";
-    stats["production_ready"] = false;
+    add_backend_stats(stats, requested_backend);
     stats["target_faces"] = target_faces;
     stats["source_faces"] = static_cast<int64_t>(input.faces.size());
     stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
@@ -267,10 +292,7 @@ nb::dict simplify_mesh(
   mesh_common::MeshData simplified = mesh_common::compact_mesh(best.mesh, &unreferenced_removed);
   nb::dict result = mesh_common::mesh_result(simplified);
   nb::dict stats;
-  stats["backend"] = "spatial-cluster";
-  stats["algorithm"] = "native_spatial_vertex_clustering";
-  stats["quality_tier"] = "geometry_aware_preview";
-  stats["production_ready"] = false;
+  add_backend_stats(stats, requested_backend);
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());

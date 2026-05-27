@@ -127,6 +127,8 @@ def test_simplify_mesh_reduces_faces_with_native_owned_interface() -> None:
     assert stats["algorithm"] == "native_spatial_vertex_clustering"
     assert stats["quality_tier"] == "geometry_aware_preview"
     assert stats["production_ready"] is False
+    assert stats["requested_backend"] == "spatial-cluster"
+    assert stats["backend_selection_status"] == "selected"
     assert stats["source_faces"] == faces.shape[0]
     assert stats["source_vertices"] == vertices.shape[0]
     assert stats["target_faces"] == 40
@@ -144,6 +146,23 @@ def test_simplify_mesh_reduces_faces_with_native_owned_interface() -> None:
     assert metrics["duplicate_faces"] == 0
     assert metrics["nonmanifold_edges"] == 0
     assert "degenerate_faces_present" not in metrics["export_blocking_reasons"]
+
+
+def test_simplify_mesh_records_unimplemented_production_backend_intent() -> None:
+    vertices, faces = _grid_mesh(10)
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=40, min_component_faces=1, backend="topology-aware")
+    metrics = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["requested_backend"] == "topology-aware"
+    assert stats["backend"] == "spatial-cluster"
+    assert stats["algorithm"] == "native_spatial_vertex_clustering"
+    assert stats["quality_tier"] == "geometry_aware_preview"
+    assert stats["production_ready"] is False
+    assert stats["backend_selection_status"] == "fallback_preview_unimplemented"
+    assert "implementation is pending" in stats["backend_selection_reason"]
+    assert stats["target_reached"] is True
+    assert metrics["export_blocking_reasons"] == []
 
 
 def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
@@ -176,3 +195,10 @@ def test_simplify_mesh_rejects_invalid_target() -> None:
 
     with pytest.raises(ValueError, match="target_faces must be positive"):
         simplify_mesh(vertices, faces, target_faces=0)
+
+
+def test_simplify_mesh_rejects_invalid_backend() -> None:
+    vertices, faces = _messy_mesh()
+
+    with pytest.raises(ValueError, match="simplifier backend"):
+        simplify_mesh(vertices, faces, target_faces=4, backend="bad-backend")

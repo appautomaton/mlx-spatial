@@ -32,6 +32,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 
 **Touches:** `packages/mlx-spatialkit/cpp/mesh_processing.hpp`, `packages/mlx-spatialkit/cpp/bindings.cpp`, `packages/mlx-spatialkit/cpp/simplify.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/mesh.py`, `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests/test_mesh_processing.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`
 
+**Status:** complete
+**Evidence:** Added explicit simplifier backend intent through the C++ binding/header, Python `simplify_mesh(..., backend=...)` wrapper, and Pixal3D export routing. Preview/default requests `spatial-cluster`; reference-target requests `topology-aware` but currently records `fallback_preview_unimplemented` while actual backend remains `spatial-cluster`, so thresholds stay unchanged. Added tests for backend intent stats, invalid backend validation, and reference-target backend request selection. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `13 passed, 2 deselected`.
+**Risks / next:** Slice 2 must replace the fallback with a distinct native topology-aware backend before any production-tier claim is possible.
+
 ### Slice 2: Native Topology-Aware Geometry Backend
 
 **Objective:** Implement a distinct native topology-aware simplifier/remesher candidate that can justify production-tier status only when its own checks pass.

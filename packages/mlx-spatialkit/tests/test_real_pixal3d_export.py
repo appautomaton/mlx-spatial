@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
-from mlx_spatialkit.export import _export_quality_summary, _resolve_pixal3d_export_settings
+from mlx_spatialkit.export import (
+    _export_quality_summary,
+    _resolve_pixal3d_export_settings,
+    _simplifier_backend_for_quality_preset,
+)
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
@@ -178,10 +182,12 @@ def test_reference_target_preset_resolves_target_faces_from_trace(tmp_path) -> N
     assert reference_settings["target_faces"] == 123_456
     assert reference_settings["target_faces_source"] == "reference_final_faces"
     assert reference_settings["reference"]["xatlas_face_guard"] == 300_000
+    assert _simplifier_backend_for_quality_preset(reference_settings["quality_preset"]) == "topology-aware"
 
     preview_settings = _resolve_pixal3d_export_settings(decoded_dir, "preview", None)
     assert preview_settings["target_faces"] == 50_000
     assert preview_settings["target_faces_source"] == "preview_default"
+    assert _simplifier_backend_for_quality_preset(preview_settings["quality_preset"]) == "spatial-cluster"
 
     explicit_settings = _resolve_pixal3d_export_settings(decoded_dir, "production", 42_000)
     assert explicit_settings["quality_preset"] == "reference-target"
@@ -236,6 +242,25 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert candidate["current_quality_tier"] == "geometry_aware_preview"
     assert candidate["face_count_ratio"] == pytest.approx(198_618 / 212_542)
     assert candidate["topology_exportability_passed"] is True
+
+    requested_candidate = _export_quality_summary(
+        {
+            "requested_backend": "topology-aware",
+            "backend": "spatial-cluster",
+            "backend_selection_status": "fallback_preview_unimplemented",
+            "quality_tier": "geometry_aware_preview",
+            "final_faces": 198_618,
+        },
+        {"export_blocking_reasons": []},
+        {"coverage_ratio": 0.75, "raw_coverage_ratio": 0.20},
+        {"final_faces": 212_542, "coverage_ratio": 1.0, "raw_coverage_ratio": 0.40},
+        quality_preset="reference-target",
+    )
+    requested_status = requested_candidate["native_geometry_candidate"]
+    assert requested_candidate["production_quality_ready"] is False
+    assert requested_status["status"] == "blocked"
+    assert requested_status["requested_backend"] == "topology-aware"
+    assert requested_status["backend_selection_status"] == "fallback_preview_unimplemented"
 
     production = _export_quality_summary(
         {

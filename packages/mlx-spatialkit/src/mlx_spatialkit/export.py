@@ -218,6 +218,7 @@ def export_pixal3d_glb(
     reference = export_settings["reference"]
     resolved_quality_preset = str(export_settings["quality_preset"])
     resolved_target_faces = int(export_settings["target_faces"])
+    requested_simplifier_backend = _simplifier_backend_for_quality_preset(resolved_quality_preset)
 
     diagnostics: dict[str, Any] = {
         "stage": "pixal3d_glb_export",
@@ -228,6 +229,7 @@ def export_pixal3d_glb(
             "quality_preset": resolved_quality_preset,
             "texture_size": int(texture_size),
             "target_faces": resolved_target_faces,
+            "requested_simplifier_backend": requested_simplifier_backend,
             "requested_target_faces": int(target_faces) if target_faces is not None else None,
             "target_faces_source": export_settings["target_faces_source"],
             "reference_available": reference is not None,
@@ -327,6 +329,7 @@ def export_pixal3d_glb(
             cleaned.faces,
             target_faces=resolved_target_faces,
             min_component_faces=min_component_faces,
+            backend=requested_simplifier_backend,
         ),
     )
     diagnostics["stages"]["simplify_mesh"].update(_mesh_shape(simplified, "simplified"))
@@ -637,6 +640,13 @@ def _normalize_quality_preset(value: str) -> str:
     raise ValueError("quality_preset must be 'preview' or 'reference-target'")
 
 
+def _simplifier_backend_for_quality_preset(quality_preset: str) -> str:
+    preset = _normalize_quality_preset(quality_preset)
+    if preset == "reference-target":
+        return "topology-aware"
+    return "spatial-cluster"
+
+
 def _export_quality_summary(
     simplify_stats: dict[str, Any],
     export_metrics: dict[str, Any],
@@ -694,6 +704,8 @@ def _native_geometry_candidate_status(
             "reason": "quality_preset_is_preview",
             "current_backend": simplify_stats.get("backend"),
             "current_quality_tier": simplify_stats.get("quality_tier"),
+            "requested_backend": simplify_stats.get("requested_backend"),
+            "backend_selection_status": simplify_stats.get("backend_selection_status"),
         }
     if bool(backend_check.get("passed")):
         return {
@@ -701,6 +713,8 @@ def _native_geometry_candidate_status(
             "reason": "native_geometry_candidate_available",
             "current_backend": simplify_stats.get("backend"),
             "current_quality_tier": simplify_stats.get("quality_tier"),
+            "requested_backend": simplify_stats.get("requested_backend"),
+            "backend_selection_status": simplify_stats.get("backend_selection_status"),
             "face_count_ratio": face_check.get("actual"),
             "topology_exportability_passed": bool(topology_check.get("passed")),
         }
@@ -710,6 +724,8 @@ def _native_geometry_candidate_status(
         "detail": "reference-target export still uses a preview-tier native simplifier",
         "current_backend": simplify_stats.get("backend"),
         "current_quality_tier": simplify_stats.get("quality_tier"),
+        "requested_backend": simplify_stats.get("requested_backend"),
+        "backend_selection_status": simplify_stats.get("backend_selection_status"),
         "face_count_ratio": face_check.get("actual"),
         "topology_exportability_passed": bool(topology_check.get("passed")),
     }

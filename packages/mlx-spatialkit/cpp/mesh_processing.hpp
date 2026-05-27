@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nanobind/nanobind.h>
+#include <string>
 
 namespace mlx_spatialkit {
 
@@ -15,6 +16,7 @@ nanobind::dict simplify_mesh(
     nanobind::object vertices,
     nanobind::object faces,
     int64_t target_faces,
-    int64_t min_component_faces);
+    int64_t min_component_faces,
+    const std::string &backend);
 
 }  // namespace mlx_spatialkit
