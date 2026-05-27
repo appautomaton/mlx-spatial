@@ -230,6 +230,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-reference-target-gate/SPEC.md`
 - exit signal: Reference-target native-chart export passes production and visual gates while xatlas and 1M/4096 parity remain explicitly deferred.
 
+## Phase 24: Native Chart Upstream Settings Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-upstream-settings-gate`
+- objective: Codify explicit 1M/4096 native-chart Pixal3D export readiness with real-fixture tests and docs.
+- why now: A `/tmp` probe shows native-chart reaches upstream-setting readiness at 1M/4096, but that proof is not yet durable and its 1024-reference visual boundary needs to stay explicit.
+- likely outputs: Heavy native-chart 1M/4096 test, upstream-setting and chart-readiness assertions, visual-boundary assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-upstream-settings-gate/SPEC.md`
+- exit signal: Explicit 1M/4096 native-chart export passes upstream-setting and native-chart quality gates, removes the 1M/4096 deferral, and keeps only xatlas chart parity deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

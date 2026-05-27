@@ -243,8 +243,12 @@ Script defaults:
   and the 4096 texture-size gate passes after atlas-size-aware Metal fallback
   and native dilation budgets are applied. Explicit 1M/4096 upstream-style
   exports report a separate `quality.upstream_export_settings` gate; passing
-  that gate removes only the 1M-face setting deferral. This is not full upstream
-  xatlas charting or CUDA/cuMesh remesh parity.
+  that gate removes only the 1M-face setting deferral. The opt-in native-chart
+  backend also has a 1M/4096 heavy gate where upstream-setting readiness and
+  native-chart quality readiness pass, while 1024-reference visual comparison
+  stays visibly mismatched on face count and texture size. This is not full
+  upstream xatlas charting, xatlas chart equivalence, or CUDA/cuMesh remesh
+  parity.
   Arbitrary non-atlas UV bakes now use `metal-uv-binned-nearest`, a bounded
   UV-space face-bin Metal lookup that reports bin grid and candidate diagnostics
   instead of scanning every face per texel. The current Pixal3D export still
@@ -265,7 +269,9 @@ Script defaults:
   chart parity remains deferred. With `quality_preset="reference-target"` and
   `uv_backend="native-chart"`, the real fixture also passes production and
   deterministic visual-comparison gates; this does not remove xatlas or
-  1M/4096 upstream-setting parity boundaries.
+  1M/4096 upstream-setting parity boundaries. With explicit
+  `target_faces=1000000` and `texture_size=4096`, the same backend passes its
+  upstream-setting gate and leaves only xatlas chart parity deferred.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,
@@ -279,7 +285,8 @@ Script defaults:
   mismatch while still passing coverage. Default deferred visual parity
   boundaries are limited to xatlas chart parity and 1M-face export-setting
   parity; the 1M boundary is removed for explicit 1M/4096 exports only after
-  upstream-setting readiness passes.
+  upstream-setting readiness passes, including explicit native-chart 1M/4096
+  exports.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting.

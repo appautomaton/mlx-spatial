@@ -478,6 +478,102 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
 
+@pytest.mark.heavy
+def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-native-chart-upstream-settings-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="reference-target",
+        target_faces=1_000_000,
+        texture_size=4096,
+        min_component_faces=32,
+        uv_backend="native-chart",
+        chart_angle_degrees=45.0,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    uv_stats = diagnostics["stages"]["uv"]["stats"]
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    upstream = diagnostics["quality"]["upstream_export_settings"]
+    candidate = diagnostics["quality"]["native_chart_uv_candidate"]
+
+    assert result.glb.path == output_dir / "model.glb"
+    assert diagnostics["settings"]["target_faces"] == 1_000_000
+    assert diagnostics["settings"]["target_faces_source"] == "explicit"
+    assert diagnostics["settings"]["texture_size"] == 4096
+    assert diagnostics["settings"]["uv_backend"] == "native-chart"
+    assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is False
+    assert diagnostics["result"]["quality_warnings"] == ["production_thresholds_failed"]
+
+    assert upstream["all_passed"] is True
+    for check in upstream["checks"].values():
+        assert check["passed"] is True
+    assert upstream["reference"]["decimation_target"] == 1_000_000
+    assert upstream["reference"]["texture_size"] == 4096
+    assert upstream["reference"]["remesh"] is True
+    assert upstream["reference"]["xatlas_chart_parity"] is False
+
+    thresholds = diagnostics["quality"]["production_thresholds"]["checks"]
+    assert thresholds["face_count_ratio"]["passed"] is False
+    assert thresholds["face_count_ratio"]["spatialkit_final_faces"] == simplify_stats["final_faces"]
+    assert thresholds["face_count_ratio"]["reference_final_faces"] == 212_542
+    assert thresholds["final_coverage_ratio"]["passed"] is True
+
+    assert simplify_stats["backend"] == "topology-aware"
+    assert simplify_stats["target_faces"] == 1_000_000
+    assert simplify_stats["target_reached"] is True
+    assert 600_000 <= simplify_stats["final_faces"] <= 1_000_000
+
+    assert uv_stats["backend"] == "native-chart-atlas"
+    assert uv_stats["chart_count"] > 0
+    assert uv_stats["output_faces"] == simplify_stats["final_faces"]
+    assert uv_stats["chart_rect_fill_ratio"] > 0.50
+
+    assert texture_stats["backend"] == "metal-uv-binned-nearest"
+    assert texture_stats["texture_size"] == 4096
+    assert texture_stats["uv_bin_guard_passed"] is True
+    assert texture_stats["uv_bin_face_reference_count"] > 0
+    assert texture_stats["uv_bin_max_candidate_faces"] > 0
+    assert texture_stats["surface_fill_enabled"] is True
+    assert texture_stats["surface_filled_texel_count"] > 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+
+    assert candidate["status"] == "quality_ready"
+    assert candidate["artifact_ready"] is True
+    assert candidate["quality_ready"] is True
+    assert candidate["global_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"])
+    assert candidate["uv_surface_occupancy_ratio"] >= 0.50
+    assert candidate["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert candidate["quality_blockers"] == []
+    assert candidate["xatlas_chart_parity"] is False
+
+    visual = diagnostics["visual_comparison"]
+    assert visual["summary"]["all_passed"] is False
+    assert visual["checks"]["face_count_ratio"]["passed"] is False
+    assert visual["checks"]["texture_resolution_match"]["passed"] is False
+    assert visual["checks"]["texture_resolution_match"]["candidate"] == {"height": 4096, "width": 4096}
+    assert visual["checks"]["texture_resolution_match"]["reference"] == {"height": 1024, "width": 1024}
+    assert visual["deferred_parity_boundaries"] == ["not_xatlas_chart_parity"]
+
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
+    write_inspection = diagnostics["stages"]["write_glb"]["inspection"]
+    assert write_inspection["primitive_count"] > 1
+    assert all(primitive["has_normals"] for primitive in write_inspection["primitives"])
+    assert all(primitive["indices_component_type"] == 5123 for primitive in write_inspection["primitives"])
+    _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb", "visual_compare"))
+
+
 def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
     decoded_dir = tmp_path / "decoded"
     decoded_dir.mkdir()

@@ -291,6 +291,12 @@ path also passes production threshold checks and deterministic GLB/PNG visual
 comparison on the real fixture. That closes the reference-target native-chart
 readiness gate, but xatlas chart parity and 1M/4096 upstream-setting parity
 remain separate boundaries.
+When the same opt-in native-chart backend is run with explicit upstream-style
+`target_faces=1000000`, `texture_size=4096`, the real fixture passes both
+`quality.upstream_export_settings` and `quality.native_chart_uv_candidate`
+readiness. The 1024 reference GLB visual comparison is still expected to report
+face-count and texture-resolution mismatches; that is an honest reference-target
+comparison boundary, not a native-chart export failure.
 
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from
@@ -307,8 +313,9 @@ Explicit upstream-style `target_faces=1000000`, `texture_size=4096` export has
 a separate `quality.upstream_export_settings` section that checks target faces,
 texture size, backend tier, target reach, face retention, artifact readiness,
 and final coverage. This closes the 1M/4096 setting-readiness boundary when the
-check passes, but it is not full upstream xatlas charting or CUDA/cuMesh remesh
-parity.
+check passes. The native-chart backend has a matching 1M/4096 real-fixture gate,
+but it is not full upstream xatlas charting, xatlas chart equivalence, or
+CUDA/cuMesh remesh parity.
 
 Native spatialkit GLB output also records
 `quality.glb_viewer_compatibility`. The writer emits `NORMAL` attributes and
@@ -331,7 +338,9 @@ gate passes. Default deferred visual parity boundaries now stay limited to
 xatlas chart parity and 1M-face export-setting parity.
 The 1M setting boundary is removed for explicit 1M/4096 exports only after
 `quality.upstream_export_settings.all_passed=true`; xatlas chart parity remains
-deferred.
+deferred. For explicit 1M/4096 native-chart exports, the deferred list should
+shrink to `["not_xatlas_chart_parity"]` even though the compact visual summary
+is not all-passed against the 1024 reference GLB.
 
 The same diagnostics JSON includes a `memory` summary for spatialkit exports.
 It records aggregate process RSS samples, observed per-stage RSS peaks, and

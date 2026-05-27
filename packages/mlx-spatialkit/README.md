@@ -128,8 +128,12 @@ while keeping xatlas and 1M/4096 parity deferred. The 4096 heavy fixture
 separately passes production texture coverage. Explicit upstream-style
 `target_faces=1000000`, `texture_size=4096` export also has a separate
 `quality.upstream_export_settings` gate; when that gate passes, the 1M-face
-setting deferral is removed. This is still not a claim of upstream xatlas
-charting or CUDA/cuMesh remesh parity.
+setting deferral is removed. The opt-in native-chart backend also has a heavy
+1M/4096 gate: upstream-setting readiness and native-chart quality readiness
+pass, while the checked-in 1024 reference GLB comparison remains visibly
+mismatched on face count and texture size. This is still not a claim of
+upstream xatlas charting, xatlas chart equivalence, or CUDA/cuMesh remesh
+parity.
 
 Native GLB writing now emits `NORMAL` attributes and splits large meshes into
 chunk-local primitives with `UNSIGNED_SHORT` indices. Diagnostics record
@@ -149,7 +153,9 @@ browser-rendered screenshot or xatlas chart-equivalence proof. When comparing a
 mismatch is expected and should stay visible in the report. Default deferred
 visual parity boundaries now stay limited to xatlas chart parity and 1M-face
 export-setting parity; the 1M boundary is removed for explicit 1M/4096 exports
-only after upstream-setting readiness passes.
+only after upstream-setting readiness passes. For explicit 1M/4096
+native-chart exports, the remaining deferred parity boundary is xatlas chart
+parity even though the 1024-reference visual summary is not an all-pass.
 
 Pixal3D export diagnostics also include a `memory` summary with observed process
 RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`
