@@ -312,8 +312,8 @@ size. `export_pixal3d_glb` records those metrics for both the source and final
 export meshes, so visible holes can be evaluated as topology evidence before
 we change simplification, repair, or UV charting.
 For the topology-aware production simplifier, `mlx-spatialkit` also performs a
-bounded small-loop fill after simplification. The repair only targets closed
-boundary loops up to 4 edges, respects the remaining target-face budget, and
+bounded small-loop fill after simplification. The repair only targets triangular
+closed boundary loops up to 3 edges, respects the remaining target-face budget, and
 rejects patches that would introduce degenerate, duplicate, or nonmanifold
 faces. Diagnostics report the repair budget, loop counts, rejected loops, and
 faces added. This addresses small geometry holes separately from xatlas chart

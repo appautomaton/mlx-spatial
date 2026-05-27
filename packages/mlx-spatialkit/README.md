@@ -119,8 +119,8 @@ fields under `source_metrics.metrics` and `export_metrics.metrics`, so a small
 visible hole can be checked against final mesh topology before changing
 simplification, repair, or UV chart policy.
 The topology-aware production simplifier now applies a bounded native
-small-loop fill after simplification: it only fills closed boundary loops up to
-4 edges, only while staying inside the target-face budget, and rejects patches
+small-loop fill after simplification: it only fills triangular closed boundary
+loops up to 3 edges, only while staying inside the target-face budget, and rejects patches
 that would create degenerate, duplicate, or nonmanifold faces. Repair stats
 record the face budget, considered/filled/rejected loops, budget-limited loops,
 and faces added. This reduces small geometry holes; it does not claim full

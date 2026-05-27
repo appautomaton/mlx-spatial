@@ -80,7 +80,7 @@ struct BackendSelection {
   bool topology_aware = false;
 };
 
-constexpr int64_t kSmallBoundaryLoopFillMaxEdges = 4;
+constexpr int64_t kSmallBoundaryLoopFillMaxEdges = 3;
 
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
   std::array<float, 3> min_bounds{

@@ -376,7 +376,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
 
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
     assert simplify_stats["small_boundary_loop_fill_enabled"] is True
-    assert simplify_stats["small_boundary_loop_fill_max_edges"] == 4
+    assert simplify_stats["small_boundary_loop_fill_max_edges"] == 3
     assert simplify_stats["small_boundary_loops_considered"] > 0
     assert simplify_stats["small_boundary_loops_filled"] > 0
     assert simplify_stats["small_boundary_loop_faces_added"] > 0

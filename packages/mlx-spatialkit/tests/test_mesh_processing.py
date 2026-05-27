@@ -186,7 +186,38 @@ def test_simplify_mesh_uses_distinct_topology_aware_backend() -> None:
         assert not np.allclose(preview_mesh.vertices, mesh.vertices)
 
 
-def test_simplify_mesh_topology_aware_fills_small_closed_boundary_loop() -> None:
+def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
+    vertices, faces = _triangular_hole_mesh()
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 2,
+        min_component_faces=1,
+        backend="topology-aware",
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_loop_count"] == 2
+    assert before["boundary_edges"] == 9
+    assert stats["small_boundary_loop_fill_enabled"] is True
+    assert stats["small_boundary_loop_fill_max_edges"] == 3
+    assert stats["small_boundary_loop_fill_face_budget"] == 2
+    assert stats["small_boundary_loops_considered"] == 1
+    assert stats["small_boundary_loops_filled"] == 1
+    assert stats["small_boundary_loops_rejected"] == 0
+    assert stats["small_boundary_loops_budget_limited"] == 0
+    assert stats["small_boundary_loop_faces_added"] == 1
+    assert stats["final_faces"] == faces.shape[0] + 1
+    assert stats["target_reached"] is True
+    assert after["boundary_loop_count"] == 1
+    assert after["boundary_edges"] == 6
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
+def test_simplify_mesh_topology_aware_preserves_four_edge_boundary_loop() -> None:
     vertices, faces = _grid_mesh_with_missing_cell(6, missing_x=3, missing_y=3)
     before = mesh_metrics(vertices, faces)
 
@@ -202,17 +233,12 @@ def test_simplify_mesh_topology_aware_fills_small_closed_boundary_loop() -> None
     assert before["boundary_loop_count"] == 2
     assert before["boundary_edges"] == 28
     assert stats["small_boundary_loop_fill_enabled"] is True
-    assert stats["small_boundary_loop_fill_max_edges"] == 4
-    assert stats["small_boundary_loop_fill_face_budget"] == 4
-    assert stats["small_boundary_loops_considered"] == 1
-    assert stats["small_boundary_loops_filled"] == 1
-    assert stats["small_boundary_loops_rejected"] == 0
-    assert stats["small_boundary_loops_budget_limited"] == 0
-    assert stats["small_boundary_loop_faces_added"] == 2
-    assert stats["final_faces"] == faces.shape[0] + 2
-    assert stats["target_reached"] is True
-    assert after["boundary_loop_count"] == 1
-    assert after["boundary_edges"] == 24
+    assert stats["small_boundary_loop_fill_max_edges"] == 3
+    assert stats["small_boundary_loops_considered"] == 0
+    assert stats["small_boundary_loops_filled"] == 0
+    assert stats["small_boundary_loop_faces_added"] == 0
+    assert after["boundary_loop_count"] == before["boundary_loop_count"]
+    assert after["boundary_edges"] == before["boundary_edges"]
     assert after["nonmanifold_edges"] == 0
     assert after["export_blocking_reasons"] == []
 
@@ -232,6 +258,38 @@ def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
             faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
             faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])
     return np.array(vertices, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _triangular_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
+    vertices = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [-0.866, -0.5, 0.0],
+            [0.866, -0.5, 0.0],
+            [0.0, 2.0, 0.0],
+            [-1.4, 1.0, 0.0],
+            [-1.8, -1.0, 0.0],
+            [0.0, -2.0, 0.0],
+            [1.8, -1.0, 0.0],
+            [1.4, 1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            [0, 3, 4],
+            [0, 4, 1],
+            [1, 4, 5],
+            [1, 5, 6],
+            [1, 6, 2],
+            [2, 6, 7],
+            [2, 7, 8],
+            [2, 8, 0],
+            [0, 8, 3],
+        ],
+        dtype=np.int64,
+    )
+    return vertices, faces
 
 
 def _grid_mesh_with_missing_cell(
