@@ -2,7 +2,7 @@
 
 ## Phase 1: Spatialkit Export Quality Hardening
 
-- status: active
+- status: done
 - change: `2026-05-27-mlx-spatialkit-export-quality-hardening`
 - objective: Make the real Pixal3D 1024 cascade turtle fixture export as a visually coherent colored GLB and make preview-quality limitations explicit.
 - why now: The native GLB core is verified, but the current output has only about 1.15% visible base-color coverage and the simplifier is still preview-quality.
