@@ -239,13 +239,20 @@ coverage ratios. Generated GLBs are still preview artifacts rather than
 upstream-style production remesh parity, so `production_quality_ready` remains
 false until stronger remesh/unwrap/texture parity thresholds are met.
 
+The native UV path now uses paired-triangle face-atlas packing. Each atlas tile
+can hold two unrelated triangle faces in complementary halves, and diagnostics
+report `packing=paired-triangles`, `faces_per_tile=2`, and texture-bake
+`atlas_faces_per_tile=2`. This improves global texture coverage without adding
+xatlas as a package dependency, but it is not equivalent to xatlas chart
+generation or a production remesh backend.
+
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from
 the checked-in reference trace when available and records
 `production_thresholds` for reference availability, preset, backend tier,
 topology exportability, face-count ratio, final coverage ratio, and raw coverage
 reporting. Current reference-target diagnostics are expected to stay
-`artifact_ready=true` and `production_quality_ready=false`: the face-count and
-topology checks pass, while the native geometry candidate is explicitly blocked
-because `spatial-cluster` is preview-tier and final global coverage is below the
-production threshold.
+`artifact_ready=true` and `production_quality_ready=false`: face-count,
+topology, and final global coverage checks pass on the current heavy fixture,
+while the native geometry candidate is explicitly blocked because
+`spatial-cluster` is still preview-tier.

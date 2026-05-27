@@ -8,6 +8,7 @@ struct BakeConfig {
   uint voxel_count;
   uint atlas_cols;
   uint atlas_rows;
+  uint atlas_faces_per_tile;
   float tile_padding;
   float origin_x;
   float origin_y;
@@ -142,19 +143,33 @@ kernel void mlx_spatialkit_bake_pbr_texture(
   if (config.atlas_cols > 0 && config.atlas_rows > 0) {
     uint col = min(uint(floor(uv.x * float(config.atlas_cols))), config.atlas_cols - 1);
     uint row = min(uint(floor(uv.y * float(config.atlas_rows))), config.atlas_rows - 1);
-    uint candidate = row * config.atlas_cols + col;
-    if (candidate < config.face_count) {
-      float2 local_uv = float2(uv.x * float(config.atlas_cols) - float(col),
-                               uv.y * float(config.atlas_rows) - float(row));
-      float scale = 1.0f - 2.0f * config.tile_padding;
-      if (scale > 0.0f) {
-        float w1 = (local_uv.x - config.tile_padding) / scale;
-        float w2 = (local_uv.y - config.tile_padding) / scale;
-        float w0 = 1.0f - w1 - w2;
-        if (w0 >= -1e-5f && w1 >= -1e-5f && w2 >= -1e-5f) {
-          face_index = int(candidate);
-          weights = float3(w0, w1, w2);
-        }
+    uint tile_index = row * config.atlas_cols + col;
+    float2 local_uv = float2(uv.x * float(config.atlas_cols) - float(col),
+                             uv.y * float(config.atlas_rows) - float(row));
+    float lo = config.tile_padding;
+    float hi = 1.0f - config.tile_padding;
+    for (uint slot = 0; slot < config.atlas_faces_per_tile; ++slot) {
+      uint candidate = tile_index * config.atlas_faces_per_tile + slot;
+      if (candidate >= config.face_count) {
+        break;
+      }
+      float2 a;
+      float2 b;
+      float2 c;
+      if (slot == 0) {
+        a = float2(lo, lo);
+        b = float2(hi, lo);
+        c = float2(lo, hi);
+      } else if (slot == 1) {
+        a = float2(hi, hi);
+        b = float2(lo, hi);
+        c = float2(hi, lo);
+      } else {
+        break;
+      }
+      if (barycentric_uv(local_uv, a, b, c, weights)) {
+        face_index = int(candidate);
+        break;
       }
     }
   } else {

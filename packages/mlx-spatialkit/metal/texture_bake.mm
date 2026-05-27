@@ -34,6 +34,7 @@ struct BakeConfig {
   uint32_t voxel_count;
   uint32_t atlas_cols;
   uint32_t atlas_rows;
+  uint32_t atlas_faces_per_tile;
   float tile_padding;
   float origin_x;
   float origin_y;
@@ -390,6 +391,7 @@ nb::dict bake_pbr_texture_metal(
     int64_t decode_resolution,
     int64_t atlas_cols,
     int64_t atlas_rows,
+    int64_t atlas_faces_per_tile,
     double tile_padding,
     int64_t max_texture_pixels) {
   if (texture_size <= 0) {
@@ -410,6 +412,12 @@ nb::dict bake_pbr_texture_metal(
   }
   if (atlas_cols < 0 || atlas_rows < 0) {
     throw nb::value_error("atlas_cols and atlas_rows must be non-negative");
+  }
+  if (atlas_faces_per_tile < 0) {
+    throw nb::value_error("atlas_faces_per_tile must be non-negative");
+  }
+  if ((atlas_cols > 0 || atlas_rows > 0) && atlas_faces_per_tile <= 0) {
+    throw nb::value_error("atlas_faces_per_tile must be positive when atlas dimensions are provided");
   }
   if (tile_padding < 0.0 || tile_padding >= 0.45) {
     throw nb::value_error("tile_padding must be in [0, 0.45)");
@@ -492,6 +500,7 @@ nb::dict bake_pbr_texture_metal(
         checked_u32(records.size(), "voxel count"),
         checked_u32(static_cast<uint64_t>(atlas_cols), "atlas_cols"),
         checked_u32(static_cast<uint64_t>(atlas_rows), "atlas_rows"),
+        checked_u32(static_cast<uint64_t>(atlas_faces_per_tile), "atlas_faces_per_tile"),
         static_cast<float>(tile_padding),
         origin[0],
         origin[1],
@@ -629,6 +638,7 @@ nb::dict bake_pbr_texture_metal(
     stats["voxel_size"] = resolved_voxel_size;
     stats["atlas_cols"] = atlas_cols;
     stats["atlas_rows"] = atlas_rows;
+    stats["atlas_faces_per_tile"] = atlas_faces_per_tile;
     stats["fallback_radius"] = config.fallback_radius;
     stats["dilation_max_passes"] = 8;
 

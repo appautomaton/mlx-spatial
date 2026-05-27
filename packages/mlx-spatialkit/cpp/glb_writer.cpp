@@ -406,12 +406,19 @@ nb::dict make_face_atlas_uvs(nb::object vertices, nb::object faces, double tile_
   }
 
   const int64_t face_count = static_cast<int64_t>(mesh.faces.size());
-  const int64_t cols = static_cast<int64_t>(std::ceil(std::sqrt(static_cast<double>(face_count))));
-  const int64_t rows = static_cast<int64_t>(std::ceil(static_cast<double>(face_count) / static_cast<double>(cols)));
-  const std::array<std::array<float, 2>, 3> local_uv{{
+  constexpr int64_t faces_per_tile = 2;
+  const int64_t atlas_tiles = (face_count + faces_per_tile - 1) / faces_per_tile;
+  const int64_t cols = static_cast<int64_t>(std::ceil(std::sqrt(static_cast<double>(atlas_tiles))));
+  const int64_t rows = static_cast<int64_t>(std::ceil(static_cast<double>(atlas_tiles) / static_cast<double>(cols)));
+  const std::array<std::array<float, 2>, 3> lower_left_uv{{
       {static_cast<float>(tile_padding), static_cast<float>(tile_padding)},
       {static_cast<float>(1.0 - tile_padding), static_cast<float>(tile_padding)},
       {static_cast<float>(tile_padding), static_cast<float>(1.0 - tile_padding)},
+  }};
+  const std::array<std::array<float, 2>, 3> upper_right_uv{{
+      {static_cast<float>(1.0 - tile_padding), static_cast<float>(1.0 - tile_padding)},
+      {static_cast<float>(tile_padding), static_cast<float>(1.0 - tile_padding)},
+      {static_cast<float>(1.0 - tile_padding), static_cast<float>(tile_padding)},
   }};
 
   std::vector<float> atlas_vertices;
@@ -422,8 +429,10 @@ nb::dict make_face_atlas_uvs(nb::object vertices, nb::object faces, double tile_
   atlas_faces.reserve(static_cast<size_t>(face_count * 3));
   for (int64_t face_index = 0; face_index < face_count; ++face_index) {
     const auto &face = mesh.faces[static_cast<size_t>(face_index)];
-    const int64_t col = face_index % cols;
-    const int64_t row = face_index / cols;
+    const int64_t tile_index = face_index / faces_per_tile;
+    const int64_t col = tile_index % cols;
+    const int64_t row = tile_index / cols;
+    const auto &local_uv = face_index % faces_per_tile == 0 ? lower_left_uv : upper_right_uv;
     for (int corner = 0; corner < 3; ++corner) {
       const auto &vertex = mesh.vertices[static_cast<size_t>(face[corner])];
       atlas_vertices.push_back(vertex[0]);
@@ -445,9 +454,13 @@ nb::dict make_face_atlas_uvs(nb::object vertices, nb::object faces, double tile_
   stats["source_faces"] = face_count;
   stats["output_vertices"] = face_count * 3;
   stats["output_faces"] = face_count;
+  stats["packing"] = "paired-triangles";
+  stats["faces_per_tile"] = faces_per_tile;
+  stats["atlas_tiles"] = atlas_tiles;
   stats["atlas_cols"] = cols;
   stats["atlas_rows"] = rows;
   stats["tile_padding"] = tile_padding;
+  stats["estimated_tile_utilization"] = face_count > 1 ? std::pow(1.0 - 2.0 * tile_padding, 2.0) : 0.5 * std::pow(1.0 - 2.0 * tile_padding, 2.0);
   result["stats"] = stats;
   return result;
 }

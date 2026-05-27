@@ -22,13 +22,23 @@
 
 ## Phase 3: Native Remesh And Texture Parity
 
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-atlas-coverage-parity`
+- objective: Improve native atlas utilization so reference-target Pixal3D exports move closer to production texture coverage without external unwrap dependencies.
+- why now: Current evidence shows face-count/topology pass, but global final coverage fails because one-triangle-per-tile face atlas wastes texture area.
+- likely outputs: Native paired-triangle atlas packing, UV utilization diagnostics, real-fixture coverage gate, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-atlas-coverage-parity/SPEC.md`
+- exit signal: Reference-target heavy fixture shows final visible coverage around `0.602` under `/tmp`; production readiness remains threshold-controlled and false because the backend tier is still preview.
+
+## Phase 4: Native Remesh Backend Tier
+
 - status: pending
 - change:
-- objective: Improve the native remesh, UV, and texture path until spatialkit real-fixture output is visually comparable to the intended Pixal3D export path.
-- why now: Deferred from the readiness-gate cycle because current evidence shows face-count/topology can pass while preview-tier backend and global texture coverage still fail production thresholds.
-- likely outputs: Non-preview native remesh backend or equivalent, higher UV utilization, stronger Metal texture bake/fill path, production quality tier, runtime/memory benchmarks.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-production-remesh-parity/PLAN.md`
-- exit signal: Reference-target heavy fixture passes production thresholds or records a narrower verified blocker for the next native backend cycle.
+- objective: Replace or augment `spatial-cluster` with a non-preview native remesh/simplification backend so the reference-target export can pass backend-tier readiness.
+- why now: Deferred from the atlas coverage cycle because coverage is the current visual blocker and can be improved independently.
+- likely outputs: Non-preview native remesh backend or equivalent, topology/quality diagnostics, runtime/memory benchmarks.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-atlas-coverage-parity/PLAN.md`
+- exit signal: Reference-target export no longer reports `native_geometry_candidate_blocked` for preview-tier simplification.
 
 ## Deferred or Not Now
 

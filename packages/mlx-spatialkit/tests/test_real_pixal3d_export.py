@@ -111,6 +111,15 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert diagnostics["result"]["production_quality_ready"] is False
     assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "blocked"
     assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_blocked"
+    uv_stats = diagnostics["stages"]["uv"]["stats"]
+    assert uv_stats["backend"] == "face-atlas"
+    assert uv_stats["packing"] == "paired-triangles"
+    assert uv_stats["faces_per_tile"] == 2
+    assert uv_stats["atlas_tiles"] == (uv_stats["output_faces"] + 1) // 2
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    assert texture_stats["backend"] == "metal-face-atlas-nearest"
+    assert texture_stats["atlas_faces_per_tile"] == 2
+    assert texture_stats["final_visible_coverage_ratio"] > 0.269
     thresholds = diagnostics["quality"]["production_thresholds"]["checks"]
     assert thresholds["reference_available"]["passed"] is True
     assert thresholds["quality_preset"]["passed"] is True
@@ -118,8 +127,12 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert thresholds["face_count_ratio"]["passed"] is True
     assert 0.80 <= thresholds["face_count_ratio"]["actual"] <= 1.25
     assert thresholds["backend_tier"]["passed"] is False
-    assert thresholds["final_coverage_ratio"]["passed"] is False
-    assert thresholds["final_coverage_ratio"]["actual"] > 0.20
+    assert thresholds["final_coverage_ratio"]["actual"] == pytest.approx(
+        texture_stats["final_visible_coverage_ratio"]
+    )
+    assert thresholds["final_coverage_ratio"]["passed"] == (
+        thresholds["final_coverage_ratio"]["actual"] >= thresholds["final_coverage_ratio"]["required_min"]
+    )
     assert thresholds["raw_coverage_ratio"]["passed"] is True
     assert "production_thresholds_failed" in diagnostics["result"]["quality_warnings"]
     assert diagnostics["reference_comparison"]["reference_bake_backend"] == "xatlas-kdtree"

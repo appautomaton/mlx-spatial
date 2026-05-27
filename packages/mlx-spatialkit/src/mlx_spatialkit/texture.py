@@ -45,6 +45,7 @@ def bake_pbr_texture(
 
     atlas_cols = int(mesh.stats.get("atlas_cols", 0))
     atlas_rows = int(mesh.stats.get("atlas_rows", 0))
+    atlas_faces_per_tile = int(mesh.stats.get("faces_per_tile", 0))
     tile_padding = float(mesh.stats.get("tile_padding", 0.08))
     result = _bake_pbr_texture_metal(
         mesh.vertices,
@@ -58,6 +59,7 @@ def bake_pbr_texture(
         -1 if decode_resolution is None else int(decode_resolution),
         atlas_cols,
         atlas_rows,
+        atlas_faces_per_tile,
         tile_padding,
         int(max_texture_pixels),
     )

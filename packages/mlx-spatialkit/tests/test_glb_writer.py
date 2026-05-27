@@ -68,11 +68,31 @@ def test_make_face_atlas_uvs_duplicates_vertices_and_returns_stats() -> None:
     assert mesh.faces.shape == (2, 3)
     assert mesh.uvs.shape == (6, 2)
     assert mesh.stats["backend"] == "face-atlas"
+    assert mesh.stats["packing"] == "paired-triangles"
+    assert mesh.stats["faces_per_tile"] == 2
+    assert mesh.stats["atlas_tiles"] == 1
+    assert mesh.stats["atlas_cols"] == 1
+    assert mesh.stats["atlas_rows"] == 1
+    assert mesh.stats["estimated_tile_utilization"] == pytest.approx((1.0 - 2.0 * 0.08) ** 2)
     assert mesh.stats["source_vertices"] == 4
     assert mesh.stats["output_vertices"] == 6
     assert np.all(mesh.uvs >= 0.0)
     assert np.all(mesh.uvs <= 1.0)
     np.testing.assert_array_equal(mesh.faces, np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int64))
+    np.testing.assert_allclose(
+        mesh.uvs,
+        np.array(
+            [
+                [0.08, 0.08],
+                [0.92, 0.08],
+                [0.08, 0.92],
+                [0.92, 0.92],
+                [0.08, 0.92],
+                [0.92, 0.08],
+            ],
+            dtype=np.float32,
+        ),
+    )
 
 
 def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> None:
