@@ -11,6 +11,7 @@ from mlx_spatialkit.export import (
     _resolve_chart_angle_degrees,
     _export_quality_summary,
     _glb_viewer_compatibility_summary,
+    _native_chart_uv_candidate_status,
     _resolve_pixal3d_export_settings,
     _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
@@ -126,6 +127,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["uv_backend"] == "native-chart"
     assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
     assert diagnostics["result"]["artifact_ready"] is True
+    assert "native_chart_uv_candidate_quality_blocked" in diagnostics["result"]["quality_warnings"]
     uv_stats = diagnostics["stages"]["uv"]["stats"]
     assert uv_stats["backend"] == "native-chart-atlas"
     assert uv_stats["chart_count"] > 0
@@ -142,9 +144,20 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_backend"] == "native-chart"
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_stats_backend"] == "native-chart-atlas"
     candidate = diagnostics["quality"]["native_chart_uv_candidate"]
-    assert candidate["status"] == "candidate"
+    assert candidate["status"] == "quality_blocked"
+    assert candidate["artifact_ready"] is True
+    assert candidate["quality_ready"] is False
     assert candidate["uv_backend"] == "native-chart-atlas"
     assert candidate["texture_bake_backend"] == "metal-uv-binned-nearest"
+    assert candidate["global_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"])
+    assert candidate["uv_surface_occupancy_ratio"] == pytest.approx(
+        texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
+    )
+    assert candidate["uv_surface_occupancy_ratio"] < 0.50
+    assert candidate["checks"]["global_coverage_floor"]["passed"] is False
+    assert candidate["checks"]["uv_surface_occupancy_floor"]["passed"] is False
+    assert candidate["checks"]["uv_surface_visible_floor"]["passed"] is True
+    assert candidate["quality_blockers"] == ["global_coverage_floor", "uv_surface_occupancy_floor"]
     assert candidate["xatlas_chart_parity"] is False
     assert "not_xatlas_chart_parity" in diagnostics["visual_comparison"]["deferred_parity_boundaries"]
     _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb"))
@@ -516,6 +529,76 @@ def test_upstream_export_settings_summary_separates_setting_readiness_from_refer
     assert failing["all_passed"] is False
     assert failing["checks"]["target_faces"]["passed"] is False
     assert failing["checks"]["texture_size"]["passed"] is False
+
+
+def test_native_chart_uv_candidate_status_reports_readiness_states() -> None:
+    not_requested = _native_chart_uv_candidate_status(
+        {"backend": "face-atlas"},
+        {"backend": "metal-face-atlas-nearest"},
+        "face-atlas",
+    )
+    assert not_requested["status"] == "not_requested"
+    assert not_requested["artifact_ready"] is None
+    assert not_requested["quality_ready"] is None
+
+    artifact_blocked = _native_chart_uv_candidate_status(
+        {"backend": "native-chart-atlas", "chart_count": 4},
+        {"backend": "metal-face-atlas-nearest", "sampled_texel_count": 10},
+        "native-chart",
+    )
+    assert artifact_blocked["status"] == "artifact_blocked"
+    assert artifact_blocked["artifact_ready"] is False
+    assert artifact_blocked["quality_ready"] is False
+    assert "texture_backend" in artifact_blocked["artifact_blockers"]
+
+    quality_blocked = _native_chart_uv_candidate_status(
+        {
+            "backend": "native-chart-atlas",
+            "chart_count": 10,
+            "output_vertices": 40,
+            "output_faces": 20,
+            "duplicated_vertex_ratio": 1.2,
+        },
+        {
+            "backend": "metal-uv-binned-nearest",
+            "sampled_texel_count": 64,
+            "uv_bin_guard_passed": True,
+            "uv_bin_face_reference_count": 128,
+            "uv_bin_max_candidate_faces": 8,
+            "texture_pixel_count": 100,
+            "uv_surface_texel_count": 20,
+            "coverage_ratio": 0.14,
+            "uv_surface_final_visible_coverage_ratio": 0.62,
+        },
+        "native-chart",
+    )
+    assert quality_blocked["status"] == "quality_blocked"
+    assert quality_blocked["artifact_ready"] is True
+    assert quality_blocked["quality_ready"] is False
+    assert quality_blocked["uv_surface_occupancy_ratio"] == pytest.approx(0.20)
+    assert quality_blocked["checks"]["global_coverage_floor"]["passed"] is False
+    assert quality_blocked["checks"]["uv_surface_occupancy_floor"]["passed"] is False
+    assert quality_blocked["checks"]["uv_surface_visible_floor"]["passed"] is True
+    assert quality_blocked["quality_blockers"] == ("global_coverage_floor", "uv_surface_occupancy_floor")
+
+    quality_ready = _native_chart_uv_candidate_status(
+        {"backend": "native-chart-atlas", "chart_count": 10},
+        {
+            "backend": "metal-uv-binned-nearest",
+            "sampled_texel_count": 64,
+            "uv_bin_guard_passed": True,
+            "uv_bin_face_reference_count": 128,
+            "texture_pixel_count": 100,
+            "uv_surface_texel_count": 70,
+            "coverage_ratio": 0.60,
+            "uv_surface_final_visible_coverage_ratio": 0.90,
+        },
+        "native-chart",
+    )
+    assert quality_ready["status"] == "quality_ready"
+    assert quality_ready["artifact_ready"] is True
+    assert quality_ready["quality_ready"] is True
+    assert quality_ready["quality_blockers"] == ()
 
 
 def test_glb_viewer_compatibility_summary_checks_normals_and_uint16_chunks() -> None:

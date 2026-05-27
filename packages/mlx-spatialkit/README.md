@@ -79,6 +79,14 @@ uv_backend="native-chart")` wires the same candidate into the real decoded
 Pixal3D export path and records chart count, duplicate ratio, UV-bin
 diagnostics, and `xatlas_chart_parity=false`.
 
+Chart exports report separate artifact and quality readiness under
+`quality.native_chart_uv_candidate`. A chart export can be artifact-ready when
+it writes a valid GLB and bakes through `metal-uv-binned-nearest`, while still
+being `quality_blocked` if global texture coverage or UV-surface occupancy is
+too low. In that case `result.quality_warnings` includes
+`native_chart_uv_candidate_quality_blocked`, and the failed checks identify the
+specific coverage/utilization blocker.
+
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures
 scale `fallback_radius` within `12..24` and `dilation_max_passes` within

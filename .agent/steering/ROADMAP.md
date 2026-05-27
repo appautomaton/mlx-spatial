@@ -140,6 +140,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-export-gate/SPEC.md`
 - exit signal: Real fixture export with `uv_backend="native-chart"` writes a GLB under `/tmp`, bakes through `metal-uv-binned-nearest`, and keeps xatlas chart parity deferred.
 
+## Phase 15: Chart UV Readiness Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-uv-readiness-gate`
+- objective: Make native chart UV export diagnostics distinguish artifact readiness from quality readiness, with explicit coverage and UV-utilization blockers.
+- why now: The chart backend writes a GLB, but the real fixture shows low global texture coverage; successful tests must not hide that quality gap.
+- likely outputs: Chart readiness summary, chart-specific warnings, real fixture quality-blocked assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-readiness-gate/SPEC.md`
+- exit signal: Real chart export reports artifact-ready but quality-blocked with failed coverage/utilization checks and xatlas chart parity still deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

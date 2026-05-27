@@ -252,7 +252,9 @@ Script defaults:
   opt-in native chart-candidate UV generation for focused testing, and direct
   decoded-NPZ conversion can pass `uv_backend="native-chart"` to
   `mlx_spatialkit.export_pixal3d_glb`. The script default remains face-atlas,
-  and xatlas chart parity remains a later parity boundary.
+  and xatlas chart parity remains a later parity boundary. Chart diagnostics
+  separate `artifact_ready` from `quality_ready`, so a valid chart GLB can still
+  report `quality_blocked` when coverage or UV occupancy is not production-ready.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,

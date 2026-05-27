@@ -38,6 +38,9 @@ PIXAL3D_MEMORY_POLL_INTERVAL_SEC = 0.25
 PIXAL3D_UPSTREAM_EXPORT_TARGET_FACES = 1_000_000
 PIXAL3D_UPSTREAM_EXPORT_TEXTURE_SIZE = 4096
 PIXAL3D_UPSTREAM_EXPORT_FACE_RETENTION_MIN = 0.60
+PIXAL3D_CHART_UV_GLOBAL_COVERAGE_MIN = 0.50
+PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN = 0.50
+PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
 
 
 @dataclass(frozen=True)
@@ -432,11 +435,14 @@ def export_pixal3d_glb(
         reference,
         quality_preset=resolved_quality_preset,
     )
-    quality["native_chart_uv_candidate"] = _native_chart_uv_candidate_status(
+    chart_uv_candidate = _native_chart_uv_candidate_status(
         uv_mesh.stats,
         baked.stats,
         resolved_uv_backend,
     )
+    quality["native_chart_uv_candidate"] = chart_uv_candidate
+    if chart_uv_candidate.get("status") == "quality_blocked":
+        quality["warnings"] = tuple([*quality["warnings"], "native_chart_uv_candidate_quality_blocked"])
     quality["upstream_export_settings"] = _upstream_export_settings_summary(
         resolved_target_faces,
         texture_size,
@@ -1025,13 +1031,102 @@ def _native_chart_uv_candidate_status(
     if uv_backend != "native-chart":
         return {
             "status": "not_requested",
+            "artifact_ready": None,
+            "quality_ready": None,
             "requested_uv_backend": uv_backend,
             "uv_backend": uv_stats_backend,
             "texture_bake_backend": texture_backend,
+            "checks": {},
+            "quality_blockers": (),
             "xatlas_chart_parity": False,
         }
+    chart_count = _maybe_int(uv_stats.get("chart_count"))
+    sampled_texels = _maybe_int(texture_stats.get("sampled_texel_count"))
+    uv_bin_references = _maybe_int(texture_stats.get("uv_bin_face_reference_count"))
+    uv_bin_guard_passed = bool(texture_stats.get("uv_bin_guard_passed"))
+    final_coverage = _maybe_float(texture_stats.get("coverage_ratio", texture_stats.get("final_visible_coverage_ratio")))
+    uv_surface_visible = _maybe_float(texture_stats.get("uv_surface_final_visible_coverage_ratio"))
+    texture_pixel_count = _maybe_int(texture_stats.get("texture_pixel_count"))
+    uv_surface_texel_count = _maybe_int(texture_stats.get("uv_surface_texel_count"))
+    uv_surface_occupancy = None
+    if texture_pixel_count not in (None, 0) and uv_surface_texel_count is not None:
+        uv_surface_occupancy = float(uv_surface_texel_count) / float(texture_pixel_count)
+
+    checks = {
+        "chart_backend": {
+            "passed": uv_stats_backend == "native-chart-atlas",
+            "actual": uv_stats_backend,
+            "required": "native-chart-atlas",
+        },
+        "texture_backend": {
+            "passed": texture_backend == "metal-uv-binned-nearest",
+            "actual": texture_backend,
+            "required": "metal-uv-binned-nearest",
+        },
+        "chart_count": {
+            "passed": chart_count is not None and chart_count > 0,
+            "actual": chart_count,
+            "required": ">0",
+        },
+        "sampled_texels": {
+            "passed": sampled_texels is not None and sampled_texels > 0,
+            "actual": sampled_texels,
+            "required": ">0",
+        },
+        "uv_bin_guard": {
+            "passed": uv_bin_guard_passed,
+            "actual": uv_bin_guard_passed,
+            "required": True,
+        },
+        "uv_bin_references": {
+            "passed": uv_bin_references is not None and uv_bin_references > 0,
+            "actual": uv_bin_references,
+            "required": ">0",
+        },
+        "global_coverage_floor": {
+            "passed": final_coverage is not None and final_coverage >= PIXAL3D_CHART_UV_GLOBAL_COVERAGE_MIN,
+            "actual": final_coverage,
+            "required_min": PIXAL3D_CHART_UV_GLOBAL_COVERAGE_MIN,
+        },
+        "uv_surface_occupancy_floor": {
+            "passed": uv_surface_occupancy is not None
+            and uv_surface_occupancy >= PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN,
+            "actual": uv_surface_occupancy,
+            "required_min": PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN,
+        },
+        "uv_surface_visible_floor": {
+            "passed": uv_surface_visible is not None and uv_surface_visible >= PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN,
+            "actual": uv_surface_visible,
+            "required_min": PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN,
+        },
+    }
+    artifact_check_names = (
+        "chart_backend",
+        "texture_backend",
+        "chart_count",
+        "sampled_texels",
+        "uv_bin_guard",
+        "uv_bin_references",
+    )
+    quality_check_names = (
+        "global_coverage_floor",
+        "uv_surface_occupancy_floor",
+        "uv_surface_visible_floor",
+    )
+    artifact_ready = all(bool(checks[name]["passed"]) for name in artifact_check_names)
+    quality_ready = artifact_ready and all(bool(checks[name]["passed"]) for name in quality_check_names)
+    quality_blockers = tuple(name for name in quality_check_names if not bool(checks[name]["passed"]))
+    artifact_blockers = tuple(name for name in artifact_check_names if not bool(checks[name]["passed"]))
+    if not artifact_ready:
+        status = "artifact_blocked"
+    elif quality_ready:
+        status = "quality_ready"
+    else:
+        status = "quality_blocked"
     return {
-        "status": "candidate",
+        "status": status,
+        "artifact_ready": artifact_ready,
+        "quality_ready": quality_ready,
         "requested_uv_backend": uv_backend,
         "uv_backend": uv_stats_backend,
         "texture_bake_backend": texture_backend,
@@ -1039,8 +1134,16 @@ def _native_chart_uv_candidate_status(
         "output_vertices": _maybe_int(uv_stats.get("output_vertices")),
         "output_faces": _maybe_int(uv_stats.get("output_faces")),
         "duplicated_vertex_ratio": _maybe_float(uv_stats.get("duplicated_vertex_ratio")),
+        "global_coverage_ratio": final_coverage,
+        "uv_surface_occupancy_ratio": uv_surface_occupancy,
+        "uv_surface_final_visible_coverage_ratio": uv_surface_visible,
+        "uv_surface_texel_count": uv_surface_texel_count,
+        "texture_pixel_count": texture_pixel_count,
         "uv_bin_face_reference_count": _maybe_int(texture_stats.get("uv_bin_face_reference_count")),
         "uv_bin_max_candidate_faces": _maybe_int(texture_stats.get("uv_bin_max_candidate_faces")),
+        "checks": checks,
+        "artifact_blockers": artifact_blockers,
+        "quality_blockers": quality_blockers,
         "xatlas_chart_parity": False,
     }
 
