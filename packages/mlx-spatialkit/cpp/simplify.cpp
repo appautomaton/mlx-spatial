@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -73,12 +75,19 @@ struct SmallLoopFillResult {
   int64_t faces_added = 0;
 };
 
+struct Point2 {
+  double x = 0.0;
+  double y = 0.0;
+};
+
 struct BackendSelection {
   std::string requested;
   std::string backend;
   std::string algorithm;
   bool topology_aware = false;
 };
+
+constexpr const char *kSmallBoundaryLoopFillAlgorithm = "projected-ear-clipping";
 
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
   std::array<float, 3> min_bounds{
@@ -272,6 +281,170 @@ std::vector<int64_t> ordered_closed_loop(
   return ordered;
 }
 
+double orient2d(const Point2 &a, const Point2 &b, const Point2 &c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+double polygon_signed_area(const std::vector<Point2> &points) {
+  double area = 0.0;
+  for (size_t index = 0; index < points.size(); ++index) {
+    const Point2 &a = points[index];
+    const Point2 &b = points[(index + 1) % points.size()];
+    area += a.x * b.y - b.x * a.y;
+  }
+  return 0.5 * area;
+}
+
+bool point_in_or_on_oriented_triangle(
+    const Point2 &a,
+    const Point2 &b,
+    const Point2 &c,
+    const Point2 &point,
+    double sign,
+    double eps) {
+  const double ab = orient2d(a, b, point) * sign;
+  const double bc = orient2d(b, c, point) * sign;
+  const double ca = orient2d(c, a, point) * sign;
+  return ab >= -eps && bc >= -eps && ca >= -eps;
+}
+
+std::vector<Point2> project_loop_to_stable_plane(
+    const mesh_common::MeshData &mesh,
+    const std::vector<int64_t> &loop) {
+  std::array<double, 3> normal{0.0, 0.0, 0.0};
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const auto &current = mesh.vertices[static_cast<size_t>(loop[index])];
+    const auto &next = mesh.vertices[static_cast<size_t>(loop[(index + 1) % loop.size()])];
+    normal[0] += (static_cast<double>(current[1]) - static_cast<double>(next[1]))
+        * (static_cast<double>(current[2]) + static_cast<double>(next[2]));
+    normal[1] += (static_cast<double>(current[2]) - static_cast<double>(next[2]))
+        * (static_cast<double>(current[0]) + static_cast<double>(next[0]));
+    normal[2] += (static_cast<double>(current[0]) - static_cast<double>(next[0]))
+        * (static_cast<double>(current[1]) + static_cast<double>(next[1]));
+  }
+  const double normal_length_sq = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+  if (!std::isfinite(normal_length_sq) || normal_length_sq <= 1e-24) {
+    return {};
+  }
+
+  int drop_axis = 0;
+  if (std::abs(normal[1]) > std::abs(normal[drop_axis])) {
+    drop_axis = 1;
+  }
+  if (std::abs(normal[2]) > std::abs(normal[drop_axis])) {
+    drop_axis = 2;
+  }
+
+  std::vector<Point2> projected;
+  projected.reserve(loop.size());
+  for (const int64_t vertex_id : loop) {
+    const auto &vertex = mesh.vertices[static_cast<size_t>(vertex_id)];
+    if (drop_axis == 0) {
+      projected.push_back(Point2{static_cast<double>(vertex[1]), static_cast<double>(vertex[2])});
+    } else if (drop_axis == 1) {
+      projected.push_back(Point2{static_cast<double>(vertex[0]), static_cast<double>(vertex[2])});
+    } else {
+      projected.push_back(Point2{static_cast<double>(vertex[0]), static_cast<double>(vertex[1])});
+    }
+  }
+  return projected;
+}
+
+std::vector<std::array<int64_t, 3>> triangulate_loop_patch(
+    const mesh_common::MeshData &mesh,
+    const std::vector<int64_t> &loop) {
+  if (loop.size() < 3) {
+    return {};
+  }
+
+  std::vector<Point2> projected = project_loop_to_stable_plane(mesh, loop);
+  if (projected.size() != loop.size()) {
+    return {};
+  }
+  double min_x = std::numeric_limits<double>::infinity();
+  double min_y = std::numeric_limits<double>::infinity();
+  double max_x = -std::numeric_limits<double>::infinity();
+  double max_y = -std::numeric_limits<double>::infinity();
+  for (const Point2 &point : projected) {
+    min_x = std::min(min_x, point.x);
+    min_y = std::min(min_y, point.y);
+    max_x = std::max(max_x, point.x);
+    max_y = std::max(max_y, point.y);
+  }
+  const double span = std::max(max_x - min_x, max_y - min_y);
+  const double eps = std::max(1e-12, span * span * 1e-12);
+  const double area = polygon_signed_area(projected);
+  if (!std::isfinite(area) || std::abs(area) <= eps) {
+    return {};
+  }
+  const double sign = area >= 0.0 ? 1.0 : -1.0;
+
+  std::vector<size_t> remaining(loop.size());
+  std::iota(remaining.begin(), remaining.end(), 0);
+  std::vector<std::array<int64_t, 3>> patch_faces;
+  patch_faces.reserve(loop.size() - 2);
+
+  auto make_face = [&](size_t previous, size_t current, size_t next) {
+    if (sign > 0.0) {
+      return std::array<int64_t, 3>{loop[previous], loop[current], loop[next]};
+    }
+    return std::array<int64_t, 3>{loop[previous], loop[next], loop[current]};
+  };
+
+  size_t guard = loop.size() * loop.size();
+  while (remaining.size() > 3 && guard > 0) {
+    guard -= 1;
+    bool clipped = false;
+    for (size_t position = 0; position < remaining.size(); ++position) {
+      const size_t previous = remaining[(position + remaining.size() - 1) % remaining.size()];
+      const size_t current = remaining[position];
+      const size_t next = remaining[(position + 1) % remaining.size()];
+      const double turn = orient2d(projected[previous], projected[current], projected[next]) * sign;
+      if (turn <= eps) {
+        continue;
+      }
+
+      bool contains_other_point = false;
+      for (const size_t candidate : remaining) {
+        if (candidate == previous || candidate == current || candidate == next) {
+          continue;
+        }
+        if (point_in_or_on_oriented_triangle(
+                projected[previous],
+                projected[current],
+                projected[next],
+                projected[candidate],
+                sign,
+                eps)) {
+          contains_other_point = true;
+          break;
+        }
+      }
+      if (contains_other_point) {
+        continue;
+      }
+
+      patch_faces.push_back(make_face(previous, current, next));
+      remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(position));
+      clipped = true;
+      break;
+    }
+    if (!clipped) {
+      return {};
+    }
+  }
+  if (remaining.size() != 3) {
+    return {};
+  }
+  const double final_turn =
+      orient2d(projected[remaining[0]], projected[remaining[1]], projected[remaining[2]]) * sign;
+  if (final_turn <= eps) {
+    return {};
+  }
+  patch_faces.push_back(make_face(remaining[0], remaining[1], remaining[2]));
+  return patch_faces;
+}
+
 SmallLoopFillResult fill_small_boundary_loops(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
@@ -353,14 +526,16 @@ SmallLoopFillResult fill_small_boundary_loops(
       continue;
     }
 
-    std::vector<std::array<int64_t, 3>> patch_faces;
-    patch_faces.reserve(loop.size() - 2);
+    std::vector<std::array<int64_t, 3>> patch_faces = triangulate_loop_patch(result.mesh, loop);
+    if (patch_faces.empty()) {
+      result.loops_rejected += 1;
+      continue;
+    }
     bool valid_patch = true;
     std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> local_edge_adds;
-    local_edge_adds.reserve((loop.size() - 2) * 3);
+    local_edge_adds.reserve(patch_faces.size() * 3);
     std::set<std::array<int64_t, 3>> local_seen_faces;
-    for (size_t index = 1; index + 1 < loop.size(); ++index) {
-      std::array<int64_t, 3> face{loop[0], loop[index], loop[index + 1]};
+    for (const std::array<int64_t, 3> &face : patch_faces) {
       if (mesh_common::face_degenerate(result.mesh, face)) {
         valid_patch = false;
         break;
@@ -387,10 +562,9 @@ SmallLoopFillResult fill_small_boundary_loops(
       if (!valid_patch) {
         break;
       }
-      patch_faces.push_back(face);
     }
 
-    if (!valid_patch || patch_faces.empty()) {
+    if (!valid_patch) {
       result.loops_rejected += 1;
       continue;
     }
@@ -476,6 +650,7 @@ void add_small_loop_fill_stats(
     int64_t max_loop_edges,
     const SmallLoopFillResult &fill) {
   stats["small_boundary_loop_fill_enabled"] = enabled;
+  stats["small_boundary_loop_fill_algorithm"] = kSmallBoundaryLoopFillAlgorithm;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
   stats["small_boundary_loop_fill_face_budget"] = fill.face_budget;
   stats["small_boundary_loops_considered"] = fill.loops_considered;

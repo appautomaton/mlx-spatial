@@ -202,12 +202,13 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert before["boundary_loop_count"] == 2
     assert before["boundary_edges"] == 9
     assert stats["small_boundary_loop_fill_enabled"] is True
-    assert stats["small_boundary_loop_fill_max_edges"] == 4
+    assert stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
+    assert stats["small_boundary_loop_fill_max_edges"] == 8
     assert stats["small_boundary_loop_fill_face_budget"] == 2
-    assert stats["small_boundary_loops_considered"] == 1
+    assert stats["small_boundary_loops_considered"] == 2
     assert stats["small_boundary_loops_filled"] == 1
     assert stats["small_boundary_loops_rejected"] == 0
-    assert stats["small_boundary_loops_budget_limited"] == 0
+    assert stats["small_boundary_loops_budget_limited"] == 1
     assert stats["small_boundary_loop_faces_added"] == 1
     assert stats["final_faces"] == faces.shape[0] + 1
     assert stats["target_reached"] is True
@@ -257,11 +258,43 @@ def test_simplify_mesh_topology_aware_fills_four_edge_boundary_loop_by_default()
     assert before["boundary_loop_count"] == 2
     assert before["boundary_edges"] == 28
     assert stats["small_boundary_loop_fill_enabled"] is True
-    assert stats["small_boundary_loop_fill_max_edges"] == 4
+    assert stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
+    assert stats["small_boundary_loop_fill_max_edges"] == 8
     assert stats["small_boundary_loops_considered"] == 1
     assert stats["small_boundary_loops_filled"] == 1
     assert stats["small_boundary_loop_faces_added"] == 2
     assert stats["final_faces"] == faces.shape[0] + 2
+    assert after["boundary_loop_count"] == 1
+    assert after["boundary_edges"] == 24
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
+def test_simplify_mesh_topology_aware_fills_eight_edge_concave_boundary_loop() -> None:
+    vertices, faces = _grid_mesh_with_missing_cells(6, {(2, 2), (3, 2), (2, 3)})
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 8,
+        min_component_faces=1,
+        backend="topology-aware",
+        small_boundary_loop_fill_max_edges=8,
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_loop_count"] == 2
+    assert before["boundary_edges"] == 32
+    assert before["boundary_small_loop_count"] == 2
+    assert before["boundary_small_loop_edge_count"] == 32
+    assert stats["small_boundary_loop_fill_enabled"] is True
+    assert stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
+    assert stats["small_boundary_loop_fill_max_edges"] == 8
+    assert stats["small_boundary_loops_considered"] == 1
+    assert stats["small_boundary_loops_filled"] == 1
+    assert stats["small_boundary_loop_faces_added"] == 6
+    assert stats["final_faces"] == faces.shape[0] + 6
     assert after["boundary_loop_count"] == 1
     assert after["boundary_edges"] == 24
     assert after["nonmanifold_edges"] == 0
@@ -350,6 +383,13 @@ def _grid_mesh_with_missing_cell(
     missing_x: int,
     missing_y: int,
 ) -> tuple[np.ndarray, np.ndarray]:
+    return _grid_mesh_with_missing_cells(quads_per_axis, {(missing_x, missing_y)})
+
+
+def _grid_mesh_with_missing_cells(
+    quads_per_axis: int,
+    missing_cells: set[tuple[int, int]],
+) -> tuple[np.ndarray, np.ndarray]:
     vertices: list[list[float]] = []
     for y in range(quads_per_axis + 1):
         for x in range(quads_per_axis + 1):
@@ -361,7 +401,7 @@ def _grid_mesh_with_missing_cell(
     faces: list[list[int]] = []
     for y in range(quads_per_axis):
         for x in range(quads_per_axis):
-            if x == missing_x and y == missing_y:
+            if (x, y) in missing_cells:
                 continue
             faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
             faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])

@@ -10,15 +10,25 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-metal-gil-release/SPEC.md`
 - exit signal: Texture bake tests and package suite pass, concurrent public API calls are deterministic, and docs describe the GIL boundary without overstating full export parallelism.
 
+## Phase 41: Ear-Clip Small-Hole Repair
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-earclip-hole-repair`
+- objective: Replace fan-only small boundary-loop filling with projected ear-clipping and use the measured 8-edge default for Pixal3D exports.
+- why now: The current native GLB is visually close, but remaining small geometry holes are a direct quality gap before treating `mlx-spatialkit` as a dependable export backend.
+- likely outputs: C++ ear-clipping repair, cap-8 default, focused mesh tests, real-fixture topology evidence, docs, package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-earclip-hole-repair/SPEC.md`
+- exit signal: Focused and package tests pass, native build succeeds, and real-fixture diagnostics show fewer boundary loops/edges without nonmanifold regressions.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-metal-gil-release`.
+- Last verified change: `2026-05-27-mlx-spatialkit-earclip-hole-repair`.
 - Diagnostics separate scalar reference-target quality from production equivalence.
-- Native geometry repair defaults to bounded triangle/quad loop repair.
+- Native geometry repair now uses bounded projected ear-clipping with an 8-edge default for Pixal3D exports.
 - Metal texture bake now releases the Python GIL during command-buffer waits so Python monitor threads can sample during GPU execution.
 
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
 - Zero-padding default switch remains deferred until separately justified.
-- Implementing xatlas parity, full remesh, arbitrary N-gon filling, or CUDA/cuMesh behavior is outside the current Metal GIL-release change.
+- Implementing xatlas parity, full remesh, arbitrary large N-gon filling, or CUDA/cuMesh behavior is outside the current ear-clip small-hole repair change.

@@ -170,7 +170,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
     assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
-    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 4
+    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 8
     assert diagnostics["result"]["artifact_ready"] is True
     assert "native_chart_uv_candidate_quality_blocked" not in diagnostics["result"]["quality_warnings"]
     uv_stats = diagnostics["stages"]["uv"]["stats"]
@@ -387,7 +387,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert diagnostics["settings"]["target_faces"] == 212_542
     assert diagnostics["settings"]["tile_padding"] == 0.001
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
-    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 4
+    assert diagnostics["settings"]["small_boundary_loop_fill_max_edges"] == 8
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
     assert diagnostics["result"]["production_equivalence_ready"] is False
@@ -412,7 +412,8 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
 
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
     assert simplify_stats["small_boundary_loop_fill_enabled"] is True
-    assert simplify_stats["small_boundary_loop_fill_max_edges"] == 4
+    assert simplify_stats["small_boundary_loop_fill_max_edges"] == 8
+    assert simplify_stats["small_boundary_loop_fill_algorithm"] == "projected-ear-clipping"
     assert simplify_stats["small_boundary_loops_considered"] > 0
     assert simplify_stats["small_boundary_loops_filled"] > 0
     assert simplify_stats["small_boundary_loop_faces_added"] > 0
@@ -452,10 +453,11 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert export_metrics["boundary_edges"] > 0
     assert export_metrics["boundary_vertices"] > 0
     assert export_metrics["boundary_loop_count"] > 0
-    assert export_metrics["boundary_edges"] < 21000
-    assert export_metrics["boundary_loop_count"] < 1600
+    assert export_metrics["boundary_edges"] < 18500
+    assert export_metrics["boundary_loop_count"] < 1100
     assert export_metrics["boundary_small_loop_threshold_edges"] == 32
     assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
+    assert export_metrics["boundary_small_loop_edge_count"] < 5800
     assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
     assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_loop_edges"]
     assert export_metrics["export_blocking_reasons"] == []
