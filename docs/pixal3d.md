@@ -304,6 +304,13 @@ path also passes production threshold checks and deterministic GLB/PNG visual
 comparison on the real fixture. That closes the reference-target native-chart
 readiness gate, but xatlas chart parity and 1M/4096 upstream-setting parity
 remain separate boundaries.
+
+The export diagnostics now keep geometry-hole evidence separate from UV chart
+coverage. Native `mesh_metrics` reports boundary vertices, closed boundary
+loops, open boundary chains, small boundary loops, and max boundary component
+size. `export_pixal3d_glb` records those metrics for both the source and final
+export meshes, so visible holes can be evaluated as topology evidence before
+we change simplification, repair, or UV charting.
 When the same opt-in native-chart backend is run with explicit upstream-style
 `target_faces=1000000`, `texture_size=4096`, the real fixture passes both
 `quality.upstream_export_settings` and `quality.native_chart_uv_candidate`

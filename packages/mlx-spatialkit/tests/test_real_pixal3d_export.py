@@ -397,6 +397,18 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert texture_stats["final_visible_coverage_ratio"] >= 0.50
     assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
 
+    export_metrics = diagnostics["stages"]["export_metrics"]["metrics"]
+    assert export_metrics["face_count"] == diagnostics["stages"]["simplify_mesh"]["simplified_faces"]
+    assert export_metrics["nonmanifold_edges"] == 0
+    assert export_metrics["boundary_edges"] > 0
+    assert export_metrics["boundary_vertices"] > 0
+    assert export_metrics["boundary_loop_count"] > 0
+    assert export_metrics["boundary_small_loop_threshold_edges"] == 32
+    assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
+    assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
+    assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_loop_edges"]
+    assert export_metrics["export_blocking_reasons"] == []
+
     candidate = diagnostics["quality"]["native_chart_uv_candidate"]
     assert candidate["status"] == "quality_ready"
     assert candidate["artifact_ready"] is True

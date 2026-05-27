@@ -277,8 +277,12 @@ Script defaults:
   report raw exact coverage, surface-filled texels, and final visible coverage
   separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;
   the current real fixture clears scalar native-chart coverage while xatlas
-  chart parity remains deferred. With `quality_preset="reference-target"` and
-  `uv_backend="native-chart"`, the real fixture also passes production and
+  chart parity remains deferred. Native export diagnostics also include
+  boundary-loop topology under
+  `source_metrics.metrics` and `export_metrics.metrics`, so geometry holes are
+  not conflated with UV chart coverage or xatlas parity.
+  With `quality_preset="reference-target"` and `uv_backend="native-chart"`,
+  the real fixture also passes production and
   deterministic visual-comparison gates; this does not remove xatlas or
   1M/4096 upstream-setting parity boundaries. With explicit
   `target_faces=1000000` and `texture_size=4096`, the same backend passes its

@@ -111,6 +111,14 @@ visual comparison against the checked-in reference GLB. This is a native-chart
 readiness gate, not a claim of xatlas chart equivalence or 1M/4096 upstream
 setting parity.
 
+Geometry diagnostics also keep the visible-hole investigation separate from
+UV diagnostics. `mesh_metrics` reports boundary edges, boundary vertices,
+closed boundary-loop count, open boundary-chain count, small-loop count, and
+max boundary component size in native C++. Pixal3D exports preserve those
+fields under `source_metrics.metrics` and `export_metrics.metrics`, so a small
+visible hole can be checked against final mesh topology before changing
+simplification, repair, or UV chart policy.
+
 The current large-chart splitter, low-fill splitter, bounded rotation search,
 shelf packer, sub-texel native-chart padding, and UV-surface fill improve the real
 fixture chart candidate versus the older fixed-axis/equal-grid chart path.

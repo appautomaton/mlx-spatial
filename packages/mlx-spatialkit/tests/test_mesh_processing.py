@@ -65,6 +65,14 @@ def test_mesh_metrics_separates_boundary_edges_from_nonmanifold_edges() -> None:
     metrics = mesh_metrics(vertices, faces)
 
     assert metrics["boundary_edges"] == 4
+    assert metrics["boundary_vertices"] == 4
+    assert metrics["boundary_loop_count"] == 1
+    assert metrics["boundary_open_chain_count"] == 0
+    assert metrics["boundary_small_loop_count"] == 1
+    assert metrics["boundary_small_loop_edge_count"] == 4
+    assert metrics["boundary_small_loop_threshold_edges"] == 32
+    assert metrics["boundary_max_loop_edges"] == 4
+    assert metrics["boundary_max_component_edges"] == 4
     assert metrics["nonmanifold_edges"] == 0
     assert metrics["export_blocking_reasons"] == []
 
@@ -85,6 +93,10 @@ def test_mesh_metrics_reports_true_nonmanifold_edges_as_export_blockers() -> Non
     metrics = mesh_metrics(vertices, faces)
 
     assert metrics["nonmanifold_edges"] == 1
+    assert metrics["boundary_edges"] == 6
+    assert metrics["boundary_loop_count"] == 0
+    assert metrics["boundary_open_chain_count"] == 1
+    assert metrics["boundary_max_component_edges"] == 6
     assert "nonmanifold_edges_present" in metrics["export_blocking_reasons"]
 
 
