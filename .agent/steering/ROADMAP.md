@@ -160,6 +160,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate/SPEC.md`
 - exit signal: Real chart export improves UV-surface occupancy above the Phase 15 baseline while default face-atlas exports remain unchanged.
 
+## Phase 17: Chart UV Local Projection Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-uv-local-projection-gate`
+- objective: Replace fixed global-axis native chart projection with deterministic per-chart local-frame projection and prove real Pixal3D chart UV occupancy improves.
+- why now: Phase 16 made rectangle packing efficient; the verified blocker is now chart-internal UV fill from fixed-axis projection.
+- likely outputs: Native local/PCA projection, projection diagnostics, focused rotated-chart test, real fixture occupancy gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-local-projection-gate/SPEC.md`
+- exit signal: Real chart export improves UV-surface occupancy above the Phase 16 shelf-packing baseline while readiness diagnostics remain honest.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

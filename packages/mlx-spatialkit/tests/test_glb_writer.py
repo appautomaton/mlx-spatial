@@ -117,6 +117,9 @@ def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> No
     assert mesh.stats["output_faces"] == 2
     assert mesh.stats["chart_count"] == 1
     assert mesh.stats["max_chart_faces"] == 2
+    assert mesh.stats["projection"] == "local-frame-pca"
+    assert mesh.stats["projection_rotation_candidates"] == 7
+    assert mesh.stats["chart_rect_fill_ratio"] == pytest.approx(1.0)
     assert mesh.stats["shelf_rows"] == 1
     assert mesh.stats["packed_width"] == pytest.approx(1.0)
     assert mesh.stats["packed_height"] == pytest.approx(1.0)
@@ -162,6 +165,9 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert mesh.stats["max_chart_faces"] == 2
     assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(8 / 6)
     assert mesh.stats["chart_normal_cos_threshold"] == pytest.approx(np.cos(np.deg2rad(30.0)))
+    assert mesh.stats["projection"] == "local-frame-pca"
+    assert mesh.stats["projection_rotation_candidates"] == 7
+    assert mesh.stats["chart_rect_fill_ratio"] > 0.0
     assert mesh.stats["shelf_rows"] >= 1
     assert mesh.stats["shelf_packing_efficiency"] > 0.0
     assert mesh.stats["atlas_rect_coverage_ratio"] > 0.0
@@ -169,6 +175,53 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert mesh.uvs.shape == (8, 2)
     assert np.all(mesh.uvs >= 0.0)
     assert np.all(mesh.uvs <= 1.0)
+
+
+def test_make_native_chart_uvs_local_projection_fills_rotated_rectangle() -> None:
+    width = 4.0
+    height = 1.0
+    angle = np.deg2rad(37.0)
+    base = np.array(
+        [
+            [-width / 2.0, -height / 2.0, 0.0],
+            [width / 2.0, -height / 2.0, 0.0],
+            [-width / 2.0, height / 2.0, 0.0],
+            [width / 2.0, height / 2.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    vertices = base @ rotation.T
+    faces = np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64)
+
+    mesh = make_native_chart_uvs(vertices, faces, chart_angle_degrees=1.0, tile_padding=0.04)
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["projection"] == "local-frame-pca"
+    assert mesh.stats["packing"] == "aspect-shelf-charts"
+    assert mesh.stats["chart_count"] == 1
+    assert mesh.stats["chart_rect_fill_ratio"] == pytest.approx(1.0, abs=1e-6)
+    assert mesh.stats["packed_width"] == pytest.approx(1.0)
+    assert mesh.stats["packed_height"] == pytest.approx(0.25)
+    assert np.ptp(mesh.uvs[:, 0]) == pytest.approx(0.92, abs=1e-6)
+    assert np.ptp(mesh.uvs[:, 1]) == pytest.approx(0.23, abs=1e-6)
+
+
+def test_make_native_chart_uvs_rejects_non_finite_parameters() -> None:
+    vertices, faces = _fixture_mesh()
+
+    with pytest.raises(ValueError, match="chart_angle_degrees"):
+        make_native_chart_uvs(vertices, faces, chart_angle_degrees=float("nan"))
+
+    with pytest.raises(ValueError, match="tile_padding"):
+        make_native_chart_uvs(vertices, faces, tile_padding=float("nan"))
 
 
 def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> None:

@@ -399,6 +399,22 @@ float dot3(const std::array<float, 3> &left, const std::array<float, 3> &right) 
   return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
+std::array<float, 3> cross3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
+  return {
+      left[1] * right[2] - left[2] * right[1],
+      left[2] * right[0] - left[0] * right[2],
+      left[0] * right[1] - left[1] * right[0],
+  };
+}
+
+std::array<float, 3> normalize3(const std::array<float, 3> &value, const std::array<float, 3> &fallback) {
+  const float length = std::sqrt(dot3(value, value));
+  if (std::isfinite(length) && length > 1e-12f) {
+    return {value[0] / length, value[1] / length, value[2] / length};
+  }
+  return fallback;
+}
+
 EdgeKey edge_key(int64_t left, int64_t right) {
   return left < right ? EdgeKey{left, right} : EdgeKey{right, left};
 }
@@ -576,11 +592,11 @@ nb::dict make_face_atlas_uvs(nb::object vertices, nb::object faces, double tile_
 }
 
 nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double chart_angle_degrees, double tile_padding) {
-  if (chart_angle_degrees < 0.0 || chart_angle_degrees > 180.0) {
-    throw nb::value_error("chart_angle_degrees must be in [0, 180]");
+  if (!std::isfinite(chart_angle_degrees) || chart_angle_degrees < 0.0 || chart_angle_degrees > 180.0) {
+    throw nb::value_error("chart_angle_degrees must be finite and in [0, 180]");
   }
-  if (tile_padding < 0.0 || tile_padding >= 0.45) {
-    throw nb::value_error("tile_padding must be in [0, 0.45)");
+  if (!std::isfinite(tile_padding) || tile_padding < 0.0 || tile_padding >= 0.45) {
+    throw nb::value_error("tile_padding must be finite and in [0, 0.45)");
   }
   mesh_common::MeshData mesh = mesh_common::load_mesh(vertices, faces);
   if (mesh.faces.empty()) {
@@ -655,8 +671,13 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     float packed_y = 0.0f;
     float packed_width = 1.0f;
     float packed_height = 1.0f;
+    double local_triangle_area = 0.0;
+    double local_rect_area = 1.0;
+    double projection_rotation_radians = 0.0;
   };
 
+  constexpr int64_t projection_rotation_candidates = 7;
+  constexpr double pi = 3.14159265358979323846;
   const int64_t chart_count = static_cast<int64_t>(charts.size());
   std::vector<ChartData> chart_data;
   chart_data.reserve(charts.size());
@@ -678,18 +699,18 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
       average_normal[1] += normal[1];
       average_normal[2] += normal[2];
     }
-    const float nx = std::fabs(average_normal[0]);
-    const float ny = std::fabs(average_normal[1]);
-    const float nz = std::fabs(average_normal[2]);
-    int axis_u = 0;
-    int axis_v = 1;
-    if (nx >= ny && nx >= nz) {
-      axis_u = 1;
-      axis_v = 2;
-    } else if (ny >= nx && ny >= nz) {
-      axis_u = 0;
-      axis_v = 2;
+    const std::array<float, 3> chart_normal = normalize3(average_normal, {0.0f, 0.0f, 1.0f});
+    const float nx = std::fabs(chart_normal[0]);
+    const float ny = std::fabs(chart_normal[1]);
+    const float nz = std::fabs(chart_normal[2]);
+    std::array<float, 3> seed_axis{1.0f, 0.0f, 0.0f};
+    if (ny <= nx && ny <= nz) {
+      seed_axis = {0.0f, 1.0f, 0.0f};
+    } else if (nz <= nx && nz <= ny) {
+      seed_axis = {0.0f, 0.0f, 1.0f};
     }
+    const std::array<float, 3> tangent_u = normalize3(cross3(seed_axis, chart_normal), {1.0f, 0.0f, 0.0f});
+    const std::array<float, 3> tangent_v = normalize3(cross3(chart_normal, tangent_u), {0.0f, 1.0f, 0.0f});
 
     std::vector<int64_t> source_vertices;
     std::vector<std::array<int64_t, 3>> local_faces;
@@ -711,33 +732,113 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
       });
     }
 
-    float min_u = std::numeric_limits<float>::infinity();
-    float min_v = std::numeric_limits<float>::infinity();
-    float max_u = -std::numeric_limits<float>::infinity();
-    float max_v = -std::numeric_limits<float>::infinity();
+    std::vector<std::array<double, 2>> projected_coords;
+    projected_coords.reserve(source_vertices.size());
+    double mean_u = 0.0;
+    double mean_v = 0.0;
     for (int64_t source_index : source_vertices) {
       const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
-      min_u = std::min(min_u, vertex[static_cast<size_t>(axis_u)]);
-      min_v = std::min(min_v, vertex[static_cast<size_t>(axis_v)]);
-      max_u = std::max(max_u, vertex[static_cast<size_t>(axis_u)]);
-      max_v = std::max(max_v, vertex[static_cast<size_t>(axis_v)]);
+      const double u = static_cast<double>(vertex[0]) * tangent_u[0] +
+                       static_cast<double>(vertex[1]) * tangent_u[1] +
+                       static_cast<double>(vertex[2]) * tangent_u[2];
+      const double v = static_cast<double>(vertex[0]) * tangent_v[0] +
+                       static_cast<double>(vertex[1]) * tangent_v[1] +
+                       static_cast<double>(vertex[2]) * tangent_v[2];
+      projected_coords.push_back({u, v});
+      mean_u += u;
+      mean_v += v;
     }
-    const float width = std::max(max_u - min_u, 1e-12f);
-    const float height = std::max(max_v - min_v, 1e-12f);
-    const float max_extent = std::max(width, height);
+    mean_u /= static_cast<double>(projected_coords.size());
+    mean_v /= static_cast<double>(projected_coords.size());
+    double cov_uu = 0.0;
+    double cov_vv = 0.0;
+    double cov_uv = 0.0;
+    for (const auto &coord : projected_coords) {
+      const double du = coord[0] - mean_u;
+      const double dv = coord[1] - mean_v;
+      cov_uu += du * du;
+      cov_vv += dv * dv;
+      cov_uv += du * dv;
+    }
+    const double pca_angle = std::isfinite(cov_uu) && std::isfinite(cov_vv) && std::isfinite(cov_uv)
+                                 ? 0.5 * std::atan2(2.0 * cov_uv, cov_uu - cov_vv)
+                                 : 0.0;
+    const std::array<double, projection_rotation_candidates> candidate_angles{
+        pca_angle,
+        pca_angle + pi * 0.125,
+        pca_angle - pi * 0.125,
+        pca_angle + pi * 0.25,
+        pca_angle - pi * 0.25,
+        0.0,
+        pi * 0.25,
+    };
+
+    double best_angle = 0.0;
+    double best_min_u = 0.0;
+    double best_min_v = 0.0;
+    double best_width = std::numeric_limits<double>::infinity();
+    double best_height = std::numeric_limits<double>::infinity();
+    double best_area = std::numeric_limits<double>::infinity();
+    for (double angle : candidate_angles) {
+      const double cos_angle = std::cos(angle);
+      const double sin_angle = std::sin(angle);
+      double min_u = std::numeric_limits<double>::infinity();
+      double min_v = std::numeric_limits<double>::infinity();
+      double max_u = -std::numeric_limits<double>::infinity();
+      double max_v = -std::numeric_limits<double>::infinity();
+      for (const auto &coord : projected_coords) {
+        const double centered_u = coord[0] - mean_u;
+        const double centered_v = coord[1] - mean_v;
+        const double rotated_u = cos_angle * centered_u + sin_angle * centered_v;
+        const double rotated_v = -sin_angle * centered_u + cos_angle * centered_v;
+        min_u = std::min(min_u, rotated_u);
+        min_v = std::min(min_v, rotated_v);
+        max_u = std::max(max_u, rotated_u);
+        max_v = std::max(max_v, rotated_v);
+      }
+      const double width = std::max(max_u - min_u, 1e-12);
+      const double height = std::max(max_v - min_v, 1e-12);
+      const double area = width * height;
+      if (area < best_area - 1e-12) {
+        best_angle = angle;
+        best_min_u = min_u;
+        best_min_v = min_v;
+        best_width = width;
+        best_height = height;
+        best_area = area;
+      }
+    }
+
+    const double max_extent = std::max(best_width, best_height);
+    const double cos_angle = std::cos(best_angle);
+    const double sin_angle = std::sin(best_angle);
     ChartData data;
     data.original_index = chart_index;
     data.source_vertices = std::move(source_vertices);
     data.local_faces = std::move(local_faces);
-    data.width_ratio = width / max_extent;
-    data.height_ratio = height / max_extent;
+    data.width_ratio = static_cast<float>(best_width / max_extent);
+    data.height_ratio = static_cast<float>(best_height / max_extent);
+    data.local_rect_area = static_cast<double>(data.width_ratio) * static_cast<double>(data.height_ratio);
+    data.projection_rotation_radians = best_angle;
     data.local_uvs.reserve(data.source_vertices.size());
-    for (int64_t source_index : data.source_vertices) {
-      const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
+    for (const auto &coord : projected_coords) {
+      const double centered_u = coord[0] - mean_u;
+      const double centered_v = coord[1] - mean_v;
+      const double rotated_u = cos_angle * centered_u + sin_angle * centered_v;
+      const double rotated_v = -sin_angle * centered_u + cos_angle * centered_v;
       data.local_uvs.push_back({
-          (vertex[static_cast<size_t>(axis_u)] - min_u) / max_extent,
-          (vertex[static_cast<size_t>(axis_v)] - min_v) / max_extent,
+          static_cast<float>((rotated_u - best_min_u) / max_extent),
+          static_cast<float>((rotated_v - best_min_v) / max_extent),
       });
+    }
+    for (const auto &face : data.local_faces) {
+      const auto &a = data.local_uvs[static_cast<size_t>(face[0])];
+      const auto &b = data.local_uvs[static_cast<size_t>(face[1])];
+      const auto &c = data.local_uvs[static_cast<size_t>(face[2])];
+      const double area = 0.5 * std::fabs(
+          (static_cast<double>(b[0]) - a[0]) * (static_cast<double>(c[1]) - a[1]) -
+          (static_cast<double>(b[1]) - a[1]) * (static_cast<double>(c[0]) - a[0]));
+      data.local_triangle_area += area;
     }
     chart_data.push_back(std::move(data));
     for (int64_t source_index : touched_vertices) {
@@ -754,10 +855,10 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   std::sort(order.begin(), order.end(), [&chart_data](int64_t left_index, int64_t right_index) {
     const auto &left = chart_data[static_cast<size_t>(left_index)];
     const auto &right = chart_data[static_cast<size_t>(right_index)];
-    if (left.height_ratio != right.height_ratio) {
+    if (std::fabs(left.height_ratio - right.height_ratio) > 1e-9f) {
       return left.height_ratio > right.height_ratio;
     }
-    if (left.width_ratio != right.width_ratio) {
+    if (std::fabs(left.width_ratio - right.width_ratio) > 1e-9f) {
       return left.width_ratio > right.width_ratio;
     }
     return left.original_index < right.original_index;
@@ -822,8 +923,14 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   pack_charts(low_scale, true);
 
   double packed_rect_area = 0.0;
+  double local_triangle_area = 0.0;
+  double local_rect_area = 0.0;
+  double rotation_abs_sum = 0.0;
   for (const auto &chart : chart_data) {
     packed_rect_area += static_cast<double>(chart.packed_width) * static_cast<double>(chart.packed_height);
+    local_triangle_area += chart.local_triangle_area;
+    local_rect_area += chart.local_rect_area;
+    rotation_abs_sum += std::fabs(chart.projection_rotation_radians);
   }
   const double packed_bounds_area = static_cast<double>(packed_width) * static_cast<double>(packed_height);
   const float content_scale = static_cast<float>(1.0 - 2.0 * tile_padding);
@@ -866,6 +973,10 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
   stats["chart_angle_degrees"] = chart_angle_degrees;
   stats["chart_normal_cos_threshold"] = cos_threshold;
+  stats["projection"] = "local-frame-pca";
+  stats["projection_rotation_candidates"] = projection_rotation_candidates;
+  stats["average_abs_projection_rotation_radians"] = rotation_abs_sum / static_cast<double>(chart_count);
+  stats["chart_rect_fill_ratio"] = local_rect_area > 0.0 ? local_triangle_area / local_rect_area : 0.0;
   stats["packing"] = "aspect-shelf-charts";
   stats["shelf_rows"] = shelf_rows;
   stats["shelf_scale"] = low_scale;

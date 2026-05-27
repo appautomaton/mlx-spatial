@@ -261,10 +261,11 @@ max-candidate, and guard diagnostics. `mlx-spatialkit` also exposes
 `make_native_chart_uvs` as an opt-in native chart candidate. It groups
 edge-connected smooth faces by a configurable normal-angle threshold, reuses
 vertices within a chart, duplicates only at chart boundaries, and bakes through
-the binned Metal path. Chart packing is deterministic aspect-aware shelf
-packing, with packing efficiency and packed-bounds diagnostics. Existing
-Pixal3D exports still use the paired-triangle face-atlas fast path; this
-candidate does not replace xatlas charting or prove CUDA/cuMesh remesh parity.
+the binned Metal path. Chart projection uses a deterministic local-frame/PCA
+rotation before deterministic aspect-aware shelf packing, with chart rect fill,
+packing efficiency, and packed-bounds diagnostics. Existing Pixal3D exports
+still use the paired-triangle face-atlas fast path; this candidate does not
+replace xatlas charting or prove CUDA/cuMesh remesh parity.
 
 For direct decoded-NPZ conversion, `mlx_spatialkit.export_pixal3d_glb` accepts
 `uv_backend="native-chart"` and `chart_angle_degrees=45.0` as an opt-in chart
