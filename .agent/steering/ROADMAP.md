@@ -70,6 +70,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/SPEC.md`
 - exit signal: Real reference-target export renders candidate/reference GLBs in Chrome, writes browser render artifacts under `/tmp`, and removes the browser-rendered proof deferral from the generated visual parity report.
 
+## Phase 8: 4096 Texture Coverage Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-4096-texture-coverage-gate`
+- objective: Make native Pixal3D reference-target exports pass production texture coverage at `texture_size=4096` without relaxing thresholds.
+- why now: A 4096 probe writes a valid GLB but fails production coverage because fixed 8-pass dilation underfills larger atlas tiles.
+- likely outputs: Adaptive native dilation budget, 4096 heavy fixture gate, memory diagnostics evidence, docs, package/root verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/SPEC.md`
+- exit signal: 4096 reference-target export under `/tmp` reports `production_quality_ready=true` with final coverage above threshold while xatlas and 1M-face boundaries remain explicit.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

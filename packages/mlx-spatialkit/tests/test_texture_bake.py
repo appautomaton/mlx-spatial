@@ -106,6 +106,9 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     )
     assert baked.stats["uv_surface_texel_count"] >= 10
     assert baked.stats["final_visible_coverage_ratio"] >= 0.625
+    assert baked.stats["dilation_max_passes"] >= 8
+    assert baked.stats["dilation_pass_count"] <= baked.stats["dilation_max_passes"]
+    assert baked.stats["fallback_radius"] >= 12
     np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([255, 0, 0, 255], dtype=np.uint8))
     np.testing.assert_array_equal(baked.metallic_roughness[0, 0], np.array([0, 51, 26], dtype=np.uint8))
     np.testing.assert_array_equal(baked.base_color_rgba[0, 2], np.array([0, 255, 0, 204], dtype=np.uint8))
@@ -191,6 +194,35 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
     )
     assert baked.stats["uv_surface_exact_coverage_ratio"] < 1.0
     assert baked.stats["uv_surface_final_visible_coverage_ratio"] > baked.stats["uv_surface_exact_coverage_ratio"]
+    assert baked.stats["fallback_radius"] == 12
+    assert baked.stats["dilation_max_passes"] == 8
+
+
+def test_bake_pbr_texture_uses_adaptive_dilation_budget_for_atlas_textures() -> None:
+    mesh = _uv_mesh()
+    coordinates = np.array([[0, 0, 0, 0]], dtype=np.int32)
+    attributes = np.array([[1.0, 0.25, 0.0, 0.0, 0.5, 1.0]], dtype=np.float32)
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    baked = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=32,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+    )
+
+    assert baked.stats["backend"] == "metal-face-atlas-nearest"
+    assert baked.stats["atlas_cols"] == 1
+    assert baked.stats["atlas_rows"] == 1
+    assert baked.stats["fallback_radius"] > 12
+    assert baked.stats["fallback_radius"] <= 24
+    assert baked.stats["dilation_max_passes"] > 8
+    assert baked.stats["dilation_max_passes"] <= 64
+    assert baked.stats["dilation_pass_count"] <= baked.stats["dilation_max_passes"]
 
 
 def test_bake_pbr_texture_rejects_unsafe_texture_size_before_metal_allocation() -> None:

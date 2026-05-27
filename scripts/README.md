@@ -240,10 +240,14 @@ Script defaults:
   native `topology-aware` simplifier and record production threshold pass/fail
   details against the checked-in Pixal3D reference trace. The current
   reference-target heavy fixture passes the measured spatialkit production gate,
-  but this is not full upstream xatlas, 4096-texture, or 1M-face setting parity.
+  and the 4096 texture-size gate passes after atlas-size-aware Metal fallback
+  and native dilation budgets are applied. This is not full upstream xatlas
+  charting or 1M-face setting parity.
   When the reference GLB is available, reference-target export also writes a
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
-  plus extracted candidate/reference base-color PNG previews.
+  plus extracted candidate/reference base-color PNG previews. The checked-in
+  reference GLB is 1024, so a 4096 candidate is expected to report texture-size
+  mismatch while still passing coverage.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting.

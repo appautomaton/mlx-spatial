@@ -356,6 +356,26 @@ int64_t dilate_missing_surface_texels(
   return total_filled;
 }
 
+int64_t resolve_dilation_max_passes(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
+  if (atlas_cols <= 0 || atlas_rows <= 0) {
+    return 8;
+  }
+  const int64_t atlas_side = std::max<int64_t>(atlas_cols, atlas_rows);
+  const double tile_pixels = static_cast<double>(texture_size) / static_cast<double>(std::max<int64_t>(1, atlas_side));
+  const int64_t passes = static_cast<int64_t>(std::ceil(tile_pixels * 2.0));
+  return std::clamp<int64_t>(passes, 8, 64);
+}
+
+int64_t resolve_fallback_radius(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
+  if (atlas_cols <= 0 || atlas_rows <= 0) {
+    return 12;
+  }
+  const int64_t atlas_side = std::max<int64_t>(atlas_cols, atlas_rows);
+  const double tile_pixels = static_cast<double>(texture_size) / static_cast<double>(std::max<int64_t>(1, atlas_side));
+  const int64_t radius = static_cast<int64_t>(std::ceil(tile_pixels * 2.0));
+  return std::clamp<int64_t>(radius, 12, 24);
+}
+
 }  // namespace
 
 bool metal_device_available() {
@@ -494,6 +514,7 @@ nb::dict bake_pbr_texture_metal(
       throw std::runtime_error("failed to create mlx-spatialkit Metal command queue");
     }
 
+    const int64_t fallback_radius = resolve_fallback_radius(texture_size, atlas_cols, atlas_rows);
     BakeConfig config{
         checked_u32(static_cast<uint64_t>(texture_size), "texture_size"),
         checked_u32(mesh.faces.size(), "face count"),
@@ -512,7 +533,7 @@ nb::dict bake_pbr_texture_metal(
         grid_z,
         grid_y,
         grid_x,
-        12,
+        checked_u32(static_cast<uint64_t>(fallback_radius), "fallback_radius"),
     };
 
     id<MTLBuffer> vertex_buffer = make_buffer(device, vertices.data(), vertices.size() * sizeof(float), @"mlx-spatialkit vertices");
@@ -569,12 +590,13 @@ nb::dict bake_pbr_texture_metal(
       }
     }
     int64_t dilation_passes = 0;
+    const int64_t dilation_max_passes = resolve_dilation_max_passes(texture_size, atlas_cols, atlas_rows);
     const int64_t dilation_filled = dilate_missing_surface_texels(
         base_color,
         metallic_roughness,
         coverage,
         texture_size,
-        8,
+        dilation_max_passes,
         &dilation_passes);
 
     int64_t no_face = 0;
@@ -640,7 +662,7 @@ nb::dict bake_pbr_texture_metal(
     stats["atlas_rows"] = atlas_rows;
     stats["atlas_faces_per_tile"] = atlas_faces_per_tile;
     stats["fallback_radius"] = config.fallback_radius;
-    stats["dilation_max_passes"] = 8;
+    stats["dilation_max_passes"] = dilation_max_passes;
 
     nb::dict result;
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);

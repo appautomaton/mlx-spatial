@@ -237,6 +237,13 @@ representative source vertices for clustered output vertices. When the checked-i
 Pixal3D reference trace is available, diagnostics include `reference_comparison`
 face-count and coverage ratios.
 
+For 4096 reference-target texture export, spatialkit scales the Metal nearest
+fallback radius and native dilation pass budget from the atlas tile size instead
+of using a fixed low budget. Diagnostics report the resolved
+`fallback_radius`, `dilation_max_passes`, and actual `dilation_pass_count`. The
+real decoded Pixal3D fixture now passes the production final-coverage threshold
+at `texture_size=4096` while keeping generated artifacts under `/tmp`.
+
 The native UV path now uses paired-triangle face-atlas packing. Each atlas tile
 can hold two unrelated triangle faces in complementary halves, and diagnostics
 report `packing=paired-triangles`, `faces_per_tile=2`, and texture-bake
@@ -254,7 +261,7 @@ reporting. Current reference-target diagnostics are expected to stay
 `production_quality_ready=true` because backend tier, face-count, topology,
 final coverage, raw coverage reporting, preset, and reference checks all pass.
 This closes the measured native spatialkit gate, not full upstream xatlas,
-4096-texture, or 1M-face export-setting parity.
+charting or 1M-face export-setting parity.
 
 When the reference GLB is available, `mlx_spatialkit.export_pixal3d_glb` writes
 a `visual_parity/` directory next to the generated GLB. It contains
@@ -262,7 +269,9 @@ a `visual_parity/` directory next to the generated GLB. It contains
 candidate/reference base-color PNGs. The diagnostics JSON includes the compact
 visual-comparison summary and paths. This report compares GLB structure, face
 counts, texture dimensions, and embedded texture coverage; it does not claim
-browser-rendered visual proof or xatlas chart parity.
+browser-rendered visual proof or xatlas chart parity. The checked-in reference
+GLB is 1024, so a 4096 candidate should honestly report texture-resolution
+mismatch even when its production coverage gate passes.
 
 The same diagnostics JSON includes a `memory` summary for spatialkit exports.
 It records aggregate process RSS samples, observed per-stage RSS peaks, and
@@ -278,5 +287,5 @@ and run `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated
 `browser_render_report.json`, `comparison.png`, and `index.html` under
 `visual_parity/browser_render/`; when the render checks pass, it augments
 `visual_parity.json` and removes only the browser-rendered-proof deferral. This
-still does not claim xatlas chart parity, 4096-texture parity, 1M-face setting
-parity, or exact perceptual equivalence.
+still does not claim xatlas chart parity, 1M-face setting parity, or exact
+perceptual equivalence.

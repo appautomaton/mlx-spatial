@@ -1,7 +1,7 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-4096-texture-coverage-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-browser-render-visual-proof-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/SPEC.md",
+  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-4096-texture-coverage-gate/PLAN.md"
 }

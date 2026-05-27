@@ -169,6 +169,49 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
 
+@pytest.mark.heavy
+def test_export_pixal3d_glb_reference_target_4096_texture_passes_coverage_gate() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-reference-target-4096-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="reference-target",
+        texture_size=4096,
+        min_component_faces=32,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    thresholds = diagnostics["quality"]["production_thresholds"]["checks"]
+
+    assert diagnostics["settings"]["quality_preset"] == "reference-target"
+    assert diagnostics["settings"]["texture_size"] == 4096
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is True
+    assert diagnostics["result"]["quality_warnings"] == []
+    assert texture_stats["texture_size"] == 4096
+    assert texture_stats["dilation_max_passes"] > 8
+    assert texture_stats["dilation_pass_count"] <= texture_stats["dilation_max_passes"]
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] >= 0.50
+    assert thresholds["final_coverage_ratio"]["passed"] is True
+    assert thresholds["final_coverage_ratio"]["actual"] == pytest.approx(
+        texture_stats["final_visible_coverage_ratio"]
+    )
+    assert thresholds["backend_tier"]["passed"] is True
+    assert thresholds["face_count_ratio"]["passed"] is True
+    visual = diagnostics["visual_comparison"]
+    assert visual["checks"]["texture_resolution_match"]["passed"] is False
+    assert visual["checks"]["texture_resolution_match"]["candidate"] == {"height": 4096, "width": 4096}
+    assert visual["checks"]["texture_resolution_match"]["reference"] == {"height": 1024, "width": 1024}
+    _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
+
+
 def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
     decoded_dir = tmp_path / "decoded"
     decoded_dir.mkdir()

@@ -52,21 +52,31 @@ faces share one atlas tile in complementary halves. This is still not xatlas
 charting, but it reduces atlas waste and lets the Metal texture bake report
 `atlas_faces_per_tile=2`.
 
+For high-resolution exports, the Metal texture path resolves nearest-voxel
+fallback and native dilation budgets from the atlas tile size. Atlas textures
+scale `fallback_radius` within `12..24` and `dilation_max_passes` within
+`8..64`; non-atlas UVs keep the lower defaults. The 4096 reference-target gate
+now passes production coverage on the real Pixal3D decoded fixture while
+recording the resolved budgets, actual dilation passes, and stage RSS peaks.
+
 `quality_preset="reference-target"` resolves the face target from the checked-in
 Pixal3D reference trace when available and records threshold checks for topology,
 face-count ratio, raw/final texture coverage, and backend tier. The current
 reference-target heavy fixture passes face-count, topology, and final global
 coverage thresholds, with final visible coverage around `0.602` versus the older
 one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
-gate with `production_quality_ready=true`. This is not a claim of upstream
-xatlas, 4096-texture, or 1M-face export parity.
+gate with `production_quality_ready=true`. The 4096 heavy fixture separately
+passes production texture coverage, but this is not a claim of upstream xatlas
+charting or 1M-face export parity.
 
 When the checked-in reference GLB is available, reference-target export also
 writes a `visual_parity/` sidecar next to `model.glb`: `visual_parity.json`,
 `index.html`, and extracted candidate/reference base-color PNGs. The report
 compares GLB mesh counts, texture dimensions, and embedded base-color coverage
 against the reference GLB. It is deterministic inspection evidence, not a
-browser-rendered screenshot or xatlas chart-equivalence proof.
+browser-rendered screenshot or xatlas chart-equivalence proof. When comparing a
+4096 candidate against the checked-in 1024 reference GLB, texture-resolution
+mismatch is expected and should stay visible in the report.
 
 Pixal3D export diagnostics also include a `memory` summary with observed process
 RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`
