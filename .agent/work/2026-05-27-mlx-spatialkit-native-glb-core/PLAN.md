@@ -152,6 +152,10 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 
 **Touches:** `packages/mlx-spatialkit/metal`, `packages/mlx-spatialkit/cpp/bindings.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/texture.py`, `packages/mlx-spatialkit/tests`
 
+**Status:** complete
+**Evidence:** Added native `bake_pbr_texture_metal` binding and Python `NativeTextureBakeResult` / `bake_pbr_texture` wrapper; Objective-C++ now loads the built `texture_bake.metallib` beside `_native`, creates a Metal compute pipeline, validates guarded mesh/UV/texture inputs, dispatches deterministic PBR bake kernels, and returns `base_color_rgba`, `metallic_roughness`, coverage status, and diagnostics. Tests cover face-atlas and provided-UV scan paths plus invalid contracts and allocation guards. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_texture_bake.py -q` passed with `4 passed`; focused build-info/texture tests passed with `6 passed`; full package tests passed with `37 passed`; `xcrun metal -v && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear && ...` passed, printed `artifact clean`, and asserted the wheel includes `mlx_spatialkit/texture_bake.metallib`. Read-only subagent spec review and quality review both returned `APPROVED`.
+**Risks / next:** The bake uses nearest sparse-voxel sampling for first native GLB readiness, not final trilinear/kdtree parity; Slice 7 must validate real Pixal3D fixture output quality and diagnostics under `/tmp`.
+
 ### Slice 7: Real Pixal3D Fixture Export
 
 **Objective:** Wire the native pipeline end-to-end for the ignored real Pixal3D decoded fixture and write the generated GLB plus diagnostics to `/tmp`.

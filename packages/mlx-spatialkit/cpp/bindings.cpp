@@ -6,6 +6,7 @@
 #include "metal_probe.hpp"
 #include "mesh_processing.hpp"
 #include "pixal3d_contracts.hpp"
+#include "texture_bake.hpp"
 
 namespace nb = nanobind;
 
@@ -77,4 +78,21 @@ NB_MODULE(_native, module) {
              nb::arg("mesh_name") = "TexturedMesh",
              nb::arg("material_name") = "PBRMaterial",
              "Build a self-contained GLB 2.0 payload with embedded PBR textures.");
+
+  module.def("bake_pbr_texture_metal",
+             &mlx_spatialkit::bake_pbr_texture_metal,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("texture_coordinates"),
+             nb::arg("texture_attributes"),
+             nb::arg("texture_size"),
+             nb::arg("origin"),
+             nb::arg("voxel_size"),
+             nb::arg("decode_resolution"),
+             nb::arg("atlas_cols") = 0,
+             nb::arg("atlas_rows") = 0,
+             nb::arg("tile_padding") = 0.08,
+             nb::arg("max_texture_pixels") = 1048576,
+             "Bake PBR texture buffers with the Metal backend.");
 }

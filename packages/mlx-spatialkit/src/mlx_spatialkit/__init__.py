@@ -19,13 +19,16 @@ from .export import (
     write_textured_glb,
 )
 from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
+from .texture import NativeTextureBakeResult, bake_pbr_texture
 
 __all__ = [
     "NativeMesh",
     "NativeGlbArtifact",
+    "NativeTextureBakeResult",
     "NativeUvMesh",
     "Pixal3DDecodedInputs",
     "backend_info",
+    "bake_pbr_texture",
     "clean_mesh",
     "extract_flexi_dual_grid",
     "load_pixal3d_decoded_npz",

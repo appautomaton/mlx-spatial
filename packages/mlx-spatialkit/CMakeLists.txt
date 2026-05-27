@@ -87,3 +87,4 @@ target_link_libraries(_native PRIVATE
 add_dependencies(_native mlx_spatialkit_metal_probe)
 
 install(TARGETS _native LIBRARY DESTINATION mlx_spatialkit)
+install(FILES "${MLX_SPATIALKIT_METAL_LIB}" DESTINATION mlx_spatialkit)

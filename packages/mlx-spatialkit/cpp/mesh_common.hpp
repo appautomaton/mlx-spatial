@@ -221,6 +221,22 @@ inline nb::object make_int64_array(std::vector<int64_t> values, size_t rows, siz
   return nb::ndarray<nb::numpy, int64_t>(owner->data(), {rows, cols}, capsule).cast();
 }
 
+inline nb::object make_uint8_array(std::vector<uint8_t> values, size_t rows, size_t cols) {
+  auto owner = new std::vector<uint8_t>(std::move(values));
+  nb::capsule capsule(owner, [](void *ptr) noexcept {
+    delete static_cast<std::vector<uint8_t> *>(ptr);
+  });
+  return nb::ndarray<nb::numpy, uint8_t>(owner->data(), {rows, cols}, capsule).cast();
+}
+
+inline nb::object make_uint8_array(std::vector<uint8_t> values, size_t rows, size_t cols, size_t channels) {
+  auto owner = new std::vector<uint8_t>(std::move(values));
+  nb::capsule capsule(owner, [](void *ptr) noexcept {
+    delete static_cast<std::vector<uint8_t> *>(ptr);
+  });
+  return nb::ndarray<nb::numpy, uint8_t>(owner->data(), {rows, cols, channels}, capsule).cast();
+}
+
 class UnionFind {
  public:
   explicit UnionFind(size_t count) : parent_(count), rank_(count, 0) {
