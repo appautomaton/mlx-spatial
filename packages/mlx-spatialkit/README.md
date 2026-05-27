@@ -137,9 +137,10 @@ set it to `0` to disable this repair for comparison runs.
 The current large-chart splitter, low-fill splitter, bounded rotation search,
 shelf packer, sub-texel native-chart padding, and UV-surface fill improve the real
 fixture chart candidate versus the older fixed-axis/equal-grid chart path.
-The bounded low-fill splitter now uses a slightly higher fill target and one
-extra split depth, improving the reference-target fixture's measured native
-chart fill and xatlas utilization ratio while keeping
+The bounded low-fill splitter now uses a slightly higher fill target, one
+extra split depth, and 4-face/2-face-child minimums for small low-fill charts,
+improving the reference-target fixture's measured native chart fill and xatlas
+utilization ratio while keeping
 `quality.xatlas_chart_parity.parity_ready=false`.
 Within that bounded policy, eligible low-fill charts evaluate both local
 centroid split axes and three fixed split positions, then accept only the best

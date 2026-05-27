@@ -268,11 +268,12 @@ Script defaults:
   failed `xatlas_utilization_equivalence` check against the `0.95` target, and
   `parity_ready=false`; this measures the gap without adding xatlas to the
   spatialkit package runtime.
-  The bounded low-fill splitter uses a higher fill target and one extra split
-  depth to improve native chart fill toward those xatlas metrics without
-  claiming xatlas equivalence. Eligible low-fill charts evaluate both local
-  centroid split axes plus three fixed split positions, and diagnostics report
-  the bounded partition-search count.
+  The bounded low-fill splitter uses a higher fill target, one extra split
+  depth, and 4-face/2-face-child minimums for small low-fill charts to improve
+  native chart fill toward those xatlas metrics without claiming xatlas
+  equivalence. Eligible low-fill charts evaluate both local centroid split axes
+  plus three fixed split positions, and diagnostics report the bounded
+  partition-search count.
   Non-atlas UV bakes also use bounded native UV-surface fill and
   report raw exact coverage, surface-filled texels, and final visible coverage
   separately. They also fill a bounded no-face RGB/MR gutter for linear-filter

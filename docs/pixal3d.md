@@ -289,9 +289,10 @@ and `parity_ready=false`. The `xatlas_utilization_equivalence` check uses a
 `0.95` utilization-ratio target and currently fails for the native-chart path,
 which keeps the remaining boundary measurable without adding xatlas as a
 `mlx-spatialkit` runtime dependency or claiming chart equivalence.
-The native low-fill splitter now uses a higher bounded fill target and one
-extra split depth, which improves the reference-target fixture's chart fill and
-xatlas-utilization ratio while keeping xatlas parity explicitly false.
+The native low-fill splitter now uses a higher bounded fill target, one extra
+split depth, and 4-face/2-face-child minimums for small low-fill charts. This
+improves the reference-target fixture's chart fill and xatlas-utilization ratio
+while keeping xatlas parity explicitly false.
 Eligible low-fill charts also evaluate both local centroid split axes and three
 fixed split positions, then accept the best improving split.
 `low_fill_split_partition_candidate_count` records the bounded partition search.
