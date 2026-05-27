@@ -245,6 +245,12 @@ Script defaults:
   exports report a separate `quality.upstream_export_settings` gate; passing
   that gate removes only the 1M-face setting deferral. This is not full upstream
   xatlas charting or CUDA/cuMesh remesh parity.
+  Native spatialkit GLBs include generated normals and split large meshes into
+  chunk-local uint16-indexed primitives. The diagnostics sidecar records
+  `quality.glb_viewer_compatibility` for parseability, PBR texture presence,
+  normals, uint16 indices, local index bounds, and large-mesh chunking. This is
+  strict-viewer hardening for tools such as macOS Preview/Quick Look, not a
+  decoded-output or xatlas parity change.
   When the reference GLB is available, reference-target export also writes a
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
   plus extracted candidate/reference base-color PNG previews. The checked-in

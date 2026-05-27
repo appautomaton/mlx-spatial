@@ -43,7 +43,11 @@ def test_inspect_glb_reports_mesh_counts_and_embedded_texture_coverage(tmp_path:
     assert summary["image_count"] == 2
     assert summary["total_faces"] == 2
     assert summary["total_vertices"] == 6
-    assert summary["primitives"][0]["attributes"] == ["POSITION", "TEXCOORD_0"]
+    assert summary["primitives"][0]["attributes"] == ["NORMAL", "POSITION", "TEXCOORD_0"]
+    assert summary["primitives"][0]["has_normals"] is True
+    assert summary["primitives"][0]["normal_count"] == 6
+    assert summary["primitives"][0]["indices_component_type"] == 5123
+    assert summary["primitives"][0]["indices_max"] == [5]
     base_image = summary["images"][0]
     assert base_image["name"] == "baseColorTexture"
     assert base_image["coverage"]["width"] == 4

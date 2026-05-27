@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "mesh_common.hpp"
@@ -25,10 +26,10 @@ constexpr uint32_t kArrayBufferTarget = 34962;
 constexpr uint32_t kElementArrayBufferTarget = 34963;
 constexpr uint32_t kComponentFloat32 = 5126;
 constexpr uint32_t kComponentUint16 = 5123;
-constexpr uint32_t kComponentUint32 = 5125;
 constexpr int64_t kMaxTextureDimension = 8192;
 constexpr uint64_t kMaxTexturePixels = static_cast<uint64_t>(kMaxTextureDimension) * kMaxTextureDimension;
 constexpr uint64_t kMaxTextureBytes = 512ull * 1024ull * 1024ull;
+constexpr uint32_t kMaxUint16Index = std::numeric_limits<uint16_t>::max();
 
 struct TextureImage {
   int64_t height;
@@ -356,6 +357,69 @@ std::array<float, 3> uv_max_padded(const std::vector<std::array<float, 2>> &uvs)
   return result;
 }
 
+std::vector<std::array<float, 3>> compute_vertex_normals(const mesh_common::MeshData &mesh) {
+  std::vector<std::array<float, 3>> normals(mesh.vertices.size(), std::array<float, 3>{0.0f, 0.0f, 0.0f});
+  for (const auto &face : mesh.faces) {
+    const auto &a = mesh.vertices[static_cast<size_t>(face[0])];
+    const auto &b = mesh.vertices[static_cast<size_t>(face[1])];
+    const auto &c = mesh.vertices[static_cast<size_t>(face[2])];
+    const std::array<float, 3> ab{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const std::array<float, 3> ac{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const std::array<float, 3> normal{
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    for (int corner = 0; corner < 3; ++corner) {
+      auto &accum = normals[static_cast<size_t>(face[corner])];
+      accum[0] += normal[0];
+      accum[1] += normal[1];
+      accum[2] += normal[2];
+    }
+  }
+  for (auto &normal : normals) {
+    const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+    if (std::isfinite(length) && length > 1e-12f) {
+      normal[0] /= length;
+      normal[1] /= length;
+      normal[2] /= length;
+    } else {
+      normal = {0.0f, 0.0f, 1.0f};
+    }
+  }
+  return normals;
+}
+
+std::vector<uint8_t> vec3_payload(const std::vector<std::array<float, 3>> &values) {
+  std::vector<uint8_t> payload;
+  payload.reserve(values.size() * 12);
+  for (const auto &value : values) {
+    append_float32_le(payload, value[0]);
+    append_float32_le(payload, value[1]);
+    append_float32_le(payload, value[2]);
+  }
+  return payload;
+}
+
+std::vector<uint8_t> vec2_payload(const std::vector<std::array<float, 2>> &values) {
+  std::vector<uint8_t> payload;
+  payload.reserve(values.size() * 8);
+  for (const auto &value : values) {
+    append_float32_le(payload, value[0]);
+    append_float32_le(payload, value[1]);
+  }
+  return payload;
+}
+
+std::vector<uint8_t> uint16_payload(const std::vector<uint16_t> &values) {
+  std::vector<uint8_t> payload;
+  payload.reserve(values.size() * 2);
+  for (uint16_t value : values) {
+    append_u16_le(payload, value);
+  }
+  return payload;
+}
+
 uint32_t add_buffer_view(
     std::vector<uint8_t> &bin_blob,
     std::vector<BufferView> &views,
@@ -481,64 +545,129 @@ nb::bytes textured_glb_payload(
   const std::vector<std::array<float, 2>> uvs = load_uvs(uvs_object, static_cast<int64_t>(mesh.vertices.size()));
   const TextureImage base_color = load_texture_image(base_color_object, "base color texture", 4);
   const TextureImage metallic_roughness = load_texture_image(metallic_roughness_object, "metallic-roughness texture", 3);
-
-  uint64_t max_index = 0;
-  for (const auto &face : mesh.faces) {
-    for (int corner = 0; corner < 3; ++corner) {
-      max_index = std::max(max_index, static_cast<uint64_t>(face[corner]));
-    }
-  }
-  const bool use_uint16 = max_index <= std::numeric_limits<uint16_t>::max();
-  const uint32_t index_component_type = use_uint16 ? kComponentUint16 : kComponentUint32;
-
-  std::vector<uint8_t> position_payload;
-  position_payload.reserve(mesh.vertices.size() * 12);
-  for (const auto &vertex : mesh.vertices) {
-    append_float32_le(position_payload, vertex[0]);
-    append_float32_le(position_payload, vertex[1]);
-    append_float32_le(position_payload, vertex[2]);
-  }
-
-  std::vector<uint8_t> uv_payload;
-  uv_payload.reserve(uvs.size() * 8);
-  for (const auto &uv : uvs) {
-    append_float32_le(uv_payload, uv[0]);
-    append_float32_le(uv_payload, uv[1]);
-  }
-
-  std::vector<uint8_t> index_payload;
-  index_payload.reserve(mesh.faces.size() * 3 * (use_uint16 ? 2 : 4));
-  for (const auto &face : mesh.faces) {
-    for (int corner = 0; corner < 3; ++corner) {
-      if (use_uint16) {
-        append_u16_le(index_payload, static_cast<uint16_t>(face[corner]));
-      } else {
-        append_u32_le(index_payload, static_cast<uint32_t>(face[corner]));
-      }
-    }
-  }
+  const std::vector<std::array<float, 3>> normals = compute_vertex_normals(mesh);
 
   std::vector<uint8_t> bin_blob;
   std::vector<BufferView> views;
-  const uint32_t position_view = add_buffer_view(bin_blob, views, position_payload, kArrayBufferTarget);
-  const uint32_t uv_view = add_buffer_view(bin_blob, views, uv_payload, kArrayBufferTarget);
-  const uint32_t index_view = add_buffer_view(bin_blob, views, index_payload, kElementArrayBufferTarget);
+  std::vector<std::string> accessor_jsons;
+  std::vector<std::string> primitive_jsons;
+  std::vector<std::array<float, 3>> local_positions;
+  std::vector<std::array<float, 3>> local_normals;
+  std::vector<std::array<float, 2>> local_uvs;
+  std::vector<uint16_t> local_indices;
+  std::unordered_map<int64_t, uint16_t> local_vertex_map;
+
+  auto add_accessor_json = [&accessor_jsons](std::string accessor) {
+    const uint32_t index = checked_u32(accessor_jsons.size(), "GLB accessor index");
+    accessor_jsons.push_back(std::move(accessor));
+    return index;
+  };
+
+  auto flush_primitive = [&]() {
+    if (local_indices.empty()) {
+      return;
+    }
+    const uint32_t position_view = add_buffer_view(bin_blob, views, vec3_payload(local_positions), kArrayBufferTarget);
+    const uint32_t normal_view = add_buffer_view(bin_blob, views, vec3_payload(local_normals), kArrayBufferTarget);
+    const uint32_t uv_view = add_buffer_view(bin_blob, views, vec2_payload(local_uvs), kArrayBufferTarget);
+    const uint32_t index_view = add_buffer_view(bin_blob, views, uint16_payload(local_indices), kElementArrayBufferTarget);
+
+    const auto position_min = vertex_min(local_positions);
+    const auto position_max = vertex_max(local_positions);
+    const auto normal_min = vertex_min(local_normals);
+    const auto normal_max = vertex_max(local_normals);
+    const auto uv_min = uv_min_padded(local_uvs);
+    const auto uv_max = uv_max_padded(local_uvs);
+    const uint16_t max_local_index = static_cast<uint16_t>(local_positions.size() - 1);
+
+    std::ostringstream position_accessor;
+    position_accessor << "{\"bufferView\":" << position_view << ",\"byteOffset\":0,\"componentType\":"
+                      << kComponentFloat32 << ",\"count\":" << local_positions.size()
+                      << ",\"type\":\"VEC3\",\"min\":" << float_array_json(position_min, 3)
+                      << ",\"max\":" << float_array_json(position_max, 3) << "}";
+    const uint32_t position_accessor_index = add_accessor_json(position_accessor.str());
+
+    std::ostringstream normal_accessor;
+    normal_accessor << "{\"bufferView\":" << normal_view << ",\"byteOffset\":0,\"componentType\":"
+                    << kComponentFloat32 << ",\"count\":" << local_normals.size()
+                    << ",\"type\":\"VEC3\",\"min\":" << float_array_json(normal_min, 3)
+                    << ",\"max\":" << float_array_json(normal_max, 3) << "}";
+    const uint32_t normal_accessor_index = add_accessor_json(normal_accessor.str());
+
+    std::ostringstream uv_accessor;
+    uv_accessor << "{\"bufferView\":" << uv_view << ",\"byteOffset\":0,\"componentType\":" << kComponentFloat32
+                << ",\"count\":" << local_uvs.size() << ",\"type\":\"VEC2\",\"min\":"
+                << float_array_json(uv_min, 2) << ",\"max\":" << float_array_json(uv_max, 2) << "}";
+    const uint32_t uv_accessor_index = add_accessor_json(uv_accessor.str());
+
+    std::ostringstream index_accessor;
+    index_accessor << "{\"bufferView\":" << index_view << ",\"byteOffset\":0,\"componentType\":"
+                   << kComponentUint16 << ",\"count\":" << local_indices.size()
+                   << ",\"type\":\"SCALAR\",\"min\":[0],\"max\":[" << max_local_index << "]}";
+    const uint32_t index_accessor_index = add_accessor_json(index_accessor.str());
+
+    std::ostringstream primitive;
+    primitive << "{\"attributes\":{\"POSITION\":" << position_accessor_index << ",\"NORMAL\":"
+              << normal_accessor_index << ",\"TEXCOORD_0\":" << uv_accessor_index << "},\"indices\":"
+              << index_accessor_index << ",\"material\":0}";
+    primitive_jsons.push_back(primitive.str());
+
+    local_positions.clear();
+    local_normals.clear();
+    local_uvs.clear();
+    local_indices.clear();
+    local_vertex_map.clear();
+  };
+
+  local_positions.reserve(std::min<size_t>(mesh.vertices.size(), static_cast<size_t>(kMaxUint16Index) + 1));
+  local_normals.reserve(local_positions.capacity());
+  local_uvs.reserve(local_positions.capacity());
+  local_indices.reserve(std::min<size_t>(mesh.faces.size() * 3, static_cast<size_t>(kMaxUint16Index) + 1));
+  for (const auto &face : mesh.faces) {
+    size_t new_vertex_count = 0;
+    for (int corner = 0; corner < 3; ++corner) {
+      if (local_vertex_map.find(face[corner]) == local_vertex_map.end()) {
+        ++new_vertex_count;
+      }
+    }
+    if (!local_indices.empty() &&
+        local_positions.size() + new_vertex_count > static_cast<size_t>(kMaxUint16Index) + 1) {
+      flush_primitive();
+    }
+    for (int corner = 0; corner < 3; ++corner) {
+      const int64_t source_index = face[corner];
+      auto found = local_vertex_map.find(source_index);
+      if (found == local_vertex_map.end()) {
+        const uint16_t local_index = static_cast<uint16_t>(local_positions.size());
+        local_vertex_map.emplace(source_index, local_index);
+        local_positions.push_back(mesh.vertices[static_cast<size_t>(source_index)]);
+        local_normals.push_back(normals[static_cast<size_t>(source_index)]);
+        local_uvs.push_back(uvs[static_cast<size_t>(source_index)]);
+        local_indices.push_back(local_index);
+      } else {
+        local_indices.push_back(found->second);
+      }
+    }
+  }
+  flush_primitive();
+
   const uint32_t base_color_view = add_buffer_view(bin_blob, views, png_payload(base_color));
   const uint32_t metallic_roughness_view = add_buffer_view(bin_blob, views, png_payload(metallic_roughness));
   pad4(bin_blob, 0);
-
-  const auto v_min = vertex_min(mesh.vertices);
-  const auto v_max = vertex_max(mesh.vertices);
-  const auto uv_min = uv_min_padded(uvs);
-  const auto uv_max = uv_max_padded(uvs);
 
   std::ostringstream json;
   json << std::setprecision(9);
   json << "{\"asset\":{\"version\":\"2.0\",\"generator\":" << quoted(generator) << "},";
   json << "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
   json << "\"nodes\":[{\"mesh\":0,\"name\":" << quoted(mesh_name) << "}],";
-  json << "\"meshes\":[{\"name\":" << quoted(mesh_name)
-       << ",\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"indices\":2,\"material\":0}]}],";
+  json << "\"meshes\":[{\"name\":" << quoted(mesh_name) << ",\"primitives\":[";
+  for (size_t index = 0; index < primitive_jsons.size(); ++index) {
+    if (index != 0) {
+      json << ",";
+    }
+    json << primitive_jsons[index];
+  }
+  json << "]}],";
   json << "\"materials\":[{\"name\":" << quoted(material_name)
        << ",\"doubleSided\":true,\"alphaMode\":\"OPAQUE\",\"pbrMetallicRoughness\":{"
        << "\"baseColorTexture\":{\"index\":0},\"metallicRoughnessTexture\":{\"index\":1},"
@@ -551,14 +680,12 @@ nb::bytes textured_glb_payload(
   json << "\"buffers\":[{\"byteLength\":" << bin_blob.size() << "}],";
   json << "\"bufferViews\":" << buffer_views_json(views) << ",";
   json << "\"accessors\":[";
-  json << "{\"bufferView\":" << position_view << ",\"byteOffset\":0,\"componentType\":" << kComponentFloat32
-       << ",\"count\":" << mesh.vertices.size() << ",\"type\":\"VEC3\",\"min\":" << float_array_json(v_min, 3)
-       << ",\"max\":" << float_array_json(v_max, 3) << "},";
-  json << "{\"bufferView\":" << uv_view << ",\"byteOffset\":0,\"componentType\":" << kComponentFloat32
-       << ",\"count\":" << uvs.size() << ",\"type\":\"VEC2\",\"min\":" << float_array_json(uv_min, 2)
-       << ",\"max\":" << float_array_json(uv_max, 2) << "},";
-  json << "{\"bufferView\":" << index_view << ",\"byteOffset\":0,\"componentType\":" << index_component_type
-       << ",\"count\":" << mesh.faces.size() * 3 << ",\"type\":\"SCALAR\",\"min\":[0],\"max\":[" << max_index << "]}";
+  for (size_t index = 0; index < accessor_jsons.size(); ++index) {
+    if (index != 0) {
+      json << ",";
+    }
+    json << accessor_jsons[index];
+  }
   json << "]}";
 
   std::vector<uint8_t> json_payload = bytes_from_string(json.str());

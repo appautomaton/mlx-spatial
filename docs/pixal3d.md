@@ -270,6 +270,15 @@ and final coverage. This closes the 1M/4096 setting-readiness boundary when the
 check passes, but it is not full upstream xatlas charting or CUDA/cuMesh remesh
 parity.
 
+Native spatialkit GLB output also records
+`quality.glb_viewer_compatibility`. The writer emits `NORMAL` attributes and
+splits large meshes into chunk-local primitives using `UNSIGNED_SHORT` indices
+instead of one large uint32-indexed primitive. The compatibility gate checks
+parseability, material/texture presence, normals, uint16 index accessors, local
+index bounds, and large-mesh chunking. This is intended to reduce strict-viewer
+failure modes in macOS Preview/Quick Look and similar tools; it does not replace
+xatlas charting or CUDA/cuMesh remesh parity.
+
 When the reference GLB is available, `mlx_spatialkit.export_pixal3d_glb` writes
 a `visual_parity/` directory next to the generated GLB. It contains
 `visual_parity.json`, an `index.html` texture preview, and extracted

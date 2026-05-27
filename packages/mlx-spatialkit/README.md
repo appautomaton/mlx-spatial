@@ -73,6 +73,14 @@ passes production texture coverage. Explicit upstream-style
 setting deferral is removed. This is still not a claim of upstream xatlas
 charting or CUDA/cuMesh remesh parity.
 
+Native GLB writing now emits `NORMAL` attributes and splits large meshes into
+chunk-local primitives with `UNSIGNED_SHORT` indices. Diagnostics record
+`quality.glb_viewer_compatibility` to check parseability, material/texture
+presence, normals on every primitive, uint16-only indices, local index bounds,
+and chunking for large meshes. This targets stricter viewers such as macOS
+Preview/Quick Look; it does not change decoded model outputs or imply xatlas
+chart parity.
+
 When the checked-in reference GLB is available, reference-target export also
 writes a `visual_parity/` sidecar next to `model.glb`: `visual_parity.json`,
 `index.html`, and extracted candidate/reference base-color PNGs. The report

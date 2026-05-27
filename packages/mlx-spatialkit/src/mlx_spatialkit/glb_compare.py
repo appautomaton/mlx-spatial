@@ -61,9 +61,11 @@ def inspect_glb(path: str | Path) -> dict[str, Any]:
         for primitive_index, primitive in enumerate(mesh.get("primitives", [])):
             attributes = primitive.get("attributes", {})
             position_accessor = _accessor(document, attributes.get("POSITION"))
+            normal_accessor = _accessor(document, attributes.get("NORMAL"))
             texcoord_accessor = _accessor(document, attributes.get("TEXCOORD_0"))
             indices_accessor = _accessor(document, primitive.get("indices"))
             vertex_count = int(position_accessor.get("count", 0)) if position_accessor is not None else 0
+            normal_count = int(normal_accessor.get("count", 0)) if normal_accessor is not None else 0
             texcoord_count = int(texcoord_accessor.get("count", 0)) if texcoord_accessor is not None else 0
             index_count = int(indices_accessor.get("count", 0)) if indices_accessor is not None else 0
             face_count = index_count // 3
@@ -76,9 +78,16 @@ def inspect_glb(path: str | Path) -> dict[str, Any]:
                     "primitive_index": primitive_index,
                     "material": primitive.get("material"),
                     "vertex_count": vertex_count,
+                    "normal_count": normal_count,
                     "texcoord_count": texcoord_count,
                     "index_count": index_count,
                     "face_count": face_count,
+                    "indices_component_type": indices_accessor.get("componentType")
+                    if indices_accessor is not None
+                    else None,
+                    "indices_min": indices_accessor.get("min") if indices_accessor is not None else None,
+                    "indices_max": indices_accessor.get("max") if indices_accessor is not None else None,
+                    "has_normals": normal_accessor is not None,
                     "attributes": sorted(str(name) for name in attributes),
                 }
             )

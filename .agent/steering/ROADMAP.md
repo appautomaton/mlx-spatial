@@ -100,6 +100,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-upstream-settings-readiness-gate/SPEC.md`
 - exit signal: Explicit 1M/4096 export under `/tmp` reports upstream-setting readiness true, removes only the 1M-face setting deferral, and keeps xatlas chart parity deferred.
 
+## Phase 11: GLB Viewer Compatibility Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate`
+- objective: Make native Pixal3D GLBs structurally friendlier to macOS Preview/Quick Look and strict viewers by adding normals, chunking large primitives into uint16-indexed local primitives, and reporting compatibility readiness.
+- why now: Browser-rendered proof passes, but user-visible Preview behavior can still look point-like or uncolored because the native GLB currently has no normals and a single large uint32-indexed primitive.
+- likely outputs: Native normal generation, uint16 primitive chunking, viewer-compatibility diagnostics, real-fixture gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-glb-viewer-compatibility-gate/SPEC.md`
+- exit signal: Real reference-target export under `/tmp` reports GLB viewer compatibility ready with normals and uint16-only primitives while xatlas chart parity remains deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

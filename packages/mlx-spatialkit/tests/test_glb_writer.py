@@ -115,8 +115,8 @@ def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> 
     assert document["nodes"][0]["name"] == "Pixal3D_TexturedMesh"
     assert document["meshes"][0]["name"] == "Pixal3D_TexturedMesh"
     primitive = document["meshes"][0]["primitives"][0]
-    assert primitive["attributes"] == {"POSITION": 0, "TEXCOORD_0": 1}
-    assert primitive["indices"] == 2
+    assert primitive["attributes"] == {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}
+    assert primitive["indices"] == 3
     assert primitive["material"] == 0
     material = document["materials"][0]
     assert material["name"] == "Pixal3D_PBR"
@@ -127,12 +127,15 @@ def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> 
     assert pbr["metallicRoughnessTexture"] == {"index": 1}
     assert document["images"][0]["mimeType"] == "image/png"
     assert document["images"][1]["mimeType"] == "image/png"
-    assert len(document["bufferViews"]) == 5
-    assert len(document["accessors"]) == 3
+    assert len(document["bufferViews"]) == 6
+    assert len(document["accessors"]) == 4
     assert document["accessors"][0]["count"] == 6
     assert document["accessors"][1]["count"] == 6
+    assert document["accessors"][1]["type"] == "VEC3"
     assert document["accessors"][2]["count"] == 6
-    assert document["accessors"][2]["componentType"] == 5123
+    assert document["accessors"][2]["type"] == "VEC2"
+    assert document["accessors"][3]["count"] == 6
+    assert document["accessors"][3]["componentType"] == 5123
     assert document["buffers"][0]["byteLength"] == len(bin_blob)
     assert all(view["byteOffset"] % 4 == 0 for view in document["bufferViews"])
     for image in document["images"]:
@@ -147,6 +150,39 @@ def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> 
     assert coverage.alpha_nonzero_count == 4
     assert coverage.rgb_nonzero_count == 4
     assert coverage.alpha_coverage_ratio == 1.0
+
+
+def test_textured_glb_payload_splits_large_mesh_into_uint16_primitives() -> None:
+    vertex_count = 66_000
+    vertices = np.zeros((vertex_count, 3), dtype=np.float32)
+    vertices[:, 0] = np.arange(vertex_count, dtype=np.float32) / float(vertex_count)
+    vertices[:, 1] = (np.arange(vertex_count, dtype=np.float32) % 3.0) / 3.0
+    faces = np.arange(vertex_count, dtype=np.int64).reshape(-1, 3)
+    uvs = np.zeros((vertex_count, 2), dtype=np.float32)
+    mesh = NativeUvMesh(vertices=vertices, faces=faces, uvs=uvs, stats={})
+    base_color = np.full((1, 1, 4), 255, dtype=np.uint8)
+    metallic_roughness = np.full((1, 1, 3), 127, dtype=np.uint8)
+
+    payload = textured_glb_payload(
+        mesh,
+        base_color_rgba=base_color,
+        metallic_roughness=metallic_roughness,
+    )
+    document, _ = _glb_document_and_bin(payload)
+
+    primitives = document["meshes"][0]["primitives"]
+    assert len(primitives) == 2
+    for primitive in primitives:
+        assert set(primitive["attributes"]) == {"POSITION", "NORMAL", "TEXCOORD_0"}
+        position = document["accessors"][primitive["attributes"]["POSITION"]]
+        normal = document["accessors"][primitive["attributes"]["NORMAL"]]
+        texcoord = document["accessors"][primitive["attributes"]["TEXCOORD_0"]]
+        indices = document["accessors"][primitive["indices"]]
+        assert position["count"] <= 65_536
+        assert normal["count"] == position["count"]
+        assert texcoord["count"] == position["count"]
+        assert indices["componentType"] == 5123
+        assert indices["max"][0] <= 65_535
 
 
 def test_write_textured_glb_writes_payload_and_metadata(tmp_path) -> None:

@@ -23,7 +23,7 @@ from ._native import (
     validate_pixal3d_shape_fields,
     validate_pixal3d_texture_attributes,
 )
-from .glb_compare import compare_textured_glbs
+from .glb_compare import compare_textured_glbs, inspect_glb
 from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
 
 _T = TypeVar("_T")
@@ -439,6 +439,10 @@ def export_pixal3d_glb(
         memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["write_glb"]["artifact"] = glb.metadata
+    glb_inspection = inspect_glb(glb.path)
+    diagnostics["stages"]["write_glb"]["inspection"] = glb_inspection
+    quality["glb_viewer_compatibility"] = _glb_viewer_compatibility_summary(glb_inspection)
+    diagnostics["quality"] = quality
     sample("after_write_glb")
 
     if reference is not None:
@@ -1142,6 +1146,101 @@ def _upstream_export_settings_summary(
         },
         "checks": checks,
     }
+
+
+def _glb_viewer_compatibility_summary(glb_summary: dict[str, Any]) -> dict[str, Any]:
+    primitives = list(glb_summary.get("primitives", ()))
+    large_mesh_threshold = 65_536
+    all_have_normals = bool(primitives) and all(
+        bool(primitive.get("has_normals"))
+        and int(primitive.get("normal_count", 0)) == int(primitive.get("vertex_count", -1))
+        for primitive in primitives
+    )
+    uint16_only = bool(primitives) and all(
+        _maybe_int(primitive.get("indices_component_type")) == 5123 for primitive in primitives
+    )
+    local_indices_bounded = bool(primitives) and all(
+        _primitive_indices_within_uint16(primitive) for primitive in primitives
+    )
+    triangle_indices = bool(primitives) and all(int(primitive.get("index_count", 0)) % 3 == 0 for primitive in primitives)
+    total_vertices = _maybe_int(glb_summary.get("total_vertices")) or 0
+    primitive_count = _maybe_int(glb_summary.get("primitive_count")) or 0
+    chunking_required = total_vertices > large_mesh_threshold
+    checks = {
+        "glb_parseable": {
+            "passed": bool(primitives),
+            "actual": bool(primitives),
+            "required": True,
+        },
+        "textured_material": {
+            "passed": glb_summary.get("material_count", 0) >= 1
+            and glb_summary.get("texture_count", 0) >= 2
+            and glb_summary.get("image_count", 0) >= 2,
+            "materials": glb_summary.get("material_count", 0),
+            "textures": glb_summary.get("texture_count", 0),
+            "images": glb_summary.get("image_count", 0),
+            "required": "at_least_one_material_two_textures_two_images",
+        },
+        "normals": {
+            "passed": all_have_normals,
+            "actual": [
+                {
+                    "primitive_index": primitive.get("primitive_index"),
+                    "has_normals": primitive.get("has_normals"),
+                    "vertex_count": primitive.get("vertex_count"),
+                    "normal_count": primitive.get("normal_count"),
+                }
+                for primitive in primitives
+            ],
+            "required": "NORMAL attribute with count matching POSITION for every primitive",
+        },
+        "uint16_indices": {
+            "passed": uint16_only,
+            "actual": [primitive.get("indices_component_type") for primitive in primitives],
+            "required": 5123,
+        },
+        "local_index_bounds": {
+            "passed": local_indices_bounded,
+            "actual": [
+                {
+                    "primitive_index": primitive.get("primitive_index"),
+                    "indices_min": primitive.get("indices_min"),
+                    "indices_max": primitive.get("indices_max"),
+                }
+                for primitive in primitives
+            ],
+            "required_min": 0,
+            "required_max": 65_535,
+        },
+        "triangle_indices": {
+            "passed": triangle_indices,
+            "actual": [primitive.get("index_count") for primitive in primitives],
+            "required": "index_count divisible by 3",
+        },
+        "chunking_for_large_mesh": {
+            "passed": not chunking_required or primitive_count > 1,
+            "actual": primitive_count,
+            "required": ">1 primitive when total_vertices > 65536",
+            "total_vertices": total_vertices,
+            "large_mesh_threshold": large_mesh_threshold,
+        },
+    }
+    return {
+        "all_passed": all(bool(check["passed"]) for check in checks.values()),
+        "checks": checks,
+    }
+
+
+def _primitive_indices_within_uint16(primitive: dict[str, Any]) -> bool:
+    min_values = primitive.get("indices_min")
+    max_values = primitive.get("indices_max")
+    if not isinstance(min_values, list) or not min_values:
+        return False
+    if not isinstance(max_values, list) or not max_values:
+        return False
+    min_index = _maybe_int(min_values[0])
+    max_index = _maybe_int(max_values[0])
+    return min_index is not None and max_index is not None and min_index >= 0 and max_index <= 65_535
 
 
 def _reference_glb_path(reference: dict[str, Any]) -> Path | None:

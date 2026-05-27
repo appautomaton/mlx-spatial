@@ -9,6 +9,7 @@ import pytest
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
 from mlx_spatialkit.export import (
     _export_quality_summary,
+    _glb_viewer_compatibility_summary,
     _resolve_pixal3d_export_settings,
     _simplifier_backend_for_quality_preset,
     _upstream_export_settings_summary,
@@ -51,6 +52,7 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert diagnostics["quality"]["simplifier_backend"] == "spatial-cluster"
     assert diagnostics["quality"]["simplifier_quality_tier"] == "geometry_aware_preview"
     assert diagnostics["quality"]["production_quality_ready"] is False
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     assert diagnostics["settings"]["texture_size"] == 1024
     assert diagnostics["settings"]["target_faces"] == 50_000
     assert diagnostics["settings"]["grid_size"] == 1024
@@ -80,6 +82,10 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
         abs=0.005,
     )
     assert diagnostics["stages"]["write_glb"]["artifact"]["mesh_name"] == "Pixal3D_TexturedMesh"
+    write_inspection = diagnostics["stages"]["write_glb"]["inspection"]
+    assert write_inspection["primitive_count"] > 1
+    assert all(primitive["has_normals"] for primitive in write_inspection["primitives"])
+    assert all(primitive["indices_component_type"] == 5123 for primitive in write_inspection["primitives"])
     assert diagnostics["reference"]["final_faces"] == 212_542
     comparison = diagnostics["reference_comparison"]
     assert comparison["spatialkit_simplifier_backend"] == "spatial-cluster"
@@ -119,6 +125,7 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert diagnostics["result"]["quality_warnings"] == []
     assert diagnostics["quality"]["upstream_export_settings"]["all_passed"] is False
     assert diagnostics["quality"]["upstream_export_settings"]["checks"]["target_faces"]["passed"] is False
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "candidate"
     assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_available"
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
@@ -170,6 +177,10 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert Path(visual_artifacts["candidate_base_color_png"]).is_file()
     assert Path(visual_artifacts["reference_base_color_png"]).is_file()
     assert Path(visual_artifacts["report_json"]).parent == output_dir / "visual_parity"
+    write_inspection = diagnostics["stages"]["write_glb"]["inspection"]
+    assert write_inspection["primitive_count"] > 1
+    assert all(primitive["has_normals"] for primitive in write_inspection["primitives"])
+    assert all(primitive["indices_component_type"] == 5123 for primitive in write_inspection["primitives"])
     assert "after_write_glb" in diagnostics["memory_samples"]
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
@@ -199,6 +210,7 @@ def test_export_pixal3d_glb_reference_target_4096_texture_passes_coverage_gate()
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is True
     assert diagnostics["result"]["quality_warnings"] == []
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     assert texture_stats["texture_size"] == 4096
     assert texture_stats["dilation_max_passes"] > 8
     assert texture_stats["dilation_pass_count"] <= texture_stats["dilation_max_passes"]
@@ -245,6 +257,7 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     assert diagnostics["result"]["artifact_ready"] is True
     assert diagnostics["result"]["production_quality_ready"] is False
     assert upstream["all_passed"] is True
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     for check in upstream["checks"].values():
         assert check["passed"] is True
     assert upstream["reference"]["decimation_target"] == 1_000_000
@@ -262,6 +275,10 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     visual = diagnostics["visual_comparison"]
     assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
     assert "not_1m_face_export_setting_parity" not in visual["deferred_parity_boundaries"]
+    write_inspection = diagnostics["stages"]["write_glb"]["inspection"]
+    assert write_inspection["primitive_count"] > 1
+    assert all(primitive["has_normals"] for primitive in write_inspection["primitives"])
+    assert all(primitive["indices_component_type"] == 5123 for primitive in write_inspection["primitives"])
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb", "visual_compare"))
 
 
@@ -426,6 +443,71 @@ def test_upstream_export_settings_summary_separates_setting_readiness_from_refer
     assert failing["all_passed"] is False
     assert failing["checks"]["target_faces"]["passed"] is False
     assert failing["checks"]["texture_size"]["passed"] is False
+
+
+def test_glb_viewer_compatibility_summary_checks_normals_and_uint16_chunks() -> None:
+    passing = _glb_viewer_compatibility_summary(
+        {
+            "material_count": 1,
+            "texture_count": 2,
+            "image_count": 2,
+            "primitive_count": 2,
+            "total_vertices": 66_000,
+            "primitives": [
+                {
+                    "primitive_index": 0,
+                    "vertex_count": 65_535,
+                    "normal_count": 65_535,
+                    "index_count": 65_535,
+                    "indices_component_type": 5123,
+                    "indices_min": [0],
+                    "indices_max": [65_534],
+                    "has_normals": True,
+                },
+                {
+                    "primitive_index": 1,
+                    "vertex_count": 465,
+                    "normal_count": 465,
+                    "index_count": 465,
+                    "indices_component_type": 5123,
+                    "indices_min": [0],
+                    "indices_max": [464],
+                    "has_normals": True,
+                },
+            ],
+        }
+    )
+    assert passing["all_passed"] is True
+    assert passing["checks"]["normals"]["passed"] is True
+    assert passing["checks"]["uint16_indices"]["passed"] is True
+    assert passing["checks"]["chunking_for_large_mesh"]["passed"] is True
+
+    failing = _glb_viewer_compatibility_summary(
+        {
+            "material_count": 1,
+            "texture_count": 2,
+            "image_count": 2,
+            "primitive_count": 1,
+            "total_vertices": 66_000,
+            "primitives": [
+                {
+                    "primitive_index": 0,
+                    "vertex_count": 66_000,
+                    "normal_count": 0,
+                    "index_count": 66_000,
+                    "indices_component_type": 5125,
+                    "indices_min": [0],
+                    "indices_max": [65_999],
+                    "has_normals": False,
+                }
+            ],
+        }
+    )
+    assert failing["all_passed"] is False
+    assert failing["checks"]["normals"]["passed"] is False
+    assert failing["checks"]["uint16_indices"]["passed"] is False
+    assert failing["checks"]["local_index_bounds"]["passed"] is False
+    assert failing["checks"]["chunking_for_large_mesh"]["passed"] is False
 
 
 def _assert_memory_diagnostics(diagnostics: dict, *, required_stages: tuple[str, ...]) -> None:
