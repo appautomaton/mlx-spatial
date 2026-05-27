@@ -220,6 +220,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-uv-surface-fill-gate/SPEC.md`
 - exit signal: Real native-chart export clears global coverage while raw/exact/final coverage diagnostics remain honest and xatlas chart parity stays deferred.
 
+## Phase 23: Native Chart Reference-Target Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-native-chart-reference-target-gate`
+- objective: Codify the passing `reference-target` native-chart path with real-fixture tests and docs before moving to heavier upstream settings.
+- why now: Manual probe shows reference-target native-chart is production-ready and visual-comparison-ready, but that proof is not yet a durable regression gate.
+- likely outputs: Heavy native-chart reference-target test, readiness diagnostics assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-native-chart-reference-target-gate/SPEC.md`
+- exit signal: Reference-target native-chart export passes production and visual gates while xatlas and 1M/4096 parity remain explicitly deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

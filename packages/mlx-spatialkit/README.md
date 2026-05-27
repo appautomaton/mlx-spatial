@@ -98,6 +98,11 @@ Chart exports report separate artifact and quality readiness under
 artifact-ready and quality-ready for the scalar native-chart coverage checks
 after UV-surface fill, while still reporting raw/exact coverage and keeping
 `xatlas_chart_parity=false`.
+With `quality_preset="reference-target"` and `uv_backend="native-chart"`, the
+real fixture now also passes production threshold checks and deterministic
+visual comparison against the checked-in reference GLB. This is a native-chart
+readiness gate, not a claim of xatlas chart equivalence or 1M/4096 upstream
+setting parity.
 
 The current large-chart splitter, low-fill splitter, bounded rotation search,
 shelf packer, tighter native-chart padding, and UV-surface fill improve the real
@@ -117,8 +122,10 @@ face-count ratio, raw/final texture coverage, and backend tier. The current
 reference-target heavy fixture passes face-count, topology, and final global
 coverage thresholds, with final visible coverage around `0.602` versus the older
 one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
-gate with `production_quality_ready=true`. The 4096 heavy fixture separately
-passes production texture coverage. Explicit upstream-style
+gate with `production_quality_ready=true`. The opt-in native-chart reference
+target path also passes production and deterministic visual-comparison checks
+while keeping xatlas and 1M/4096 parity deferred. The 4096 heavy fixture
+separately passes production texture coverage. Explicit upstream-style
 `target_faces=1000000`, `texture_size=4096` export also has a separate
 `quality.upstream_export_settings` gate; when that gate passes, the 1M-face
 setting deferral is removed. This is still not a claim of upstream xatlas

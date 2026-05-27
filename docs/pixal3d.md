@@ -286,6 +286,11 @@ contract is visible.
 the current chart path writes a valid GLB and clears the scalar native-chart
 coverage checks after UV-surface fill, while preserving `xatlas_chart_parity=false`
 and raw/exact/final coverage diagnostics.
+When paired with `quality_preset="reference-target"`, the opt-in native-chart
+path also passes production threshold checks and deterministic GLB/PNG visual
+comparison on the real fixture. That closes the reference-target native-chart
+readiness gate, but xatlas chart parity and 1M/4096 upstream-setting parity
+remain separate boundaries.
 
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from
@@ -296,6 +301,8 @@ reporting. Current reference-target diagnostics are expected to stay
 `artifact_ready=true`; on the current heavy fixture they also reach
 `production_quality_ready=true` because backend tier, face-count, topology,
 final coverage, raw coverage reporting, preset, and reference checks all pass.
+Both the default face-atlas path and the opt-in native-chart path have
+reference-target real-fixture gates.
 Explicit upstream-style `target_faces=1000000`, `texture_size=4096` export has
 a separate `quality.upstream_export_settings` section that checks target faces,
 texture size, backend tier, target reach, face retention, artifact readiness,

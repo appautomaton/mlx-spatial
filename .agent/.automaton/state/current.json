@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-uv-surface-fill-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-native-chart-reference-target-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-uv-surface-fill-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-uv-surface-fill-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-reference-target-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-native-chart-reference-target-gate/PLAN.md"
 }

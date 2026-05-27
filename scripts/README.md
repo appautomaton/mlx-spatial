@@ -262,7 +262,10 @@ Script defaults:
   report raw exact coverage, surface-filled texels, and final visible coverage
   separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;
   the current real fixture clears scalar native-chart coverage while xatlas
-  chart parity remains deferred.
+  chart parity remains deferred. With `quality_preset="reference-target"` and
+  `uv_backend="native-chart"`, the real fixture also passes production and
+  deterministic visual-comparison gates; this does not remove xatlas or
+  1M/4096 upstream-setting parity boundaries.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,
