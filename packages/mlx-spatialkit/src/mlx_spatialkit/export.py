@@ -323,6 +323,8 @@ def export_pixal3d_glb(
         lambda: mesh_metrics(simplified.vertices, simplified.faces),
     )
     diagnostics["stages"]["export_metrics"]["metrics"] = post_metrics
+    quality = _export_quality_summary(simplify_stats, post_metrics)
+    diagnostics["quality"] = quality
 
     uv_mesh = _timed_stage(
         diagnostics,
@@ -372,6 +374,9 @@ def export_pixal3d_glb(
                 "bake_backend": str(baked.stats.get("backend")),
                 "coverage_ratio": float(baked.stats.get("coverage_ratio", 0.0)),
                 "raw_coverage_ratio": float(baked.stats.get("raw_coverage_ratio", 0.0)),
+                "simplifier_backend": quality["simplifier_backend"],
+                "simplifier_quality_tier": quality["simplifier_quality_tier"],
+                "production_quality_ready": bool(quality["production_quality_ready"]),
             },
         ),
     )
@@ -379,7 +384,10 @@ def export_pixal3d_glb(
     sample("after_write_glb")
 
     diagnostics["result"] = {
-        "ready": True,
+        "ready": bool(quality["artifact_ready"]),
+        "artifact_ready": bool(quality["artifact_ready"]),
+        "production_quality_ready": bool(quality["production_quality_ready"]),
+        "quality_warnings": quality["warnings"],
         "model_glb": str(glb.path),
         "diagnostics_json": str(resolved_diagnostics_path),
         "bytes_written": int(glb.bytes_written),
@@ -559,6 +567,26 @@ def decoded_metadata_value(diagnostics: dict[str, Any], key: str) -> Any:
         if key in metadata:
             return metadata[key]
     return None
+
+
+def _export_quality_summary(simplify_stats: dict[str, Any], export_metrics: dict[str, Any]) -> dict[str, Any]:
+    blockers = tuple(str(item) for item in export_metrics.get("export_blocking_reasons", ()))
+    simplifier_quality = str(simplify_stats.get("quality_tier", "unknown"))
+    simplifier_backend = str(simplify_stats.get("backend", "unknown"))
+    warnings: list[str] = []
+    if simplifier_quality != "production":
+        warnings.append("preview_simplifier_quality_tier")
+    if blockers:
+        warnings.append("export_blocking_reasons_present")
+    artifact_ready = len(blockers) == 0
+    return {
+        "artifact_ready": artifact_ready,
+        "production_quality_ready": artifact_ready and simplifier_quality == "production",
+        "simplifier_backend": simplifier_backend,
+        "simplifier_quality_tier": simplifier_quality,
+        "export_blocking_reasons": blockers,
+        "warnings": tuple(warnings),
+    }
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

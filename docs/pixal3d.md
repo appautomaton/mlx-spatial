@@ -225,3 +225,11 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
 If `mlx_spatialkit` is not importable, the pipeline falls back to the internal
 writer and records the fallback reason in trace metadata. Real fixture tests for
 this path are marked `heavy` and write generated artifacts under `/tmp`.
+
+Spatialkit diagnostics separate artifact readiness from production-quality
+readiness. The current native texture path uses Metal exact sparse-voxel
+sampling plus bounded fallback/fill and records raw exact coverage, final visible
+base-color coverage, fallback-filled texels, timings, and RSS samples. Current
+mesh simplification is reported as `face-stride-preview` with
+`quality_tier=preview`, so generated GLBs are preview artifacts rather than
+upstream-style production remesh parity.

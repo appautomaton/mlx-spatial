@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
+from mlx_spatialkit.export import _export_quality_summary
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
@@ -39,6 +40,12 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
 
     diagnostics = json.loads(result.diagnostics_path.read_text())
     assert diagnostics["result"]["ready"] is True
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is False
+    assert "preview_simplifier_quality_tier" in diagnostics["result"]["quality_warnings"]
+    assert diagnostics["quality"]["simplifier_backend"] == "face-stride-preview"
+    assert diagnostics["quality"]["simplifier_quality_tier"] == "preview"
+    assert diagnostics["quality"]["production_quality_ready"] is False
     assert diagnostics["settings"]["texture_size"] == 1024
     assert diagnostics["settings"]["target_faces"] == 50_000
     assert diagnostics["settings"]["grid_size"] == 1024
@@ -76,3 +83,26 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="max_texture_pixels must be positive"):
         export_pixal3d_glb(decoded_dir, tmp_path / "out", max_texture_pixels=0)
+
+
+def test_export_quality_summary_separates_artifact_and_production_readiness() -> None:
+    summary = _export_quality_summary(
+        {"backend": "face-stride-preview", "quality_tier": "preview"},
+        {"export_blocking_reasons": []},
+    )
+
+    assert summary["artifact_ready"] is True
+    assert summary["production_quality_ready"] is False
+    assert summary["simplifier_backend"] == "face-stride-preview"
+    assert summary["simplifier_quality_tier"] == "preview"
+    assert "preview_simplifier_quality_tier" in summary["warnings"]
+
+    blocked = _export_quality_summary(
+        {"backend": "qem-edge-collapse", "quality_tier": "production"},
+        {"export_blocking_reasons": ["nonmanifold_edges_present"]},
+    )
+
+    assert blocked["artifact_ready"] is False
+    assert blocked["production_quality_ready"] is False
+    assert blocked["export_blocking_reasons"] == ("nonmanifold_edges_present",)
+    assert "export_blocking_reasons_present" in blocked["warnings"]

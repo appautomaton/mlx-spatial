@@ -114,6 +114,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 
 **Touches:** `packages/mlx-spatialkit/cpp/simplify.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests/test_mesh_processing.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`
 
+**Status:** complete
+**Evidence:** Added simplifier stats `backend=face-stride-preview`, `algorithm=deterministic_face_stride_compaction`, `quality_tier=preview`, and `production_ready=false` in `packages/mlx-spatialkit/cpp/simplify.cpp`. Added `_export_quality_summary(...)` in `packages/mlx-spatialkit/src/mlx_spatialkit/export.py` so diagnostics and result metadata distinguish `artifact_ready` from `production_quality_ready` and carry preview-simplifier warnings. Updated mesh/export tests to prevent preview simplification from being labeled production-ready and to make export-blocking reasons affect readiness metadata. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `10 passed, 1 deselected`.
+**Risks / next:** Slice 6 must align docs and final verification with the actual preview quality tier and no-release posture.
+
 ### Slice 6: Docs And Clean Verification
 
 **Objective:** Align package/root docs and final verification with the actual quality tier, diagnostics, `/tmp` policy, and no-release posture.
@@ -129,6 +133,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-export-quality-hardening/DESIGN.md`. 
 **Depends on:** Slice 5
 
 **Touches:** `packages/mlx-spatialkit/README.md`, `scripts/README.md`, `docs`, package tests, build artifacts under `/tmp`
+
+**Status:** complete
+**Evidence:** Updated `packages/mlx-spatialkit/README.md`, `docs/pixal3d.md`, and `scripts/README.md` to describe spatialkit texture coverage diagnostics, native Metal fallback/fill, preview simplifier tier, `artifact_ready` versus `production_quality_ready`, fallback behavior, and `/tmp` heavy output policy. `git diff --check && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests -q && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear && ...` passed with `40 passed, 1 deselected` and `spatialkit artifact clean`; `UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache uv run pytest tests/test_pixal3d_export.py tests/test_pixal3d_pipeline.py -q` passed with `35 passed`.
+**Risks / next:** Execution slices are complete; continue into verify with fresh acceptance-criteria audit.
 
 ## Requirement Traceability
 

@@ -136,6 +136,10 @@ def test_simplify_mesh_reduces_faces_with_native_owned_interface() -> None:
     mesh, stats = simplify_mesh(vertices, faces, target_faces=3, min_component_faces=1)
 
     assert stats["simplified"] == 1
+    assert stats["backend"] == "face-stride-preview"
+    assert stats["algorithm"] == "deterministic_face_stride_compaction"
+    assert stats["quality_tier"] == "preview"
+    assert stats["production_ready"] is False
     assert stats["source_faces"] == 6
     assert stats["target_faces"] == 3
     assert mesh.faces.shape[0] == 3

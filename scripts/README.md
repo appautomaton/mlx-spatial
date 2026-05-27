@@ -233,7 +233,9 @@ Script defaults:
 - spatialkit export writes `model.glb` and a `diagnostics.json` sidecar from
   decoded `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`; if the
   optional package is missing, the Pixal3D script records the fallback and uses
-  the internal writer
+  the internal writer. Current spatialkit output is preview-quality: native
+  Metal texture fallback/fill is enabled, while simplification is reported as
+  `face-stride-preview` and `production_quality_ready=false`.
 
 ### LiTo
 

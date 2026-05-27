@@ -39,6 +39,10 @@ nb::dict simplify_mesh(
   simplified = mesh_common::compact_mesh(simplified, &unreferenced_removed);
   nb::dict result = mesh_common::mesh_result(simplified);
   nb::dict stats;
+  stats["backend"] = "face-stride-preview";
+  stats["algorithm"] = "deterministic_face_stride_compaction";
+  stats["quality_tier"] = "preview";
+  stats["production_ready"] = false;
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["final_faces"] = static_cast<int64_t>(simplified.faces.size());

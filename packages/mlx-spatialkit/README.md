@@ -21,3 +21,15 @@ print(result.diagnostics_path)
 
 The real fixture test is opt-in with `pytest -m heavy` and writes generated
 GLB/diagnostic artifacts under `/tmp`.
+
+## Quality Tier
+
+`mlx-spatialkit` currently produces a preview-quality Pixal3D GLB. The native
+texture path uses Metal exact sparse-voxel sampling, bounded sparse-neighbor
+fallback, and native UV-surface dilation. Diagnostics record raw exact coverage,
+fallback-filled texels, final visible base-color coverage, runtime, and RSS
+samples.
+
+Mesh simplification is intentionally labeled `face-stride-preview` with
+`quality_tier=preview`. A written GLB can be `artifact_ready=true` while
+`production_quality_ready=false`; production remeshing parity is a later phase.
