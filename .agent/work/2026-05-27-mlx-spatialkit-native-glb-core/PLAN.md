@@ -68,11 +68,15 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - Validation crosses the nanobind boundary; Python does not reimplement native validation logic beyond path/NPZ loading.
 - Tests cover valid arrays, wrong dtype, wrong rank, wrong channel count, empty inputs, and unsupported batch cases.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_contracts.py -q`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_contracts.py -q`
 
 **Depends on:** Slice 1
 
 **Touches:** `packages/mlx-spatialkit/src/mlx_spatialkit`, `packages/mlx-spatialkit/cpp`, `packages/mlx-spatialkit/tests`
+
+**Status:** complete
+**Evidence:** Added native `validate_pixal3d_shape_fields` and `validate_pixal3d_texture_attributes` bindings plus thin Python wrappers and NPZ loading; `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_contracts.py -q` passed with `12 passed`, full package tests passed with `13 passed`, and the wheel/sdist build plus artifact-clean check passed after adding the contract sources.
+**Risks / next:** Slice 3 must keep FlexiDualGrid extraction native and parity-tested against `src/mlx_spatial/ovoxel.py`.
 
 ### Slice 3: Native FlexiDualGrid Mesh Extraction
 
@@ -83,7 +87,7 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - Synthetic parity tests compare native output to `src/mlx_spatial/ovoxel.py:flexi_dual_grid_fields_to_mesh`.
 - The implementation handles no-quad cases and validation failures without crashes or partial outputs.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_flexi_dual_grid.py -q`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_flexi_dual_grid.py -q`
 
 **Depends on:** Slice 2
 
@@ -99,7 +103,7 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - Simplification is behind a native-owned interface and can reduce fixture meshes enough for downstream UV/export.
 - Tests prove diagnostics are actionable and no Python per-face loops own the cleanup path.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_mesh_processing.py -q`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py -q`
 
 **Depends on:** Slice 3
 
@@ -114,7 +118,7 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - GLB writer emits valid GLB header/chunks, mesh buffers, texture image payloads, materials, and metadata needed for Pixal3D exports.
 - Tests validate GLB structure and basic scene metadata without relying on the real fixture.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_glb_writer.py -q`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_glb_writer.py -q`
 
 **Depends on:** Slice 4
 
@@ -130,7 +134,7 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - Tests cover a tiny synthetic mesh/voxel case with deterministic output.
 - Failure paths report missing Metal/toolchain/device errors clearly.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_texture_bake.py -q`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_texture_bake.py -q`
 
 **Depends on:** Slice 5
 
@@ -146,7 +150,7 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 - Diagnostics include stage timings, memory samples where practical, mesh counts, cleanup counts, UV stats, texture coverage, and output byte size.
 - The GLB is valid and previewable enough for the existing reference viewer/manual inspection path.
 
-**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy`
+**Verification:** `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy`
 
 **Depends on:** Slice 6
 
@@ -190,9 +194,9 @@ Use the companion design in `.agent/work/2026-05-27-mlx-spatialkit-native-glb-co
 | Stage | Command |
 |---|---|
 | Build skeleton | `xcrun metal -v && UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear` |
-| Package tests | `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests -q` |
+| Package tests | `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests -q` |
 | Root integration tests | `UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache uv run pytest tests/test_pixal3d_export.py tests/test_pixal3d_pipeline.py -q` |
-| Heavy real fixture | `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy` |
+| Heavy real fixture | `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy` |
 
 ## Execution Notes
 

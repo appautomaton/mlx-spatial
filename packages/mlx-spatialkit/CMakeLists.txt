@@ -68,6 +68,7 @@ nanobind_add_module(
   _native
   STABLE_ABI
   cpp/bindings.cpp
+  cpp/pixal3d_contracts.cpp
   metal/texture_bake.mm
 )
 

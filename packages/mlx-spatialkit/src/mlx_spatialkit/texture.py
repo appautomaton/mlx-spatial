@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from ._native import metal_device_available
+from ._native import metal_device_available, validate_pixal3d_texture_attributes
 
-__all__ = ["metal_device_available"]
+__all__ = ["metal_device_available", "validate_pixal3d_texture_attributes"]
