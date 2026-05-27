@@ -222,11 +222,11 @@ Script defaults:
 - NAF coordinate chunk size: `8192`
 - manual FOV: optional `--manual-fov 0.2` overrides MoGe auto-camera and does
   not run MoGe
-- current blocker: missing converted MoGe weights produce a structured
-  `camera-setup` blocker when `--manual-fov` is omitted; missing converted NAF
-  weights produce a structured `naf-assets` blocker; with MoGe and NAF present,
-  downstream model asset readiness determines how far the 512/1024 shape SLat,
-  texture SLat, decoder, and GLB export path can run
+- missing converted MoGe weights produce a structured `camera-setup` blocker
+  when `--manual-fov` is omitted; missing converted NAF weights produce a
+  structured `naf-assets` blocker; with complete Pixal3D, DINOv3, MoGe, and NAF
+  assets, the MLX path runs through 512/1024 shape SLat, texture SLat, shape and
+  texture decode, and `model.glb` export
 
 ### LiTo
 

@@ -149,6 +149,7 @@ def test_pixal3d_projection_conditioning_blocks_shape_stage_without_naf_features
     assert conditioning.projected_lr_features.shape == (1, 2**3, 3)
     assert conditioning.blocker is not None
     assert conditioning.blocker.stage == "naf-upsample"
+    assert "inference pipeline NAF bridge" in conditioning.blocker.reason
     assert conditioning.blocker.metadata["expected_projected_channels"] == 6
 
 

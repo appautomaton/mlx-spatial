@@ -312,7 +312,7 @@ def build_pixal3d_projection_conditioning(
             blocker=Pixal3DProjectionBlocker(
                 stage="naf-upsample",
                 operation="build Pixal3D high-resolution projected features",
-                reason="Pixal3D stage requires NAF-upsampled DINOv3 features; MLX NAF equivalent is not implemented yet",
+                reason="Pixal3D stage requires NAF-upsampled DINOv3 features; provide naf_feature_map or use the inference pipeline NAF bridge",
                 metadata={
                     "stage": config.name,
                     "expected_projected_channels": config.expected_projected_channels(channels),
