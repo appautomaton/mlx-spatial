@@ -257,8 +257,11 @@ generation or a production remesh backend.
 When a caller supplies arbitrary non-atlas UVs, the Metal bake no longer scans
 every face for every texel. It builds a bounded UV-space face-bin index and
 reports `backend=metal-uv-binned-nearest` with bin grid, face-reference,
-max-candidate, and guard diagnostics. `mlx-spatialkit` also exposes
-`make_native_chart_uvs` as an opt-in native chart candidate. It groups
+max-candidate, and guard diagnostics. Remaining UV-surface holes are filled by
+a bounded native nearest-visible surface pass, with raw exact coverage,
+fallback-filled texels, surface-filled texels, and final visible coverage
+reported separately. `mlx-spatialkit` also exposes `make_native_chart_uvs` as an
+opt-in native chart candidate. It groups
 edge-connected smooth faces by a configurable normal-angle threshold, reuses
 vertices within a chart, splits oversized charts into deterministic spatial
 chunks, applies bounded low-fill chart splitting when a chart under-fills its
@@ -280,10 +283,9 @@ is not supplied, face-atlas exports keep `0.08`; native-chart exports resolve
 to tighter `0.02` padding and record `settings.tile_padding_source` so the
 contract is visible.
 `native_chart_uv_candidate` separates `artifact_ready` from `quality_ready`:
-the current chart path can write a valid GLB while reporting
-`status=quality_blocked` when global coverage remains below the
-production-readiness floor. That warning is intentional evidence for the next
-chart-quality work, not a runtime failure.
+the current chart path writes a valid GLB and clears the scalar native-chart
+coverage checks after UV-surface fill, while preserving `xatlas_chart_parity=false`
+and raw/exact/final coverage diagnostics.
 
 For decoded NPZ validation, `mlx_spatialkit.export_pixal3d_glb` also accepts
 `quality_preset="reference-target"`. That preset resolves the face target from

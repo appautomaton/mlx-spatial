@@ -463,6 +463,82 @@ int64_t dilate_missing_surface_texels(
   return total_filled;
 }
 
+int64_t fill_remaining_surface_texels(
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness,
+    std::vector<uint8_t> &coverage,
+    int64_t texture_size,
+    int64_t *seed_count) {
+  const size_t side = checked_size(static_cast<uint64_t>(texture_size), "texture surface-fill side");
+  const size_t pixel_count = checked_size(
+      checked_mul(static_cast<uint64_t>(texture_size), static_cast<uint64_t>(texture_size), "texture surface-fill pixels"),
+      "texture surface-fill pixels");
+  constexpr uint32_t unvisited = std::numeric_limits<uint32_t>::max();
+  std::vector<uint32_t> nearest_source(pixel_count, unvisited);
+  std::vector<uint32_t> queue;
+  queue.reserve(pixel_count);
+  *seed_count = 0;
+
+  for (size_t texel = 0; texel < pixel_count; ++texel) {
+    if (coverage[texel] != 1 && coverage[texel] != 4) {
+      continue;
+    }
+    if (base_color[texel * 4 + 3] == 0) {
+      continue;
+    }
+    const uint32_t texel_index = checked_u32(static_cast<uint64_t>(texel), "texture surface-fill queue index");
+    nearest_source[texel] = texel_index;
+    queue.push_back(texel_index);
+  }
+  *seed_count = static_cast<int64_t>(queue.size());
+
+  int64_t filled = 0;
+  size_t head = 0;
+  while (head < queue.size()) {
+    const size_t source = static_cast<size_t>(queue[head++]);
+    const size_t source_x = source % side;
+    const size_t source_y = source / side;
+    for (int dy = -1; dy <= 1; ++dy) {
+      const int64_t y = static_cast<int64_t>(source_y) + dy;
+      if (y < 0 || y >= texture_size) {
+        continue;
+      }
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        const int64_t x = static_cast<int64_t>(source_x) + dx;
+        if (x < 0 || x >= texture_size) {
+          continue;
+        }
+        const size_t target = static_cast<size_t>(y) * side + static_cast<size_t>(x);
+        if (nearest_source[target] != unvisited) {
+          continue;
+        }
+        const uint32_t fill_source = nearest_source[source];
+        nearest_source[target] = fill_source;
+        if (coverage[target] == 2 || coverage[target] == 3) {
+          const size_t target_base = target * 4;
+          const size_t source_base = static_cast<size_t>(fill_source) * 4;
+          base_color[target_base + 0] = base_color[source_base + 0];
+          base_color[target_base + 1] = base_color[source_base + 1];
+          base_color[target_base + 2] = base_color[source_base + 2];
+          base_color[target_base + 3] = base_color[source_base + 3];
+          const size_t target_mr = target * 3;
+          const size_t source_mr = static_cast<size_t>(fill_source) * 3;
+          metallic_roughness[target_mr + 0] = metallic_roughness[source_mr + 0];
+          metallic_roughness[target_mr + 1] = metallic_roughness[source_mr + 1];
+          metallic_roughness[target_mr + 2] = metallic_roughness[source_mr + 2];
+          coverage[target] = 5;
+          filled += 1;
+        }
+        queue.push_back(checked_u32(static_cast<uint64_t>(target), "texture surface-fill queue index"));
+      }
+    }
+  }
+  return filled;
+}
+
 int64_t resolve_dilation_max_passes(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
   if (atlas_cols <= 0 || atlas_rows <= 0) {
     return 8;
@@ -725,10 +801,18 @@ nb::dict bake_pbr_texture_metal(
         texture_size,
         dilation_max_passes,
         &dilation_passes);
+    int64_t surface_fill_seed_texels = 0;
+    const int64_t surface_filled = fill_remaining_surface_texels(
+        base_color,
+        metallic_roughness,
+        coverage,
+        texture_size,
+        &surface_fill_seed_texels);
 
     int64_t no_face = 0;
     int64_t sampled = 0;
     int64_t fallback_filled = 0;
+    int64_t surface_filled_count = 0;
     int64_t missing = 0;
     int64_t out_of_grid = 0;
     for (uint8_t value : coverage) {
@@ -742,6 +826,8 @@ nb::dict bake_pbr_texture_metal(
         out_of_grid += 1;
       } else if (value == 4) {
         fallback_filled += 1;
+      } else if (value == 5) {
+        surface_filled_count += 1;
       }
     }
     int64_t visible_base_color = 0;
@@ -755,7 +841,7 @@ nb::dict bake_pbr_texture_metal(
         nonzero_rgb += 1;
       }
     }
-    const int64_t surface = sampled + missing + out_of_grid + fallback_filled;
+    const int64_t surface = sampled + missing + out_of_grid + fallback_filled + surface_filled_count;
     const int64_t exact_missing = exact_missing_before_fill;
     const double pixel_denominator = static_cast<double>(pixel_count);
     const double surface_denominator = surface > 0 ? static_cast<double>(surface) : 1.0;
@@ -771,6 +857,11 @@ nb::dict bake_pbr_texture_metal(
     stats["exact_sampled_texel_count"] = sampled;
     stats["sampled_texel_count"] = sampled;
     stats["fallback_filled_texel_count"] = fallback_filled;
+    stats["surface_fill_enabled"] = true;
+    stats["surface_fill_seed_texel_count"] = surface_fill_seed_texels;
+    stats["surface_filled_texel_count"] = surface_filled_count;
+    stats["surface_fill_filled_texel_count"] = surface_filled;
+    stats["surface_unfilled_texel_count"] = missing + out_of_grid;
     stats["dilation_filled_texel_count"] = dilation_filled;
     stats["dilation_pass_count"] = dilation_passes;
     stats["exact_missing_texel_count"] = exact_missing;

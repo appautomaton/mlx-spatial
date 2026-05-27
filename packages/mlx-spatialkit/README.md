@@ -74,17 +74,19 @@ For arbitrary non-atlas UV meshes, the Metal texture bake path now builds a
 bounded UV-space face-bin index before dispatch. Those bakes report
 `backend=metal-uv-binned-nearest` plus bin grid, face-reference, max-candidate,
 and guard diagnostics, so chart UVs do not fall back to an
-O(texture_pixels * faces) scan. `make_native_chart_uvs` is available as an
-opt-in native chart candidate: it groups edge-connected smooth faces by a
-normal-angle threshold, splits oversized charts into deterministic spatial
-chunks, applies bounded low-fill chart splitting when a chart under-fills its
-projected rectangle, duplicates vertices at chart boundaries, packs charts
-through deterministic local-frame/PCA projection plus aspect-aware shelf
-packing, and feeds this binned Metal path. Projection evaluates a deterministic
-19-candidate PCA-centered rotation search at 5-degree steps and reports the
-candidate count and step size in UV stats. Existing Pixal3D exports still use
-the paired-triangle face atlas by default, and this chart candidate is not
-xatlas chart parity.
+O(texture_pixels * faces) scan. Remaining UV-surface holes are filled by a
+bounded native nearest-visible surface pass; stats keep raw exact coverage,
+fallback, surface-filled, and final visible coverage separate. `make_native_chart_uvs`
+is available as an opt-in native chart candidate: it groups edge-connected
+smooth faces by a normal-angle threshold, splits oversized charts into
+deterministic spatial chunks, applies bounded low-fill chart splitting when a
+chart under-fills its projected rectangle, duplicates vertices at chart
+boundaries, packs charts through deterministic local-frame/PCA projection plus
+aspect-aware shelf packing, and feeds this binned Metal path. Projection
+evaluates a deterministic 19-candidate PCA-centered rotation search at 5-degree
+steps and reports the candidate count and step size in UV stats. Existing
+Pixal3D exports still use the paired-triangle face atlas by default, and this
+chart candidate is not xatlas chart parity.
 `export_pixal3d_glb(...,
 uv_backend="native-chart")` wires the same candidate into the real decoded
 Pixal3D export path and records chart count, duplicate ratio, UV-bin
@@ -92,17 +94,14 @@ diagnostics, large-chart and low-fill split counts, chart rect fill, shelf
 packing efficiency, and `xatlas_chart_parity=false`.
 
 Chart exports report separate artifact and quality readiness under
-`quality.native_chart_uv_candidate`. A chart export can be artifact-ready when
-it writes a valid GLB and bakes through `metal-uv-binned-nearest`, while still
-being `quality_blocked` if global texture coverage or UV-surface occupancy is
-too low. In that case `result.quality_warnings` includes
-`native_chart_uv_candidate_quality_blocked`, and the failed checks identify the
-specific coverage/utilization blocker.
+`quality.native_chart_uv_candidate`. The current real fixture chart candidate is
+artifact-ready and quality-ready for the scalar native-chart coverage checks
+after UV-surface fill, while still reporting raw/exact coverage and keeping
+`xatlas_chart_parity=false`.
 
 The current large-chart splitter, low-fill splitter, bounded rotation search,
-shelf packer, and tighter native-chart padding improve the real fixture chart
-candidate versus the older fixed-axis/equal-grid chart path. It can still report
-`quality_blocked` until global texture coverage clears the readiness floor.
+shelf packer, tighter native-chart padding, and UV-surface fill improve the real
+fixture chart candidate versus the older fixed-axis/equal-grid chart path.
 
 For high-resolution exports, the Metal texture path resolves nearest-voxel
 fallback and native dilation budgets from the atlas tile size. Atlas textures

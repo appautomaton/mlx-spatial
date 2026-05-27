@@ -258,9 +258,11 @@ Script defaults:
   chart splitting, and aspect-aware shelves with a tighter backend default
   padding of `0.02`. They report oversized and low-fill split counts, projection
   candidate count and step, chart rect fill, padding source, and packing
-  efficiency. Chart diagnostics separate `artifact_ready` from `quality_ready`,
-  so a valid chart GLB can still report `quality_blocked` when global coverage
-  is not production-ready.
+  efficiency. Non-atlas UV bakes also use bounded native UV-surface fill and
+  report raw exact coverage, surface-filled texels, and final visible coverage
+  separately. Chart diagnostics separate `artifact_ready` from `quality_ready`;
+  the current real fixture clears scalar native-chart coverage while xatlas
+  chart parity remains deferred.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,

@@ -210,6 +210,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-low-fill-chart-split-gate/SPEC.md`
 - exit signal: Real chart export improves chart rect fill or global coverage beyond the Phase 20 baseline while readiness diagnostics remain honest.
 
+## Phase 22: UV Surface Fill Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-uv-surface-fill-gate`
+- objective: Add bounded native UV-surface hole fill so native-chart global texture coverage clears the 0.50 floor without relaxing thresholds.
+- why now: Native-chart UV-surface occupancy now exceeds 0.50, but global coverage remains blocked because remaining UV-surface holes are not fully visible.
+- likely outputs: Native surface-fill pass, fill diagnostics, focused texture tests, real fixture quality-ready gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-uv-surface-fill-gate/SPEC.md`
+- exit signal: Real native-chart export clears global coverage while raw/exact/final coverage diagnostics remain honest and xatlas chart parity stays deferred.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.

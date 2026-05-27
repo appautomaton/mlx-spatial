@@ -87,14 +87,16 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     assert baked.stats["exact_sampled_texel_count"] == baked.stats["sampled_texel_count"]
     assert baked.stats["sampled_texel_count"] > 0
     assert baked.stats["fallback_filled_texel_count"] >= 0
+    assert baked.stats["surface_fill_enabled"] is True
+    assert baked.stats["surface_fill_seed_texel_count"] > 0
+    assert baked.stats["surface_filled_texel_count"] >= 0
+    assert baked.stats["surface_fill_filled_texel_count"] == baked.stats["surface_filled_texel_count"]
     assert baked.stats["uv_surface_texel_count"] == (
         baked.stats["exact_sampled_texel_count"]
         + baked.stats["fallback_filled_texel_count"]
+        + baked.stats["surface_filled_texel_count"]
         + baked.stats["missing_texel_count"]
         + baked.stats["out_of_grid_texel_count"]
-    )
-    assert baked.stats["exact_missing_texel_count"] == (
-        baked.stats["fallback_filled_texel_count"] + baked.stats["missing_texel_count"]
     )
     assert baked.stats["no_face_texel_count"] + baked.stats["uv_surface_texel_count"] == 16
     assert baked.stats["visible_base_color_texel_count"] == int(np.count_nonzero(baked.base_color_rgba[:, :, 3]))
@@ -181,7 +183,7 @@ def test_bake_pbr_texture_metal_uses_binned_path_for_native_chart_uvs() -> None:
         mesh,
         coordinates,
         attributes,
-        texture_size=4,
+        texture_size=16,
         origin=(0.0, 0.0, 0.0),
         voxel_size=1.0,
         decode_resolution=2,
@@ -203,8 +205,8 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         vertices=np.array(
             [
                 [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
+                [16.0, 0.0, 0.0],
+                [0.0, 16.0, 0.0],
             ],
             dtype=np.float32,
         ),
@@ -212,7 +214,7 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         stats={"backend": "provided"},
     )
-    coordinates = np.array([[0, 0, 0, 0]], dtype=np.int32)
+    coordinates = np.array([[0, 0, 1, 1]], dtype=np.int32)
     attributes = np.array([[1.0, 0.25, 0.0, 0.0, 0.5, 1.0]], dtype=np.float32)
     if not metal_device_available():
         pytest.skip("Metal device unavailable")
@@ -221,7 +223,7 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         mesh,
         coordinates,
         attributes,
-        texture_size=4,
+        texture_size=16,
         origin=(0.0, 0.0, 0.0),
         voxel_size=1.0,
         decode_resolution=2,
@@ -232,16 +234,23 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
     assert baked.stats["exact_sampled_texel_count"] > 0
     assert baked.stats["missing_texel_count"] >= 0
     assert baked.stats["fallback_filled_texel_count"] > 0
-    assert baked.stats["exact_missing_texel_count"] > 0
+    assert baked.stats["surface_fill_enabled"] is True
+    assert baked.stats["surface_filled_texel_count"] > 0
+    assert baked.stats["surface_unfilled_texel_count"] == (
+        baked.stats["missing_texel_count"] + baked.stats["out_of_grid_texel_count"]
+    )
     fallback_texels = baked.base_color_rgba[baked.coverage_status == 4]
     assert fallback_texels.shape[0] == baked.stats["fallback_filled_texel_count"]
     assert np.all(fallback_texels[:, 3] > 0)
+    surface_texels = baked.base_color_rgba[baked.coverage_status == 5]
+    assert surface_texels.shape[0] == baked.stats["surface_filled_texel_count"]
+    assert np.all(surface_texels[:, 3] > 0)
     assert baked.stats["visible_base_color_texel_count"] == (
-        baked.stats["exact_sampled_texel_count"] + baked.stats["fallback_filled_texel_count"]
+        baked.stats["exact_sampled_texel_count"]
+        + baked.stats["fallback_filled_texel_count"]
+        + baked.stats["surface_filled_texel_count"]
     )
-    assert baked.stats["exact_missing_texel_count"] == (
-        baked.stats["missing_texel_count"] + baked.stats["fallback_filled_texel_count"]
-    )
+    assert np.all(baked.base_color_rgba[baked.coverage_status == 0][:, 3] == 0)
     assert baked.stats["uv_surface_exact_coverage_ratio"] < 1.0
     assert baked.stats["uv_surface_final_visible_coverage_ratio"] > baked.stats["uv_surface_exact_coverage_ratio"]
     assert baked.stats["fallback_radius"] == 12

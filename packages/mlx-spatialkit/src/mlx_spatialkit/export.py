@@ -1062,6 +1062,10 @@ def _native_chart_uv_candidate_status(
     uv_bin_guard_passed = bool(texture_stats.get("uv_bin_guard_passed"))
     final_coverage = _maybe_float(texture_stats.get("coverage_ratio", texture_stats.get("final_visible_coverage_ratio")))
     uv_surface_visible = _maybe_float(texture_stats.get("uv_surface_final_visible_coverage_ratio"))
+    uv_surface_exact = _maybe_float(texture_stats.get("uv_surface_exact_coverage_ratio"))
+    raw_coverage = _maybe_float(texture_stats.get("raw_coverage_ratio"))
+    surface_filled_texels = _maybe_int(texture_stats.get("surface_filled_texel_count"))
+    surface_unfilled_texels = _maybe_int(texture_stats.get("surface_unfilled_texel_count"))
     texture_pixel_count = _maybe_int(texture_stats.get("texture_pixel_count"))
     uv_surface_texel_count = _maybe_int(texture_stats.get("uv_surface_texel_count"))
     uv_surface_occupancy = None
@@ -1151,9 +1155,13 @@ def _native_chart_uv_candidate_status(
         "output_faces": _maybe_int(uv_stats.get("output_faces")),
         "duplicated_vertex_ratio": _maybe_float(uv_stats.get("duplicated_vertex_ratio")),
         "global_coverage_ratio": final_coverage,
+        "raw_coverage_ratio": raw_coverage,
         "uv_surface_occupancy_ratio": uv_surface_occupancy,
+        "uv_surface_exact_coverage_ratio": uv_surface_exact,
         "uv_surface_final_visible_coverage_ratio": uv_surface_visible,
         "uv_surface_texel_count": uv_surface_texel_count,
+        "surface_filled_texel_count": surface_filled_texels,
+        "surface_unfilled_texel_count": surface_unfilled_texels,
         "texture_pixel_count": texture_pixel_count,
         "uv_bin_face_reference_count": _maybe_int(texture_stats.get("uv_bin_face_reference_count")),
         "uv_bin_max_candidate_faces": _maybe_int(texture_stats.get("uv_bin_max_candidate_faces")),

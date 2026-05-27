@@ -130,7 +130,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert diagnostics["settings"]["tile_padding"] == 0.02
     assert diagnostics["settings"]["tile_padding_source"] == "backend_default:native-chart"
     assert diagnostics["result"]["artifact_ready"] is True
-    assert "native_chart_uv_candidate_quality_blocked" in diagnostics["result"]["quality_warnings"]
+    assert "native_chart_uv_candidate_quality_blocked" not in diagnostics["result"]["quality_warnings"]
     uv_stats = diagnostics["stages"]["uv"]["stats"]
     assert uv_stats["backend"] == "native-chart-atlas"
     assert uv_stats["projection"] == "local-frame-pca"
@@ -169,26 +169,36 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert texture_stats["uv_bin_face_reference_count"] > 0
     assert texture_stats["uv_bin_guard_passed"] is True
     assert texture_stats["sampled_texel_count"] > 0
+    assert texture_stats["surface_fill_enabled"] is True
+    assert texture_stats["surface_filled_texel_count"] > 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["raw_coverage_ratio"] < texture_stats["final_visible_coverage_ratio"]
+    assert texture_stats["uv_surface_exact_coverage_ratio"] < texture_stats["uv_surface_final_visible_coverage_ratio"]
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_backend"] == "native-chart"
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_stats_backend"] == "native-chart-atlas"
     candidate = diagnostics["quality"]["native_chart_uv_candidate"]
-    assert candidate["status"] == "quality_blocked"
+    assert candidate["status"] == "quality_ready"
     assert candidate["artifact_ready"] is True
-    assert candidate["quality_ready"] is False
+    assert candidate["quality_ready"] is True
     assert candidate["uv_backend"] == "native-chart-atlas"
     assert candidate["texture_bake_backend"] == "metal-uv-binned-nearest"
     assert candidate["global_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"])
+    assert candidate["raw_coverage_ratio"] == pytest.approx(texture_stats["raw_coverage_ratio"])
+    assert candidate["uv_surface_exact_coverage_ratio"] == pytest.approx(texture_stats["uv_surface_exact_coverage_ratio"])
+    assert candidate["surface_filled_texel_count"] == texture_stats["surface_filled_texel_count"]
+    assert candidate["surface_unfilled_texel_count"] == 0
     assert candidate["uv_surface_occupancy_ratio"] == pytest.approx(
         texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     )
     assert uv_stats["chart_rect_fill_ratio"] > 0.5727071617508422
-    assert candidate["global_coverage_ratio"] > 0.3883981704711914
+    assert candidate["global_coverage_ratio"] >= 0.50
     assert candidate["uv_surface_occupancy_ratio"] > 0.50
     assert candidate["uv_bin_max_candidate_faces"] <= 512
-    assert candidate["checks"]["global_coverage_floor"]["passed"] is False
+    assert candidate["checks"]["global_coverage_floor"]["passed"] is True
     assert candidate["checks"]["uv_surface_occupancy_floor"]["passed"] is True
     assert candidate["checks"]["uv_surface_visible_floor"]["passed"] is True
-    assert candidate["quality_blockers"] == ["global_coverage_floor"]
+    assert candidate["quality_blockers"] == []
     assert candidate["xatlas_chart_parity"] is False
     assert "not_xatlas_chart_parity" in diagnostics["visual_comparison"]["deferred_parity_boundaries"]
     _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb"))
