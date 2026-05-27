@@ -315,7 +315,9 @@ Script defaults:
   exports.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
-  telemetry, not full system pressure or Metal allocator accounting.
+  telemetry, not full system pressure or Metal allocator accounting. During
+  Metal texture bake, the native command-buffer wait releases the Python GIL so
+  monitor threads can sample while the GPU is running.
   For dev-only browser visual proof, install Playwright/Three under
   `/tmp/mlx-spatialkit-render-deps` and run
   `scripts/spatialkit/render_glb_visual_parity.cjs` against the generated GLB

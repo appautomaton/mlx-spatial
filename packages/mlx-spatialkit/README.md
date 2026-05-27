@@ -210,6 +210,10 @@ RSS peaks per stage, backed by `ps` RSS samples and `resource.getrusage`
 high-water RSS. These numbers explain host-process memory behavior during
 stages such as `texture_bake` and `write_glb`; they are not full system memory
 pressure, Activity Monitor app-memory equivalence, or Metal allocator telemetry.
+During the Metal texture bake, the native code releases the Python GIL while
+the command buffer is committed and waited on. Python buffer loading and
+nanobind result construction still run with the GIL, but the GPU wait no longer
+blocks Python monitor threads from sampling process RSS.
 
 For browser-rendered visual proof, keep the browser stack outside the package
 runtime and install it under `/tmp`:

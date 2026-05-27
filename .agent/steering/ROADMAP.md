@@ -1,23 +1,24 @@
 # Roadmap
 
-## Phase 39: Quad Loop Repair Default
+## Phase 40: Metal GIL Release
 
 - status: done
-- change: `2026-05-27-mlx-spatialkit-quad-loop-repair`
-- objective: Make bounded triangle/quad loop repair the default topology-aware native export policy.
-- why now: Real Pixal3D diagnostics still show many final boundary loops, and cap-4 probing reduced loops without nonmanifold export blockers.
-- likely outputs: Cap-4 default across Python/native bindings, focused mesh tests, real Pixal3D heavy gate, docs, and package/build verification.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-quad-loop-repair/SPEC.md`
-- exit signal: Default exports report `small_boundary_loop_fill_max_edges=4`, quad holes fill in unit tests, and the real native-chart reference-target fixture keeps `nonmanifold_edges=0` with lower boundary-loop thresholds.
+- change: `2026-05-27-mlx-spatialkit-metal-gil-release`
+- objective: Release the Python GIL during Metal command-buffer waits and prove concurrent texture-bake API behavior.
+- why now: The backend quality bar includes thread safety and memory visibility, and a GIL-held GPU wait can starve Python monitor threads during a hot stage.
+- likely outputs: Narrow native GIL-release boundary, concurrent bake test, docs, package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-metal-gil-release/SPEC.md`
+- exit signal: Texture bake tests and package suite pass, concurrent public API calls are deterministic, and docs describe the GIL boundary without overstating full export parallelism.
 
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-quad-loop-repair`.
-- Diagnostics now separate scalar reference-target quality from production equivalence.
-- Native geometry repair now defaults to bounded triangle/quad loop repair while keeping arbitrary remesh and xatlas parity deferred.
+- Last verified change: `2026-05-27-mlx-spatialkit-metal-gil-release`.
+- Diagnostics separate scalar reference-target quality from production equivalence.
+- Native geometry repair defaults to bounded triangle/quad loop repair.
+- Metal texture bake now releases the Python GIL during command-buffer waits so Python monitor threads can sample during GPU execution.
 
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
 - Zero-padding default switch remains deferred until separately justified.
-- Implementing xatlas parity, full remesh, arbitrary N-gon filling, or CUDA/cuMesh behavior is outside the current repair-default change.
+- Implementing xatlas parity, full remesh, arbitrary N-gon filling, or CUDA/cuMesh behavior is outside the current Metal GIL-release change.

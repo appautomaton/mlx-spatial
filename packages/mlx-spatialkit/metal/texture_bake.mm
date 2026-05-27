@@ -850,10 +850,13 @@ nb::dict bake_pbr_texture_metal(
     MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(texture_size), static_cast<NSUInteger>(texture_size), 1);
     [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
-    [command_buffer commit];
-    [command_buffer waitUntilCompleted];
-    if ([command_buffer error] != nil) {
-      throw metal_error("mlx-spatialkit Metal texture bake command failed", [command_buffer error]);
+    {
+      nb::gil_scoped_release release;
+      [command_buffer commit];
+      [command_buffer waitUntilCompleted];
+      if ([command_buffer error] != nil) {
+        throw metal_error("mlx-spatialkit Metal texture bake command failed", [command_buffer error]);
+      }
     }
 
     const auto *base_ptr = static_cast<const uint8_t *>([base_buffer contents]);

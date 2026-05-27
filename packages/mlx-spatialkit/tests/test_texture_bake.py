@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 
@@ -121,6 +123,37 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     np.testing.assert_array_equal(baked.metallic_roughness[0, 0], np.array([0, 51, 26], dtype=np.uint8))
     np.testing.assert_array_equal(baked.base_color_rgba[0, 2], np.array([0, 255, 0, 204], dtype=np.uint8))
     np.testing.assert_array_equal(baked.metallic_roughness[0, 2], np.array([0, 102, 77], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_metal_supports_concurrent_public_api_calls() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    def bake_once() -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+        mesh = _uv_mesh()
+        coordinates, attributes = _texture_fields()
+        baked = bake_pbr_texture(
+            mesh,
+            coordinates,
+            attributes,
+            texture_size=4,
+            origin=(0.0, 0.0, 0.0),
+            voxel_size=1.0,
+            decode_resolution=2,
+        )
+        return baked.base_color_rgba.copy(), baked.metallic_roughness.copy(), dict(baked.stats)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(lambda _: bake_once(), range(3)))
+
+    reference_base, reference_mr, reference_stats = results[0]
+    for base_color, metallic_roughness, stats in results[1:]:
+        np.testing.assert_array_equal(base_color, reference_base)
+        np.testing.assert_array_equal(metallic_roughness, reference_mr)
+        assert stats["backend"] == reference_stats["backend"]
+        assert stats["sampled_texel_count"] == reference_stats["sampled_texel_count"]
+        assert stats["visible_base_color_texel_count"] == reference_stats["visible_base_color_texel_count"]
+        assert stats["gutter_filled_texel_count"] == reference_stats["gutter_filled_texel_count"]
 
 
 def test_bake_pbr_texture_metal_supports_provided_uv_scan_path() -> None:

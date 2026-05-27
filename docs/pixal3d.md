@@ -391,6 +391,10 @@ It records aggregate process RSS samples, observed per-stage RSS peaks, and
 `extract_mesh`, `texture_bake`, and `write_glb` within one run. It does not
 measure full system memory pressure, exact Activity Monitor app-memory values,
 MLX allocator state, or Metal heap residency.
+The Metal texture bake releases the Python GIL only while the command buffer is
+committed and waited on, so Python monitor threads can continue sampling during
+the GPU wait. Python buffer loading and nanobind result construction remain
+GIL-held.
 
 Browser-rendered visual proof is available as dev tooling, not a package
 runtime dependency. Install pinned Playwright/Three dependencies under `/tmp`
