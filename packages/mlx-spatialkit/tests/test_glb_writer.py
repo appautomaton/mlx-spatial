@@ -257,7 +257,7 @@ def test_make_native_chart_uvs_splits_low_fill_l_shape_deterministically() -> No
     assert mesh.stats["low_fill_split_min_child_faces"] == 2
     assert mesh.stats["low_fill_split_max_depth"] == 3
     assert mesh.stats["low_fill_split_axis_candidates"] == 2
-    assert mesh.stats["low_fill_split_position_candidates"] == 3
+    assert mesh.stats["low_fill_split_position_candidates"] == 5
     assert mesh.stats["pre_low_fill_chart_rect_fill_ratio"] < mesh.stats["low_fill_rect_fill_threshold"]
     assert mesh.stats["low_fill_split_candidate_count"] > 0
     assert mesh.stats["low_fill_split_axis_candidate_count"] == (

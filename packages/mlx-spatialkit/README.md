@@ -143,7 +143,7 @@ improving the reference-target fixture's measured native chart fill and xatlas
 utilization ratio while keeping
 `quality.xatlas_chart_parity.parity_ready=false`.
 Within that bounded policy, eligible low-fill charts evaluate both local
-centroid split axes and three fixed split positions, then accept only the best
+centroid split axes and five fixed split positions, then accept only the best
 improving split. Diagnostics report axis, position, and partition candidate
 counts so the extra work is visible.
 

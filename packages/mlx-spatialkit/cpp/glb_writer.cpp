@@ -731,11 +731,13 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   constexpr int64_t low_fill_split_min_child_faces = 2;
   constexpr int64_t low_fill_split_max_depth = 3;
   constexpr int64_t low_fill_split_axis_candidates = 2;
-  constexpr int64_t low_fill_split_position_candidates = 3;
+  constexpr int64_t low_fill_split_position_candidates = 5;
   constexpr std::array<double, low_fill_split_position_candidates> low_fill_split_position_fractions{
-      1.0 / 3.0,
+      0.25,
+      0.375,
       0.5,
-      2.0 / 3.0,
+      0.625,
+      0.75,
   };
 
   struct ChartFillEvaluation {

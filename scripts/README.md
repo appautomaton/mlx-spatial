@@ -272,7 +272,7 @@ Script defaults:
   depth, and 4-face/2-face-child minimums for small low-fill charts to improve
   native chart fill toward those xatlas metrics without claiming xatlas
   equivalence. Eligible low-fill charts evaluate both local centroid split axes
-  plus three fixed split positions, and diagnostics report the bounded
+  plus five fixed split positions, and diagnostics report the bounded
   partition-search count.
   Non-atlas UV bakes also use bounded native UV-surface fill and
   report raw exact coverage, surface-filled texels, and final visible coverage

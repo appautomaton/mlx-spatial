@@ -191,7 +191,7 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert uv_stats["low_fill_split_min_child_faces"] == 2
     assert uv_stats["low_fill_split_max_depth"] == 3
     assert uv_stats["low_fill_split_axis_candidates"] == 2
-    assert uv_stats["low_fill_split_position_candidates"] == 3
+    assert uv_stats["low_fill_split_position_candidates"] == 5
     assert uv_stats["low_fill_split_candidate_count"] > 0
     assert uv_stats["low_fill_split_axis_candidate_count"] == (
         uv_stats["low_fill_split_candidate_count"] * uv_stats["low_fill_split_axis_candidates"]
@@ -427,7 +427,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert uv_stats["chart_rect_fill_ratio"] > 0.590
     assert uv_stats["low_fill_split_min_faces"] == 4
     assert uv_stats["low_fill_split_min_child_faces"] == 2
-    assert uv_stats["low_fill_split_position_candidates"] == 3
+    assert uv_stats["low_fill_split_position_candidates"] == 5
     assert uv_stats["low_fill_split_partition_candidate_count"] == (
         uv_stats["low_fill_split_axis_candidate_count"] * uv_stats["low_fill_split_position_candidates"]
     )
@@ -484,7 +484,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
     assert diagnostics["quality"]["xatlas_chart_parity"]["ratios"][
         "uv_surface_occupancy_vs_reference_utilization"
-    ] > 0.695
+    ] > 0.700
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True
@@ -671,7 +671,7 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert uv_stats["chart_count"] > 0
     assert uv_stats["output_faces"] == simplify_stats["final_faces"]
     assert uv_stats["chart_rect_fill_ratio"] > 0.50
-    assert uv_stats["low_fill_split_position_candidates"] == 3
+    assert uv_stats["low_fill_split_position_candidates"] == 5
     assert uv_stats["low_fill_split_partition_candidate_count"] == (
         uv_stats["low_fill_split_axis_candidate_count"] * uv_stats["low_fill_split_position_candidates"]
     )

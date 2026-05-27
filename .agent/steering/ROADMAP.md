@@ -30,16 +30,26 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-small-chart-splitting/SPEC.md`
 - exit signal: Focused and package tests pass, native build succeeds, and the real fixture improves xatlas-utilization ratio without readiness regressions.
 
+## Phase 43: Split-Position Search
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-split-position-search`
+- objective: Expand native-chart low-fill splitting from three to five deterministic split positions when measuring chart-utilization benefit.
+- why now: The post-Phase-42 diagnostics still showed many rejected low-fill split candidates, making split-position density a bounded next lever.
+- likely outputs: C++ split-position search update, focused GLB writer tests, real-fixture xatlas-utilization evidence, docs, package/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-split-position-search/SPEC.md`
+- exit signal: Focused and package tests pass, native build succeeds, and the real fixture improves xatlas-utilization ratio without readiness regressions.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-small-chart-splitting`.
+- Last verified change: `2026-05-27-mlx-spatialkit-split-position-search`.
 - Diagnostics separate scalar reference-target quality from production equivalence.
 - Native geometry repair now uses bounded projected ear-clipping with an 8-edge default for Pixal3D exports.
-- Native-chart xatlas-utilization ratio improved through bounded small-chart splitting, not by changing padding defaults.
+- Native-chart xatlas-utilization ratio improved through bounded small-chart splitting and denser split-position search, not by changing padding defaults.
 - Metal texture bake now releases the Python GIL during command-buffer waits so Python monitor threads can sample during GPU execution.
 
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
 - Zero-padding default switch remains deferred until separately justified.
-- Implementing xatlas parity, full remesh, arbitrary large N-gon filling, or CUDA/cuMesh behavior is outside the current ear-clip small-hole repair change.
+- Implementing xatlas parity, full remesh, arbitrary large N-gon filling, or CUDA/cuMesh behavior is outside the current split-position search change.
