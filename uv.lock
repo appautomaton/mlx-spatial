@@ -467,7 +467,7 @@ wheels = [
 
 [[package]]
 name = "mlx-spatial"
-version = "0.0.4"
+version = "0.0.3.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "fast-simplification", marker = "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'" },
