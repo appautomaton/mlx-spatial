@@ -292,14 +292,15 @@ Script defaults:
   is diagnostic only and does not repair open chains.
   The topology-aware simplifier also runs a bounded native small-loop fill for
   closed boundary loops up to 8 edges when target-face budget remains, using
-  projected ear-clipping first and a guarded centroid-fan fallback with the
+  projected ear-clipping first, bounded alternate triangulations when the first
+  diagonal is topology-blocked, and a guarded centroid-fan fallback with the
   same 8-edge policy cap. It can also fill small simple cycles, with a more
   conservative 6-edge policy cap, found inside branched open-boundary
   components. Direct decoded-NPZ exports expose this as
   `small_boundary_loop_fill_max_edges=8`, which clamps the effective fallback
   and branched-cycle caps; use `0` to disable the repair for comparison runs.
-  Diagnostics report policy/effective caps, method counts, branch-cycle counts,
-  rejection reasons, and faces added.
+  Diagnostics report policy/effective caps, method counts, alternate
+  triangulation counts, branch-cycle counts, rejection reasons, and faces added.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,
   the real fixture also passes production and
   deterministic visual-comparison gates; this means scalar native readiness, not

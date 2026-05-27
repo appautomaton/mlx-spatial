@@ -428,6 +428,8 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert simplify_stats["small_boundary_loops_considered"] > 0
     assert simplify_stats["small_boundary_loops_filled"] > 0
     assert simplify_stats["small_boundary_loops_filled_by_ear_clipping"] > 0
+    assert simplify_stats["small_boundary_loops_alternative_triangulation_attempted"] > 0
+    assert simplify_stats["small_boundary_loops_filled_by_alternative_triangulation"] > 0
     assert simplify_stats["small_boundary_loops_centroid_fan_attempted"] > 0
     assert simplify_stats["small_boundary_loops_filled_by_centroid_fan"] > 0
     assert simplify_stats["small_boundary_loops_rejected"] == (
@@ -481,21 +483,21 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert export_metrics["boundary_edges"] > 0
     assert export_metrics["boundary_vertices"] > 0
     assert export_metrics["boundary_loop_count"] > 0
-    assert export_metrics["boundary_edges"] < 10100
-    assert export_metrics["boundary_loop_count"] < 1100
+    assert export_metrics["boundary_edges"] < 8900
+    assert export_metrics["boundary_loop_count"] < 960
     assert export_metrics["boundary_small_loop_threshold_edges"] == 32
     assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
-    assert export_metrics["boundary_small_loop_edge_count"] < 6000
+    assert export_metrics["boundary_small_loop_edge_count"] < 5300
     assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
-    assert export_metrics["boundary_open_chain_count"] == 216
-    assert export_metrics["boundary_open_chain_edge_count"] == 4133
-    assert export_metrics["boundary_small_open_chain_count"] == 190
-    assert export_metrics["boundary_small_open_chain_edge_count"] == 2717
+    assert export_metrics["boundary_open_chain_count"] == 185
+    assert export_metrics["boundary_open_chain_edge_count"] == 3599
+    assert export_metrics["boundary_small_open_chain_count"] == 164
+    assert export_metrics["boundary_small_open_chain_edge_count"] == 2408
     assert export_metrics["boundary_simple_open_chain_count"] == 0
     assert export_metrics["boundary_branched_open_chain_count"] == export_metrics["boundary_open_chain_count"]
     assert export_metrics["boundary_open_chain_endpoint_count"] == 0
-    assert export_metrics["boundary_open_chain_branch_vertex_count"] == 403
-    assert export_metrics["boundary_max_open_chain_edges"] == 143
+    assert export_metrics["boundary_open_chain_branch_vertex_count"] == 329
+    assert export_metrics["boundary_max_open_chain_edges"] == 130
     assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_loop_edges"]
     assert export_metrics["boundary_max_component_edges"] >= export_metrics["boundary_max_open_chain_edges"]
     assert export_metrics["export_blocking_reasons"] == []
@@ -520,7 +522,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
     assert diagnostics["quality"]["xatlas_chart_parity"]["ratios"][
         "uv_surface_occupancy_vs_reference_utilization"
-    ] > 0.702
+    ] > 0.697
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True

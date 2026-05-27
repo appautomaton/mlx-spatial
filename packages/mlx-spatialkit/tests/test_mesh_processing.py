@@ -311,6 +311,32 @@ def test_simplify_mesh_topology_aware_fills_four_edge_boundary_loop_by_default()
     assert after["export_blocking_reasons"] == []
 
 
+def test_simplify_mesh_tries_alternative_triangulation_for_topology_blocked_loop() -> None:
+    vertices, faces = _quad_hole_with_blocked_primary_diagonal_mesh()
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 4,
+        min_component_faces=1,
+        backend="topology-aware",
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_loop_count"] == 2
+    assert before["nonmanifold_edges"] == 0
+    assert stats["small_boundary_loops_alternative_triangulation_attempted"] == 1
+    assert stats["small_boundary_loops_filled_by_alternative_triangulation"] == 1
+    assert stats["small_boundary_loops_filled_by_ear_clipping"] == 1
+    assert stats["small_boundary_loops_filled_by_centroid_fan"] == 0
+    assert stats["small_boundary_loop_faces_added"] == 2
+    assert after["boundary_loop_count"] == 1
+    assert after["boundary_edges"] == before["boundary_edges"] - 4
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
 def test_simplify_mesh_topology_aware_fills_eight_edge_concave_boundary_loop() -> None:
     vertices, faces = _grid_mesh_with_missing_cells(6, {(2, 2), (3, 2), (2, 3)})
     before = mesh_metrics(vertices, faces)
@@ -556,6 +582,28 @@ def _pinched_quad_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
     second_remapped = np.array([[remap[int(value)] for value in face] for face in second_faces], dtype=np.int64)
     faces = np.concatenate([first_faces, second_remapped], axis=0)
     return np.array(vertices, dtype=np.float32), faces.astype(np.int64)
+
+
+def _quad_hole_with_blocked_primary_diagonal_mesh() -> tuple[np.ndarray, np.ndarray]:
+    vertices, faces = _grid_mesh_with_missing_cell(3, missing_x=1, missing_y=1)
+    vertex_list = vertices.tolist()
+    face_list = faces.tolist()
+
+    # The native ear pass first triangulates the center quad through diagonal
+    # 6-9. This closed sidecar makes that diagonal unavailable while preserving
+    # manifold edge counts, so the alternate diagonal is the valid repair.
+    vertex_list.extend([[1.5, 1.5, 1.0], [1.5, 1.5, -1.0]])
+    top_vertex = len(vertex_list) - 2
+    bottom_vertex = len(vertex_list) - 1
+    face_list.extend(
+        [
+            [6, 9, top_vertex],
+            [9, 6, bottom_vertex],
+            [6, top_vertex, bottom_vertex],
+            [9, bottom_vertex, top_vertex],
+        ]
+    )
+    return np.array(vertex_list, dtype=np.float32), np.array(face_list, dtype=np.int64)
 
 
 def _self_intersecting_octagon_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
