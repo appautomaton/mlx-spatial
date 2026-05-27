@@ -12,8 +12,8 @@
 
 ## Phase 2: Production Remesh And Texture Parity
 
-- status: pending
-- change:
+- status: active
+- change: `2026-05-27-mlx-spatialkit-production-remesh-parity`
 - objective: Move spatialkit toward upstream-style production export quality with quality-aware native simplification/remeshing, higher face targets, and stronger texture parity.
 - why now: Deferred from the immediate sparse-color fix because full 1M-face / 4096-texture parity is larger than this hardening cycle.
 - likely outputs: Bounded native QEM/remesh implementation or equivalent, production quality tier, reference GLB/trace comparison, runtime/memory benchmarks.

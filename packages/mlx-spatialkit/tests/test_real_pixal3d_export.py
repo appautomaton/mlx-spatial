@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
-from mlx_spatialkit.export import _export_quality_summary
+from mlx_spatialkit.export import _export_quality_summary, _resolve_pixal3d_export_settings
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
@@ -96,6 +96,48 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
         export_pixal3d_glb(decoded_dir, tmp_path / "out", max_texture_pixels=0)
 
 
+def test_reference_target_preset_resolves_target_faces_from_trace(tmp_path) -> None:
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+    reference_dir = tmp_path / "pixal3d-1024-cascade-glb-reference"
+    reference_dir.mkdir()
+    (reference_dir / "trace.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "mesh_export": {
+                        "postprocess_stats": {"final_faces": 123_456, "final_vertices": 78_901},
+                        "raw_coverage_ratio": 0.25,
+                        "coverage_ratio": 1.0,
+                        "unwrap_backend": "xatlas-parallel-spatial",
+                        "bake_backend": "xatlas-kdtree",
+                        "texture_size": 1024,
+                        "xatlas_face_guard": 300_000,
+                    }
+                }
+            }
+        )
+    )
+
+    reference_settings = _resolve_pixal3d_export_settings(decoded_dir, "reference-target", None)
+    assert reference_settings["quality_preset"] == "reference-target"
+    assert reference_settings["target_faces"] == 123_456
+    assert reference_settings["target_faces_source"] == "reference_final_faces"
+    assert reference_settings["reference"]["xatlas_face_guard"] == 300_000
+
+    preview_settings = _resolve_pixal3d_export_settings(decoded_dir, "preview", None)
+    assert preview_settings["target_faces"] == 50_000
+    assert preview_settings["target_faces_source"] == "preview_default"
+
+    explicit_settings = _resolve_pixal3d_export_settings(decoded_dir, "production", 42_000)
+    assert explicit_settings["quality_preset"] == "reference-target"
+    assert explicit_settings["target_faces"] == 42_000
+    assert explicit_settings["target_faces_source"] == "explicit"
+
+    with pytest.raises(ValueError, match="quality_preset"):
+        _resolve_pixal3d_export_settings(decoded_dir, "bad", None)
+
+
 def test_export_quality_summary_separates_artifact_and_production_readiness() -> None:
     summary = _export_quality_summary(
         {"backend": "spatial-cluster", "quality_tier": "geometry_aware_preview"},
@@ -117,3 +159,21 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert blocked["production_quality_ready"] is False
     assert blocked["export_blocking_reasons"] == ("nonmanifold_edges_present",)
     assert "export_blocking_reasons_present" in blocked["warnings"]
+
+    production = _export_quality_summary(
+        {
+            "backend": "qem-edge-collapse",
+            "quality_tier": "production",
+            "final_faces": 212_542,
+        },
+        {"export_blocking_reasons": []},
+        {"coverage_ratio": 0.75, "raw_coverage_ratio": 0.20},
+        {"final_faces": 212_542, "coverage_ratio": 1.0, "raw_coverage_ratio": 0.40},
+        quality_preset="reference-target",
+    )
+    assert production["artifact_ready"] is True
+    assert production["production_quality_ready"] is True
+    thresholds = production["production_thresholds"]
+    assert thresholds["all_passed"] is True
+    assert thresholds["checks"]["face_count_ratio"]["actual"] == pytest.approx(1.0)
+    assert thresholds["checks"]["final_coverage_ratio"]["actual"] == pytest.approx(0.75)

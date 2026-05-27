@@ -26,6 +26,12 @@ from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics,
 
 _T = TypeVar("_T")
 
+PIXAL3D_PREVIEW_TARGET_FACES = 50_000
+PIXAL3D_REFERENCE_TARGET_FACES = 212_542
+PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD = 0.50
+PIXAL3D_REFERENCE_FACE_RATIO_MIN = 0.80
+PIXAL3D_REFERENCE_FACE_RATIO_MAX = 1.25
+
 
 @dataclass(frozen=True)
 class Pixal3DDecodedInputs:
@@ -177,7 +183,8 @@ def export_pixal3d_glb(
     output: str | Path,
     *,
     texture_size: int = 1024,
-    target_faces: int = 50_000,
+    target_faces: int | None = None,
+    quality_preset: str = "preview",
     grid_size: int | None = None,
     min_component_faces: int = 32,
     tile_padding: float = 0.08,
@@ -193,8 +200,6 @@ def export_pixal3d_glb(
         raise ValueError(f"decoded Pixal3D directory does not exist: {source_dir}")
     if texture_size <= 0:
         raise ValueError("texture_size must be positive")
-    if target_faces <= 0:
-        raise ValueError("target_faces must be positive")
     if grid_size is not None and grid_size <= 0:
         raise ValueError("grid_size must be positive")
     if min_component_faces <= 0:
@@ -209,14 +214,27 @@ def export_pixal3d_glb(
     if not texture_path.exists():
         raise ValueError(f"missing decoded texture artifact: {texture_path}")
 
+    export_settings = _resolve_pixal3d_export_settings(source_dir, quality_preset, target_faces)
+    reference = export_settings["reference"]
+    resolved_quality_preset = str(export_settings["quality_preset"])
+    resolved_target_faces = int(export_settings["target_faces"])
+
     diagnostics: dict[str, Any] = {
         "stage": "pixal3d_glb_export",
         "source_dir": str(source_dir),
         "output_path": str(glb_path),
         "diagnostics_path": str(resolved_diagnostics_path),
         "settings": {
+            "quality_preset": resolved_quality_preset,
             "texture_size": int(texture_size),
-            "target_faces": int(target_faces),
+            "target_faces": resolved_target_faces,
+            "requested_target_faces": int(target_faces) if target_faces is not None else None,
+            "target_faces_source": export_settings["target_faces_source"],
+            "reference_available": reference is not None,
+            "reference_trace_path": str(reference["trace_path"]) if reference is not None else None,
+            "reference_target_faces": reference.get("final_faces") if reference is not None else None,
+            "reference_texture_size": reference.get("texture_size") if reference is not None else None,
+            "reference_xatlas_face_guard": reference.get("xatlas_face_guard") if reference is not None else None,
             "grid_size": int(grid_size) if grid_size is not None else None,
             "min_component_faces": int(min_component_faces),
             "tile_padding": float(tile_padding),
@@ -307,7 +325,7 @@ def export_pixal3d_glb(
         lambda: simplify_mesh(
             cleaned.vertices,
             cleaned.faces,
-            target_faces=target_faces,
+            target_faces=resolved_target_faces,
             min_component_faces=min_component_faces,
         ),
     )
@@ -323,8 +341,6 @@ def export_pixal3d_glb(
         lambda: mesh_metrics(simplified.vertices, simplified.faces),
     )
     diagnostics["stages"]["export_metrics"]["metrics"] = post_metrics
-    quality = _export_quality_summary(simplify_stats, post_metrics)
-    diagnostics["quality"] = quality
 
     uv_mesh = _timed_stage(
         diagnostics,
@@ -354,6 +370,19 @@ def export_pixal3d_glb(
     gc.collect()
     sample("after_texture_bake")
 
+    if reference is not None:
+        diagnostics["reference"] = reference
+        diagnostics["reference_comparison"] = _reference_comparison(diagnostics, reference)
+
+    quality = _export_quality_summary(
+        simplify_stats,
+        post_metrics,
+        baked.stats,
+        reference,
+        quality_preset=resolved_quality_preset,
+    )
+    diagnostics["quality"] = quality
+
     glb = _timed_stage(
         diagnostics,
         "write_glb",
@@ -370,7 +399,8 @@ def export_pixal3d_glb(
                 "shape_decoder_artifact": str(shape_path),
                 "texture_decoder_artifact": str(texture_path),
                 "texture_size": int(baked.texture_size),
-                "target_faces": int(target_faces),
+                "target_faces": resolved_target_faces,
+                "quality_preset": resolved_quality_preset,
                 "bake_backend": str(baked.stats.get("backend")),
                 "coverage_ratio": float(baked.stats.get("coverage_ratio", 0.0)),
                 "raw_coverage_ratio": float(baked.stats.get("raw_coverage_ratio", 0.0)),
@@ -382,11 +412,6 @@ def export_pixal3d_glb(
     )
     diagnostics["stages"]["write_glb"]["artifact"] = glb.metadata
     sample("after_write_glb")
-
-    reference = _load_pixal3d_reference_trace(source_dir)
-    if reference is not None:
-        diagnostics["reference"] = reference
-        diagnostics["reference_comparison"] = _reference_comparison(diagnostics, reference)
 
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
@@ -574,23 +599,166 @@ def decoded_metadata_value(diagnostics: dict[str, Any], key: str) -> Any:
     return None
 
 
-def _export_quality_summary(simplify_stats: dict[str, Any], export_metrics: dict[str, Any]) -> dict[str, Any]:
+def _resolve_pixal3d_export_settings(
+    decoded_dir: Path,
+    quality_preset: str,
+    target_faces: int | None,
+) -> dict[str, Any]:
+    preset = _normalize_quality_preset(quality_preset)
+    reference = _load_pixal3d_reference_trace(decoded_dir)
+    if target_faces is not None:
+        resolved_target_faces = int(target_faces)
+        target_source = "explicit"
+    elif preset == "reference-target" and reference is not None and reference.get("final_faces") is not None:
+        resolved_target_faces = int(reference["final_faces"])
+        target_source = "reference_final_faces"
+    elif preset == "reference-target":
+        resolved_target_faces = PIXAL3D_REFERENCE_TARGET_FACES
+        target_source = "reference_default"
+    else:
+        resolved_target_faces = PIXAL3D_PREVIEW_TARGET_FACES
+        target_source = "preview_default"
+    if resolved_target_faces <= 0:
+        raise ValueError("target_faces must be positive")
+    return {
+        "quality_preset": preset,
+        "target_faces": resolved_target_faces,
+        "target_faces_source": target_source,
+        "reference": reference,
+    }
+
+
+def _normalize_quality_preset(value: str) -> str:
+    preset = str(value).strip().lower().replace("_", "-")
+    if preset in ("production", "reference", "reference-target"):
+        return "reference-target"
+    if preset == "preview":
+        return "preview"
+    raise ValueError("quality_preset must be 'preview' or 'reference-target'")
+
+
+def _export_quality_summary(
+    simplify_stats: dict[str, Any],
+    export_metrics: dict[str, Any],
+    texture_stats: dict[str, Any] | None = None,
+    reference: dict[str, Any] | None = None,
+    *,
+    quality_preset: str = "preview",
+) -> dict[str, Any]:
     blockers = tuple(str(item) for item in export_metrics.get("export_blocking_reasons", ()))
     simplifier_quality = str(simplify_stats.get("quality_tier", "unknown"))
     simplifier_backend = str(simplify_stats.get("backend", "unknown"))
+    preset = _normalize_quality_preset(quality_preset)
+    thresholds = _production_thresholds(
+        simplify_stats,
+        export_metrics,
+        texture_stats or {},
+        reference,
+        quality_preset=preset,
+    )
     warnings: list[str] = []
+    if preset == "preview":
+        warnings.append("preview_quality_preset")
     if simplifier_quality != "production":
         warnings.append("preview_simplifier_quality_tier")
     if blockers:
         warnings.append("export_blocking_reasons_present")
+    if not thresholds["all_passed"]:
+        warnings.append("production_thresholds_failed")
     artifact_ready = len(blockers) == 0
     return {
         "artifact_ready": artifact_ready,
-        "production_quality_ready": artifact_ready and simplifier_quality == "production",
+        "production_quality_ready": artifact_ready and bool(thresholds["all_passed"]),
+        "quality_preset": preset,
         "simplifier_backend": simplifier_backend,
         "simplifier_quality_tier": simplifier_quality,
         "export_blocking_reasons": blockers,
+        "production_thresholds": thresholds,
         "warnings": tuple(warnings),
+    }
+
+
+def _production_thresholds(
+    simplify_stats: dict[str, Any],
+    export_metrics: dict[str, Any],
+    texture_stats: dict[str, Any],
+    reference: dict[str, Any] | None,
+    *,
+    quality_preset: str,
+) -> dict[str, Any]:
+    blockers = tuple(str(item) for item in export_metrics.get("export_blocking_reasons", ()))
+    simplifier_quality = str(simplify_stats.get("quality_tier", "unknown"))
+    final_faces = _maybe_int(simplify_stats.get("final_faces"))
+    reference_faces = _maybe_int(reference.get("final_faces")) if reference is not None else None
+    final_coverage = _maybe_float(texture_stats.get("coverage_ratio", texture_stats.get("final_visible_coverage_ratio")))
+    reference_coverage = _maybe_float(reference.get("coverage_ratio")) if reference is not None else None
+    raw_coverage = _maybe_float(texture_stats.get("raw_coverage_ratio"))
+    reference_raw_coverage = _maybe_float(reference.get("raw_coverage_ratio")) if reference is not None else None
+
+    face_ratio = None
+    face_count_passed = False
+    if final_faces is not None and reference_faces not in (None, 0):
+        face_ratio = float(final_faces) / float(reference_faces)
+        face_count_passed = PIXAL3D_REFERENCE_FACE_RATIO_MIN <= face_ratio <= PIXAL3D_REFERENCE_FACE_RATIO_MAX
+
+    final_coverage_ratio = None
+    coverage_passed = False
+    if final_coverage is not None and reference_coverage not in (None, 0.0):
+        final_coverage_ratio = final_coverage / reference_coverage
+        coverage_passed = final_coverage_ratio >= PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD
+
+    raw_coverage_ratio = None
+    if raw_coverage is not None and reference_raw_coverage not in (None, 0.0):
+        raw_coverage_ratio = raw_coverage / reference_raw_coverage
+
+    checks = {
+        "reference_available": {
+            "passed": reference is not None,
+            "actual": bool(reference is not None),
+            "required": True,
+        },
+        "quality_preset": {
+            "passed": quality_preset == "reference-target",
+            "actual": quality_preset,
+            "required": "reference-target",
+        },
+        "backend_tier": {
+            "passed": simplifier_quality == "production",
+            "actual": simplifier_quality,
+            "required": "production",
+        },
+        "topology_exportability": {
+            "passed": len(blockers) == 0,
+            "actual": blockers,
+            "required": [],
+        },
+        "face_count_ratio": {
+            "passed": face_count_passed,
+            "actual": face_ratio,
+            "required_min": PIXAL3D_REFERENCE_FACE_RATIO_MIN,
+            "required_max": PIXAL3D_REFERENCE_FACE_RATIO_MAX,
+            "spatialkit_final_faces": final_faces,
+            "reference_final_faces": reference_faces,
+        },
+        "final_coverage_ratio": {
+            "passed": coverage_passed,
+            "actual": final_coverage_ratio,
+            "required_min": PIXAL3D_REFERENCE_FINAL_COVERAGE_THRESHOLD,
+            "spatialkit_final_coverage_ratio": final_coverage,
+            "reference_final_coverage_ratio": reference_coverage,
+        },
+        "raw_coverage_ratio": {
+            "passed": raw_coverage_ratio is not None,
+            "actual": raw_coverage_ratio,
+            "required": "reported",
+            "spatialkit_raw_coverage_ratio": raw_coverage,
+            "reference_raw_coverage_ratio": reference_raw_coverage,
+        },
+    }
+    all_passed = all(bool(check["passed"]) for check in checks.values())
+    return {
+        "all_passed": all_passed,
+        "checks": checks,
     }
 
 
@@ -616,6 +784,9 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
             "coverage_ratio": _maybe_float(mesh_export.get("coverage_ratio", artifact_metadata.get("coverage_ratio"))),
             "unwrap_backend": mesh_export.get("unwrap_backend", artifact_metadata.get("unwrap_backend")),
             "bake_backend": mesh_export.get("bake_backend", artifact_metadata.get("bake_backend")),
+            "texture_size": _maybe_int(mesh_export.get("texture_size", artifact_metadata.get("texture_size"))),
+            "xatlas_face_guard": _maybe_int(mesh_export.get("xatlas_face_guard", artifact_metadata.get("xatlas_face_guard"))),
+            "unwrap_utilization": _maybe_float(mesh_export.get("unwrap_utilization", artifact_metadata.get("unwrap_utilization"))),
         }
     return None
 
