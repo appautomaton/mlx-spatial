@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-geometry-hole-diagnostics",
+  "active_change": "2026-05-27-mlx-spatialkit-small-boundary-loop-fill",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-geometry-hole-diagnostics/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-geometry-hole-diagnostics/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-small-boundary-loop-fill/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-small-boundary-loop-fill/PLAN.md"
 }

@@ -63,12 +63,24 @@ struct ClusterResult {
   int64_t representative_vertices_selected = 0;
 };
 
+struct SmallLoopFillResult {
+  mesh_common::MeshData mesh;
+  int64_t face_budget = 0;
+  int64_t loops_considered = 0;
+  int64_t loops_filled = 0;
+  int64_t loops_rejected = 0;
+  int64_t loops_budget_limited = 0;
+  int64_t faces_added = 0;
+};
+
 struct BackendSelection {
   std::string requested;
   std::string backend;
   std::string algorithm;
   bool topology_aware = false;
 };
+
+constexpr int64_t kSmallBoundaryLoopFillMaxEdges = 4;
 
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
   std::array<float, 3> min_bounds{
@@ -225,6 +237,184 @@ ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_reso
   return result;
 }
 
+std::vector<int64_t> ordered_closed_loop(
+    const std::unordered_map<int64_t, std::vector<int64_t>> &adjacency,
+    const std::vector<int64_t> &component_vertices) {
+  if (component_vertices.size() < 3) {
+    return {};
+  }
+  const int64_t seed = *std::min_element(component_vertices.begin(), component_vertices.end());
+  auto found_seed = adjacency.find(seed);
+  if (found_seed == adjacency.end() || found_seed->second.size() != 2) {
+    return {};
+  }
+
+  std::vector<int64_t> ordered;
+  ordered.reserve(component_vertices.size());
+  int64_t previous = -1;
+  int64_t current = seed;
+  int64_t next = std::min(found_seed->second[0], found_seed->second[1]);
+  for (size_t step = 0; step <= component_vertices.size(); ++step) {
+    ordered.push_back(current);
+    previous = current;
+    current = next;
+    if (current == seed) {
+      break;
+    }
+    auto found = adjacency.find(current);
+    if (found == adjacency.end() || found->second.size() != 2) {
+      return {};
+    }
+    const auto &neighbors = found->second;
+    next = neighbors[0] == previous ? neighbors[1] : neighbors[0];
+  }
+  if (current != seed || ordered.size() != component_vertices.size()) {
+    return {};
+  }
+  return ordered;
+}
+
+SmallLoopFillResult fill_small_boundary_loops(
+    const mesh_common::MeshData &input,
+    int64_t max_loop_edges,
+    int64_t face_budget) {
+  SmallLoopFillResult result;
+  result.mesh = input;
+  result.face_budget = std::max<int64_t>(0, face_budget);
+  if (result.face_budget <= 0 || result.mesh.faces.empty()) {
+    return result;
+  }
+
+  std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> edge_counts =
+      mesh_common::edge_counts(result.mesh.faces);
+  std::unordered_map<int64_t, std::vector<int64_t>> adjacency;
+  adjacency.reserve(edge_counts.size() * 2);
+  for (const auto &[edge, count] : edge_counts) {
+    if (count != 1) {
+      continue;
+    }
+    adjacency[edge.a].push_back(edge.b);
+    adjacency[edge.b].push_back(edge.a);
+  }
+  if (adjacency.empty()) {
+    return result;
+  }
+
+  std::unordered_set<std::array<int64_t, 3>, FaceKeyHash> seen_faces;
+  seen_faces.reserve(result.mesh.faces.size());
+  for (auto face : result.mesh.faces) {
+    std::sort(face.begin(), face.end());
+    seen_faces.insert(face);
+  }
+
+  std::unordered_set<int64_t> visited;
+  visited.reserve(adjacency.size());
+  std::vector<int64_t> stack;
+  stack.reserve(adjacency.size());
+  for (const auto &[seed, _] : adjacency) {
+    (void)_;
+    if (visited.contains(seed)) {
+      continue;
+    }
+    std::vector<int64_t> component_vertices;
+    stack.clear();
+    stack.push_back(seed);
+    visited.insert(seed);
+    int64_t edge_stubs = 0;
+    bool closed = true;
+    while (!stack.empty()) {
+      const int64_t vertex = stack.back();
+      stack.pop_back();
+      component_vertices.push_back(vertex);
+      const auto found = adjacency.find(vertex);
+      if (found == adjacency.end()) {
+        closed = false;
+        continue;
+      }
+      const auto &neighbors = found->second;
+      edge_stubs += static_cast<int64_t>(neighbors.size());
+      if (neighbors.size() != 2) {
+        closed = false;
+      }
+      for (int64_t neighbor : neighbors) {
+        if (!visited.contains(neighbor)) {
+          visited.insert(neighbor);
+          stack.push_back(neighbor);
+        }
+      }
+    }
+
+    const int64_t component_edges = edge_stubs / 2;
+    if (!closed || component_edges < 3 || component_edges > max_loop_edges) {
+      continue;
+    }
+    result.loops_considered += 1;
+    const std::vector<int64_t> loop = ordered_closed_loop(adjacency, component_vertices);
+    if (loop.size() < 3 || static_cast<int64_t>(loop.size()) != component_edges) {
+      result.loops_rejected += 1;
+      continue;
+    }
+
+    std::vector<std::array<int64_t, 3>> patch_faces;
+    patch_faces.reserve(loop.size() - 2);
+    bool valid_patch = true;
+    std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> local_edge_adds;
+    local_edge_adds.reserve((loop.size() - 2) * 3);
+    std::set<std::array<int64_t, 3>> local_seen_faces;
+    for (size_t index = 1; index + 1 < loop.size(); ++index) {
+      std::array<int64_t, 3> face{loop[0], loop[index], loop[index + 1]};
+      if (mesh_common::face_degenerate(result.mesh, face)) {
+        valid_patch = false;
+        break;
+      }
+      std::array<int64_t, 3> canonical = face;
+      std::sort(canonical.begin(), canonical.end());
+      if (seen_faces.contains(canonical) || !local_seen_faces.insert(canonical).second) {
+        valid_patch = false;
+        break;
+      }
+      const std::array<mesh_common::EdgeKey, 3> edges{
+          mesh_common::edge_key(face[0], face[1]),
+          mesh_common::edge_key(face[1], face[2]),
+          mesh_common::edge_key(face[2], face[0]),
+      };
+      for (const auto &edge : edges) {
+        const int64_t current_count = edge_counts[edge] + local_edge_adds[edge];
+        if (current_count >= 2) {
+          valid_patch = false;
+          break;
+        }
+        local_edge_adds[edge] += 1;
+      }
+      if (!valid_patch) {
+        break;
+      }
+      patch_faces.push_back(face);
+    }
+
+    if (!valid_patch || patch_faces.empty()) {
+      result.loops_rejected += 1;
+      continue;
+    }
+    if (static_cast<int64_t>(patch_faces.size()) > result.face_budget - result.faces_added) {
+      result.loops_budget_limited += 1;
+      continue;
+    }
+    for (const auto &face : patch_faces) {
+      result.mesh.faces.push_back(face);
+      std::array<int64_t, 3> canonical = face;
+      std::sort(canonical.begin(), canonical.end());
+      seen_faces.insert(canonical);
+      edge_counts[mesh_common::edge_key(face[0], face[1])] += 1;
+      edge_counts[mesh_common::edge_key(face[1], face[2])] += 1;
+      edge_counts[mesh_common::edge_key(face[2], face[0])] += 1;
+    }
+    result.faces_added += static_cast<int64_t>(patch_faces.size());
+    result.loops_filled += 1;
+  }
+  return result;
+}
+
 int64_t initial_grid_resolution(int64_t target_faces) {
   const double resolution = std::ceil(std::sqrt(std::max<double>(2.0, static_cast<double>(target_faces) * 0.5)));
   return std::max<int64_t>(2, static_cast<int64_t>(resolution));
@@ -282,6 +472,17 @@ void add_backend_stats(
   stats["backend_selection_reason"] = selection.topology_aware ? "topology_aware_backend_requested" : "preview_backend_requested";
 }
 
+void add_small_loop_fill_stats(nb::dict &stats, bool enabled, const SmallLoopFillResult &fill) {
+  stats["small_boundary_loop_fill_enabled"] = enabled;
+  stats["small_boundary_loop_fill_max_edges"] = kSmallBoundaryLoopFillMaxEdges;
+  stats["small_boundary_loop_fill_face_budget"] = fill.face_budget;
+  stats["small_boundary_loops_considered"] = fill.loops_considered;
+  stats["small_boundary_loops_filled"] = fill.loops_filled;
+  stats["small_boundary_loops_rejected"] = fill.loops_rejected;
+  stats["small_boundary_loops_budget_limited"] = fill.loops_budget_limited;
+  stats["small_boundary_loop_faces_added"] = fill.faces_added;
+}
+
 }  // namespace
 
 nb::dict simplify_mesh(
@@ -302,10 +503,20 @@ nb::dict simplify_mesh(
   if (static_cast<int64_t>(input.faces.size()) <= target_faces) {
     int64_t unreferenced_removed = 0;
     mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
+    SmallLoopFillResult fill;
+    fill.mesh = compact;
+    if (selection.topology_aware) {
+      fill = fill_small_boundary_loops(
+          compact,
+          kSmallBoundaryLoopFillMaxEdges,
+          target_faces - static_cast<int64_t>(compact.faces.size()));
+      compact = fill.mesh;
+    }
     nb::dict result = mesh_common::mesh_result(compact);
     nb::dict stats;
     const bool target_reached = static_cast<int64_t>(compact.faces.size()) <= target_faces;
     add_backend_stats(stats, selection, static_cast<int64_t>(compact.faces.size()), target_reached);
+    add_small_loop_fill_stats(stats, selection.topology_aware, fill);
     stats["target_faces"] = target_faces;
     stats["source_faces"] = static_cast<int64_t>(input.faces.size());
     stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
@@ -355,10 +566,20 @@ nb::dict simplify_mesh(
 
   int64_t unreferenced_removed = 0;
   mesh_common::MeshData simplified = mesh_common::compact_mesh(best.mesh, &unreferenced_removed);
+  SmallLoopFillResult fill;
+  fill.mesh = simplified;
+  if (selection.topology_aware) {
+    fill = fill_small_boundary_loops(
+        simplified,
+        kSmallBoundaryLoopFillMaxEdges,
+        target_faces - static_cast<int64_t>(simplified.faces.size()));
+    simplified = fill.mesh;
+  }
   nb::dict result = mesh_common::mesh_result(simplified);
   nb::dict stats;
   const bool target_reached = static_cast<int64_t>(simplified.faces.size()) <= target_faces;
   add_backend_stats(stats, selection, static_cast<int64_t>(simplified.faces.size()), target_reached);
+  add_small_loop_fill_stats(stats, selection.topology_aware, fill);
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());

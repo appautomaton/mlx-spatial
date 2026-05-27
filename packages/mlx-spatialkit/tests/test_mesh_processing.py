@@ -186,6 +186,37 @@ def test_simplify_mesh_uses_distinct_topology_aware_backend() -> None:
         assert not np.allclose(preview_mesh.vertices, mesh.vertices)
 
 
+def test_simplify_mesh_topology_aware_fills_small_closed_boundary_loop() -> None:
+    vertices, faces = _grid_mesh_with_missing_cell(6, missing_x=3, missing_y=3)
+    before = mesh_metrics(vertices, faces)
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=faces.shape[0] + 4,
+        min_component_faces=1,
+        backend="topology-aware",
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert before["boundary_loop_count"] == 2
+    assert before["boundary_edges"] == 28
+    assert stats["small_boundary_loop_fill_enabled"] is True
+    assert stats["small_boundary_loop_fill_max_edges"] == 4
+    assert stats["small_boundary_loop_fill_face_budget"] == 4
+    assert stats["small_boundary_loops_considered"] == 1
+    assert stats["small_boundary_loops_filled"] == 1
+    assert stats["small_boundary_loops_rejected"] == 0
+    assert stats["small_boundary_loops_budget_limited"] == 0
+    assert stats["small_boundary_loop_faces_added"] == 2
+    assert stats["final_faces"] == faces.shape[0] + 2
+    assert stats["target_reached"] is True
+    assert after["boundary_loop_count"] == 1
+    assert after["boundary_edges"] == 24
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+
+
 def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
     vertices: list[list[float]] = []
     for y in range(quads_per_axis + 1):
@@ -198,6 +229,30 @@ def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
     faces: list[list[int]] = []
     for y in range(quads_per_axis):
         for x in range(quads_per_axis):
+            faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
+            faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])
+    return np.array(vertices, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _grid_mesh_with_missing_cell(
+    quads_per_axis: int,
+    *,
+    missing_x: int,
+    missing_y: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    vertices: list[list[float]] = []
+    for y in range(quads_per_axis + 1):
+        for x in range(quads_per_axis + 1):
+            vertices.append([float(x), float(y), 0.0])
+
+    def vid(x: int, y: int) -> int:
+        return y * (quads_per_axis + 1) + x
+
+    faces: list[list[int]] = []
+    for y in range(quads_per_axis):
+        for x in range(quads_per_axis):
+            if x == missing_x and y == missing_y:
+                continue
             faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
             faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])
     return np.array(vertices, dtype=np.float32), np.array(faces, dtype=np.int64)

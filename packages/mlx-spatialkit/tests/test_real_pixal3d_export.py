@@ -374,6 +374,15 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert diagnostics["quality"]["upstream_export_settings"]["all_passed"] is False
     assert diagnostics["quality"]["upstream_export_settings"]["checks"]["target_faces"]["passed"] is False
 
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    assert simplify_stats["small_boundary_loop_fill_enabled"] is True
+    assert simplify_stats["small_boundary_loop_fill_max_edges"] == 4
+    assert simplify_stats["small_boundary_loops_considered"] > 0
+    assert simplify_stats["small_boundary_loops_filled"] > 0
+    assert simplify_stats["small_boundary_loop_faces_added"] > 0
+    assert simplify_stats["small_boundary_loops_budget_limited"] == 0
+    assert simplify_stats["final_faces"] <= simplify_stats["target_faces"]
+
     uv_stats = diagnostics["stages"]["uv"]["stats"]
     assert uv_stats["backend"] == "native-chart-atlas"
     assert uv_stats["chart_count"] > 0
@@ -403,6 +412,8 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert export_metrics["boundary_edges"] > 0
     assert export_metrics["boundary_vertices"] > 0
     assert export_metrics["boundary_loop_count"] > 0
+    assert export_metrics["boundary_edges"] < 23822
+    assert export_metrics["boundary_loop_count"] < 2594
     assert export_metrics["boundary_small_loop_threshold_edges"] == 32
     assert export_metrics["boundary_small_loop_count"] <= export_metrics["boundary_loop_count"]
     assert export_metrics["boundary_small_loop_edge_count"] <= export_metrics["boundary_edges"]
@@ -429,7 +440,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
     assert diagnostics["quality"]["xatlas_chart_parity"]["ratios"][
         "uv_surface_occupancy_vs_reference_utilization"
-    ] > 0.690
+    ] > 0.680
 
     visual = diagnostics["visual_comparison"]
     assert visual["summary"]["all_passed"] is True

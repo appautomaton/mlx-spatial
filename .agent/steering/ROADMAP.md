@@ -30,12 +30,22 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-geometry-hole-diagnostics/SPEC.md`
 - exit signal: Export diagnostics show remaining visible-hole risk as `2594` closed boundary loops and `808` open boundary-chain components, while xatlas and repair parity remain explicitly open.
 
+## Phase 34: Small Boundary Loop Fill
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-small-boundary-loop-fill`
+- objective: Fill small closed boundary loops in the native topology-aware simplifier when target-face budget allows.
+- why now: Geometry diagnostics showed `2594` closed boundary loops and remaining face budget in the reference-target export; this directly addresses the small visible-hole class.
+- likely outputs: Native small-loop repair, repair stats, focused tests, heavy topology gate, docs.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-small-boundary-loop-fill/SPEC.md`
+- exit signal: Reference-target export closed boundary loops drop from `2594` to `1479` without new nonmanifold edges or false xatlas parity.
+
 ## Current State
 
-- Last verified change: `2026-05-27-mlx-spatialkit-native-chart-hole-reduction`.
+- Last verified change: `2026-05-27-mlx-spatialkit-small-boundary-loop-fill`.
 - Phases 1-30 are consolidated into the current verified native export line: Pixal3D decoded fixtures can export GLB through the spatialkit native path with geometry readiness, texture coverage, viewer compatibility, memory telemetry, browser visual proof, and native-chart UV/Metal bake gates.
-- Remaining measured boundary: xatlas chart parity is still false. Latest reference-target native-chart xatlas-utilization ratio is `0.6941716645020964`, with UV-surface occupancy `0.5768346786499023`.
-- Active geometry evidence: final export metrics show `23822` boundary edges after simplification, broken down into `2594` closed boundary loops and `808` open boundary-chain components with `nonmanifold_edges=0`; repair policy is still not implemented.
+- Remaining measured boundary: xatlas chart parity is still false. Latest reference-target native-chart xatlas-utilization ratio before geometry repair was `0.6941716645020964`, with UV-surface occupancy `0.5768346786499023`.
+- Active geometry repair evidence: bounded 4-edge loop fill reduces final closed boundary loops from `2594` to `1479` with `nonmanifold_edges=0`; UV utilization remains below xatlas parity and is tracked separately.
 - Explicit 1M/4096 native-chart exports are upstream-setting ready, with xatlas parity still the open quality-equivalence gap.
 
 ## Deferred or Not Now
