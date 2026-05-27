@@ -284,10 +284,11 @@ to tighter `0.005` padding and record `settings.tile_padding_source` so the
 contract is visible.
 When the checked-in reference trace has xatlas unwrap metrics, spatialkit also
 records `quality.xatlas_chart_parity`: reference xatlas chart count/utilization,
-native chart count/UV-surface occupancy, ratio fields, checks, and
-`parity_ready=false`. This makes the remaining boundary measurable without
-adding xatlas as a `mlx-spatialkit` runtime dependency or claiming chart
-equivalence.
+native chart count/UV-surface occupancy, ratio fields, deficit fields, checks,
+and `parity_ready=false`. The `xatlas_utilization_equivalence` check uses a
+`0.95` utilization-ratio target and currently fails for the native-chart path,
+which keeps the remaining boundary measurable without adding xatlas as a
+`mlx-spatialkit` runtime dependency or claiming chart equivalence.
 The native low-fill splitter now uses a higher bounded fill target and one
 extra split depth, which improves the reference-target fixture's chart fill and
 xatlas-utilization ratio while keeping xatlas parity explicitly false.

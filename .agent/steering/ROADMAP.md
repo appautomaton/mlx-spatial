@@ -1,6 +1,14 @@
 # Roadmap
 
-No active roadmap phase.
+## Phase 31: Xatlas Deficit Diagnostics Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-xatlas-deficit-diagnostics-gate`
+- objective: Make the remaining native-chart versus xatlas utilization deficit explicit in diagnostics and tests.
+- why now: Native-chart readiness now passes, but the utilization ratio is still only about `0.685` of the xatlas reference and can be hidden behind scalar readiness.
+- likely outputs: Deficit fields, utilization-equivalence check, focused and heavy assertions, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-xatlas-deficit-diagnostics-gate/SPEC.md`
+- exit signal: Native-chart diagnostics quantify the remaining deficit while readiness and non-parity contracts stay explicit.
 
 ## Current State
 
@@ -11,7 +19,6 @@ No active roadmap phase.
 
 ## Candidate Next Work
 
-- Add explicit xatlas utilization-deficit diagnostics and tests so scalar readiness cannot hide the remaining chart-parity gap.
 - Continue native chart topology or packing work only when it improves UV-surface occupancy or visual comparability, not just local rect fill.
 
 ## Deferred or Not Now

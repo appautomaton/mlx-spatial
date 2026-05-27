@@ -43,6 +43,7 @@ PIXAL3D_CHART_UV_SURFACE_OCCUPANCY_MIN = 0.50
 PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
 PIXAL3D_FACE_ATLAS_TILE_PADDING = 0.08
 PIXAL3D_NATIVE_CHART_TILE_PADDING = 0.005
+PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN = 0.95
 
 
 @dataclass(frozen=True)
@@ -1199,6 +1200,7 @@ def _xatlas_chart_parity_summary(
             },
             "reference": None,
             "ratios": {},
+            "deficits": {},
             "checks": {},
         }
 
@@ -1236,6 +1238,7 @@ def _xatlas_chart_parity_summary(
             },
             "reference": None,
             "ratios": {},
+            "deficits": {},
             "checks": checks,
         }
 
@@ -1250,6 +1253,14 @@ def _xatlas_chart_parity_summary(
     utilization_ratio = None
     if native_uv_surface_occupancy is not None and reference_utilization not in (None, 0.0):
         utilization_ratio = native_uv_surface_occupancy / float(reference_utilization)
+    utilization_gap = None
+    utilization_ratio_gap = None
+    utilization_equivalence_gap = None
+    if native_uv_surface_occupancy is not None and reference_utilization is not None:
+        utilization_gap = max(0.0, float(reference_utilization) - native_uv_surface_occupancy)
+    if utilization_ratio is not None:
+        utilization_ratio_gap = max(0.0, 1.0 - utilization_ratio)
+        utilization_equivalence_gap = max(0.0, PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN - utilization_ratio)
 
     checks = {
         "reference_xatlas_backend": {
@@ -1287,6 +1298,14 @@ def _xatlas_chart_parity_summary(
             "actual": uv_stats_backend,
             "required": reference_backend,
         },
+        "xatlas_utilization_equivalence": {
+            "passed": utilization_ratio is not None
+            and utilization_ratio >= PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN,
+            "actual": utilization_ratio,
+            "required": f">={PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN}",
+            "native_uv_surface_occupancy_ratio": native_uv_surface_occupancy,
+            "reference_unwrap_utilization": reference_utilization,
+        },
     }
     measurement_check_names = (
         "reference_xatlas_backend",
@@ -1321,6 +1340,12 @@ def _xatlas_chart_parity_summary(
         "ratios": {
             "chart_count_ratio": chart_count_ratio,
             "uv_surface_occupancy_vs_reference_utilization": utilization_ratio,
+        },
+        "deficits": {
+            "reference_utilization_minus_native_uv_surface_occupancy": utilization_gap,
+            "uv_surface_occupancy_ratio_gap_to_reference": utilization_ratio_gap,
+            "uv_surface_occupancy_ratio_gap_to_equivalence_target": utilization_equivalence_gap,
+            "equivalence_target_ratio": PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN,
         },
         "checks": checks,
     }

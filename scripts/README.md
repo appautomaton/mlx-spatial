@@ -264,8 +264,10 @@ Script defaults:
   candidate count and step, chart rect fill, padding source, and packing
   efficiency. When the Pixal3D xatlas reference trace is available, diagnostics
   also report `quality.xatlas_chart_parity` with reference chart count and
-  utilization, native chart occupancy, ratios, and `parity_ready=false`; this
-  measures the gap without adding xatlas to the spatialkit package runtime.
+  utilization, native chart occupancy, ratios, explicit deficit fields, a
+  failed `xatlas_utilization_equivalence` check against the `0.95` target, and
+  `parity_ready=false`; this measures the gap without adding xatlas to the
+  spatialkit package runtime.
   The bounded low-fill splitter uses a higher fill target and one extra split
   depth to improve native chart fill toward those xatlas metrics without
   claiming xatlas equivalence. Eligible low-fill charts evaluate both local

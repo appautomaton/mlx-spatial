@@ -42,11 +42,24 @@ def _assert_xatlas_parity_measured(diagnostics: dict, uv_stats: dict, texture_st
     expected_occupancy = texture_stats["uv_surface_texel_count"] / texture_stats["texture_pixel_count"]
     assert parity["native"]["uv_surface_occupancy_ratio"] == pytest.approx(expected_occupancy)
     assert parity["ratios"]["chart_count_ratio"] == pytest.approx(uv_stats["chart_count"] / 51_953)
-    assert parity["ratios"]["uv_surface_occupancy_vs_reference_utilization"] == pytest.approx(
-        expected_occupancy / 0.8309683442115784
+    expected_utilization_ratio = expected_occupancy / 0.8309683442115784
+    assert parity["ratios"]["uv_surface_occupancy_vs_reference_utilization"] == pytest.approx(expected_utilization_ratio)
+    assert parity["deficits"]["reference_utilization_minus_native_uv_surface_occupancy"] == pytest.approx(
+        max(0.0, 0.8309683442115784 - expected_occupancy)
     )
+    assert parity["deficits"]["uv_surface_occupancy_ratio_gap_to_reference"] == pytest.approx(
+        max(0.0, 1.0 - expected_utilization_ratio)
+    )
+    assert parity["deficits"]["uv_surface_occupancy_ratio_gap_to_equivalence_target"] == pytest.approx(
+        max(0.0, 0.95 - expected_utilization_ratio)
+    )
+    assert parity["deficits"]["equivalence_target_ratio"] == pytest.approx(0.95)
+    utilization_check = parity["checks"]["xatlas_utilization_equivalence"]
+    assert utilization_check["passed"] is False
+    assert utilization_check["actual"] == pytest.approx(expected_utilization_ratio)
+    assert utilization_check["required"] == ">=0.95"
     for name, check in parity["checks"].items():
-        if name == "xatlas_backend_equivalence":
+        if name in {"xatlas_backend_equivalence", "xatlas_utilization_equivalence"}:
             assert check["passed"] is False
         else:
             assert check["passed"] is True
@@ -920,7 +933,14 @@ def test_xatlas_chart_parity_summary_reports_measured_native_chart_gap() -> None
     assert summary["native"]["uv_surface_occupancy_ratio"] == pytest.approx(0.50)
     assert summary["ratios"]["chart_count_ratio"] == pytest.approx(0.50)
     assert summary["ratios"]["uv_surface_occupancy_vs_reference_utilization"] == pytest.approx(0.625)
+    assert summary["deficits"]["reference_utilization_minus_native_uv_surface_occupancy"] == pytest.approx(0.30)
+    assert summary["deficits"]["uv_surface_occupancy_ratio_gap_to_reference"] == pytest.approx(0.375)
+    assert summary["deficits"]["uv_surface_occupancy_ratio_gap_to_equivalence_target"] == pytest.approx(0.325)
+    assert summary["deficits"]["equivalence_target_ratio"] == pytest.approx(0.95)
     assert summary["checks"]["xatlas_backend_equivalence"]["passed"] is False
+    assert summary["checks"]["xatlas_utilization_equivalence"]["passed"] is False
+    assert summary["checks"]["xatlas_utilization_equivalence"]["actual"] == pytest.approx(0.625)
+    assert summary["checks"]["xatlas_utilization_equivalence"]["required"] == ">=0.95"
 
     not_requested = _xatlas_chart_parity_summary(
         {
@@ -934,6 +954,7 @@ def test_xatlas_chart_parity_summary_reports_measured_native_chart_gap() -> None
     )
     assert not_requested["status"] == "not_requested"
     assert not_requested["parity_ready"] is None
+    assert not_requested["deficits"] == {}
 
     missing_reference = _xatlas_chart_parity_summary(
         None,
@@ -943,6 +964,7 @@ def test_xatlas_chart_parity_summary_reports_measured_native_chart_gap() -> None
     )
     assert missing_reference["status"] == "reference_missing"
     assert missing_reference["parity_ready"] is False
+    assert missing_reference["deficits"] == {}
     assert missing_reference["checks"]["reference_xatlas_available"]["passed"] is False
 
 
