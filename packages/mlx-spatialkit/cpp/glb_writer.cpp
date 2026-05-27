@@ -644,9 +644,22 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     }
   }
 
+  struct ChartData {
+    int64_t original_index = 0;
+    std::vector<int64_t> source_vertices;
+    std::vector<std::array<int64_t, 3>> local_faces;
+    std::vector<std::array<float, 2>> local_uvs;
+    float width_ratio = 1.0f;
+    float height_ratio = 1.0f;
+    float packed_x = 0.0f;
+    float packed_y = 0.0f;
+    float packed_width = 1.0f;
+    float packed_height = 1.0f;
+  };
+
   const int64_t chart_count = static_cast<int64_t>(charts.size());
-  const int64_t cols = static_cast<int64_t>(std::ceil(std::sqrt(static_cast<double>(chart_count))));
-  const int64_t rows = static_cast<int64_t>(std::ceil(static_cast<double>(chart_count) / static_cast<double>(cols)));
+  std::vector<ChartData> chart_data;
+  chart_data.reserve(charts.size());
   std::vector<float> chart_vertices;
   std::vector<float> chart_uvs;
   std::vector<int64_t> chart_faces;
@@ -679,6 +692,8 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     }
 
     std::vector<int64_t> source_vertices;
+    std::vector<std::array<int64_t, 3>> local_faces;
+    local_faces.reserve(chart.size());
     for (int64_t face_index : chart) {
       const auto &face = mesh.faces[static_cast<size_t>(face_index)];
       for (int corner = 0; corner < 3; ++corner) {
@@ -689,6 +704,11 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
           touched_vertices.push_back(source_index);
         }
       }
+      local_faces.push_back({
+          local_index_lookup[static_cast<size_t>(face[0])],
+          local_index_lookup[static_cast<size_t>(face[1])],
+          local_index_lookup[static_cast<size_t>(face[2])],
+      });
     }
 
     float min_u = std::numeric_limits<float>::infinity();
@@ -704,34 +724,130 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
     }
     const float width = std::max(max_u - min_u, 1e-12f);
     const float height = std::max(max_v - min_v, 1e-12f);
-    const float scale = static_cast<float>(1.0 - 2.0 * tile_padding) / std::max(width, height);
-    const float chart_width = width * scale;
-    const float chart_height = height * scale;
-    const float offset_u = static_cast<float>(tile_padding) + (static_cast<float>(1.0 - 2.0 * tile_padding) - chart_width) * 0.5f;
-    const float offset_v = static_cast<float>(tile_padding) + (static_cast<float>(1.0 - 2.0 * tile_padding) - chart_height) * 0.5f;
-    const int64_t col = chart_index % cols;
-    const int64_t row = chart_index / cols;
-    const int64_t output_offset = static_cast<int64_t>(chart_vertices.size() / 3);
-    for (int64_t source_index : source_vertices) {
+    const float max_extent = std::max(width, height);
+    ChartData data;
+    data.original_index = chart_index;
+    data.source_vertices = std::move(source_vertices);
+    data.local_faces = std::move(local_faces);
+    data.width_ratio = width / max_extent;
+    data.height_ratio = height / max_extent;
+    data.local_uvs.reserve(data.source_vertices.size());
+    for (int64_t source_index : data.source_vertices) {
       const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
-      chart_vertices.push_back(vertex[0]);
-      chart_vertices.push_back(vertex[1]);
-      chart_vertices.push_back(vertex[2]);
-      const float local_u = offset_u + (vertex[static_cast<size_t>(axis_u)] - min_u) * scale;
-      const float local_v = offset_v + (vertex[static_cast<size_t>(axis_v)] - min_v) * scale;
-      chart_uvs.push_back((static_cast<float>(col) + local_u) / static_cast<float>(cols));
-      chart_uvs.push_back((static_cast<float>(row) + local_v) / static_cast<float>(rows));
+      data.local_uvs.push_back({
+          (vertex[static_cast<size_t>(axis_u)] - min_u) / max_extent,
+          (vertex[static_cast<size_t>(axis_v)] - min_v) / max_extent,
+      });
     }
-    for (int64_t face_index : chart) {
-      const auto &face = mesh.faces[static_cast<size_t>(face_index)];
-      for (int corner = 0; corner < 3; ++corner) {
-        chart_faces.push_back(output_offset + local_index_lookup[static_cast<size_t>(face[corner])]);
-      }
-    }
+    chart_data.push_back(std::move(data));
     for (int64_t source_index : touched_vertices) {
       local_index_lookup[static_cast<size_t>(source_index)] = -1;
     }
     touched_vertices.clear();
+  }
+
+  std::vector<int64_t> order;
+  order.reserve(chart_data.size());
+  for (int64_t index = 0; index < chart_count; ++index) {
+    order.push_back(index);
+  }
+  std::sort(order.begin(), order.end(), [&chart_data](int64_t left_index, int64_t right_index) {
+    const auto &left = chart_data[static_cast<size_t>(left_index)];
+    const auto &right = chart_data[static_cast<size_t>(right_index)];
+    if (left.height_ratio != right.height_ratio) {
+      return left.height_ratio > right.height_ratio;
+    }
+    if (left.width_ratio != right.width_ratio) {
+      return left.width_ratio > right.width_ratio;
+    }
+    return left.original_index < right.original_index;
+  });
+
+  int64_t shelf_rows = 1;
+  float packed_width = 0.0f;
+  float packed_height = 0.0f;
+  auto pack_charts = [&](float scale, bool write) {
+    float cursor_x = 0.0f;
+    float cursor_y = 0.0f;
+    float row_height = 0.0f;
+    int64_t rows_used = 1;
+    float max_x = 0.0f;
+    for (int64_t chart_index : order) {
+      auto &chart = chart_data[static_cast<size_t>(chart_index)];
+      const float rect_width = std::max(chart.width_ratio * scale, 1e-12f);
+      const float rect_height = std::max(chart.height_ratio * scale, 1e-12f);
+      if (rect_width > 1.0f || rect_height > 1.0f) {
+        return false;
+      }
+      if (cursor_x > 0.0f && cursor_x + rect_width > 1.0f + 1e-7f) {
+        cursor_y += row_height;
+        cursor_x = 0.0f;
+        row_height = 0.0f;
+        rows_used += 1;
+      }
+      if (cursor_y + rect_height > 1.0f + 1e-7f) {
+        return false;
+      }
+      if (write) {
+        chart.packed_x = cursor_x;
+        chart.packed_y = cursor_y;
+        chart.packed_width = rect_width;
+        chart.packed_height = rect_height;
+      }
+      cursor_x += rect_width;
+      row_height = std::max(row_height, rect_height);
+      max_x = std::max(max_x, cursor_x);
+    }
+    if (write) {
+      shelf_rows = rows_used;
+      packed_width = max_x;
+      packed_height = cursor_y + row_height;
+    }
+    return true;
+  };
+
+  float low_scale = 0.0f;
+  float high_scale = 1.0f;
+  for (int iteration = 0; iteration < 40; ++iteration) {
+    const float mid = (low_scale + high_scale) * 0.5f;
+    if (pack_charts(mid, false)) {
+      low_scale = mid;
+    } else {
+      high_scale = mid;
+    }
+  }
+  if (low_scale <= 0.0f) {
+    throw nb::value_error("native chart UV shelf packing failed to fit charts");
+  }
+  pack_charts(low_scale, true);
+
+  double packed_rect_area = 0.0;
+  for (const auto &chart : chart_data) {
+    packed_rect_area += static_cast<double>(chart.packed_width) * static_cast<double>(chart.packed_height);
+  }
+  const double packed_bounds_area = static_cast<double>(packed_width) * static_cast<double>(packed_height);
+  const float content_scale = static_cast<float>(1.0 - 2.0 * tile_padding);
+
+  for (int64_t chart_index : order) {
+    const auto &chart = chart_data[static_cast<size_t>(chart_index)];
+    const int64_t output_offset = static_cast<int64_t>(chart_vertices.size() / 3);
+    for (int64_t source_index : chart.source_vertices) {
+      const auto &vertex = mesh.vertices[static_cast<size_t>(source_index)];
+      chart_vertices.push_back(vertex[0]);
+      chart_vertices.push_back(vertex[1]);
+      chart_vertices.push_back(vertex[2]);
+    }
+    for (const auto &local_uv : chart.local_uvs) {
+      const float u = chart.packed_x + chart.packed_width * static_cast<float>(tile_padding) + local_uv[0] * low_scale * content_scale;
+      const float v = chart.packed_y + chart.packed_height * static_cast<float>(tile_padding) + local_uv[1] * low_scale * content_scale;
+      chart_uvs.push_back(std::clamp(u, 0.0f, 1.0f));
+      chart_uvs.push_back(std::clamp(v, 0.0f, 1.0f));
+    }
+    for (const auto &face : chart.local_faces) {
+      chart_faces.push_back(output_offset + face[0]);
+      chart_faces.push_back(output_offset + face[1]);
+      chart_faces.push_back(output_offset + face[2]);
+    }
   }
 
   nb::dict result;
@@ -750,9 +866,15 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
   stats["chart_angle_degrees"] = chart_angle_degrees;
   stats["chart_normal_cos_threshold"] = cos_threshold;
-  stats["packing"] = "grid-charts";
-  stats["chart_atlas_cols"] = cols;
-  stats["chart_atlas_rows"] = rows;
+  stats["packing"] = "aspect-shelf-charts";
+  stats["shelf_rows"] = shelf_rows;
+  stats["shelf_scale"] = low_scale;
+  stats["packed_width"] = packed_width;
+  stats["packed_height"] = packed_height;
+  stats["packed_bounds_area"] = packed_bounds_area;
+  stats["packed_chart_rect_area"] = packed_rect_area;
+  stats["shelf_packing_efficiency"] = packed_bounds_area > 0.0 ? packed_rect_area / packed_bounds_area : 0.0;
+  stats["atlas_rect_coverage_ratio"] = packed_rect_area;
   stats["tile_padding"] = tile_padding;
   stats["duplicated_vertex_ratio"] = static_cast<double>(output_vertices) / static_cast<double>(mesh.vertices.size());
   result["stats"] = stats;

@@ -110,15 +110,18 @@ def test_make_native_chart_uvs_groups_coplanar_faces_and_reuses_vertices() -> No
     assert mesh.faces.shape == (2, 3)
     assert mesh.uvs.shape == (4, 2)
     assert mesh.stats["backend"] == "native-chart-atlas"
-    assert mesh.stats["packing"] == "grid-charts"
+    assert mesh.stats["packing"] == "aspect-shelf-charts"
     assert mesh.stats["source_vertices"] == 4
     assert mesh.stats["source_faces"] == 2
     assert mesh.stats["output_vertices"] == 4
     assert mesh.stats["output_faces"] == 2
     assert mesh.stats["chart_count"] == 1
     assert mesh.stats["max_chart_faces"] == 2
-    assert mesh.stats["chart_atlas_cols"] == 1
-    assert mesh.stats["chart_atlas_rows"] == 1
+    assert mesh.stats["shelf_rows"] == 1
+    assert mesh.stats["packed_width"] == pytest.approx(1.0)
+    assert mesh.stats["packed_height"] == pytest.approx(1.0)
+    assert mesh.stats["shelf_packing_efficiency"] == pytest.approx(1.0)
+    assert mesh.stats["atlas_rect_coverage_ratio"] == pytest.approx(1.0)
     assert mesh.stats["chart_angle_degrees"] == 1.0
     assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(1.0)
     assert np.all(mesh.uvs >= 0.0)
@@ -151,6 +154,7 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     mesh = make_native_chart_uvs(vertices, faces, chart_angle_degrees=30.0, tile_padding=0.05)
 
     assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["packing"] == "aspect-shelf-charts"
     assert mesh.stats["chart_count"] == 2
     assert mesh.stats["source_vertices"] == 6
     assert mesh.stats["output_vertices"] == 8
@@ -158,6 +162,9 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert mesh.stats["max_chart_faces"] == 2
     assert mesh.stats["duplicated_vertex_ratio"] == pytest.approx(8 / 6)
     assert mesh.stats["chart_normal_cos_threshold"] == pytest.approx(np.cos(np.deg2rad(30.0)))
+    assert mesh.stats["shelf_rows"] >= 1
+    assert mesh.stats["shelf_packing_efficiency"] > 0.0
+    assert mesh.stats["atlas_rect_coverage_ratio"] > 0.0
     assert mesh.faces.shape == (4, 3)
     assert mesh.uvs.shape == (8, 2)
     assert np.all(mesh.uvs >= 0.0)

@@ -1,6 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-chart-uv-readiness-gate",
+  "active_change": "2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-chart-uv-readiness-gate/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-chart-uv-readiness-gate/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate/PLAN.md"
 }

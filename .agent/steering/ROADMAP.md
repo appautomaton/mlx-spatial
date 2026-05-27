@@ -150,6 +150,16 @@
 - evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-readiness-gate/SPEC.md`
 - exit signal: Real chart export reports artifact-ready but quality-blocked with failed coverage/utilization checks and xatlas chart parity still deferred.
 
+## Phase 16: Chart UV Shelf Packing Gate
+
+- status: done
+- change: `2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate`
+- objective: Replace native chart equal-grid packing with deterministic aspect-aware shelf packing and prove real Pixal3D chart UV occupancy improves.
+- why now: Angle probes did not improve chart coverage; the verified blocker is atlas utilization from the current chart packer.
+- likely outputs: Native shelf packer, packing diagnostics, focused chart tests, real fixture occupancy gate, docs, package/root/build verification.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-chart-uv-shelf-packing-gate/SPEC.md`
+- exit signal: Real chart export improves UV-surface occupancy above the Phase 15 baseline while default face-atlas exports remain unchanged.
+
 ## Deferred or Not Now
 
 - Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
