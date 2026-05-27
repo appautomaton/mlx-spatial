@@ -44,7 +44,7 @@ print(result.diagnostics["quality"]["native_chart_uv_candidate"])
 ```
 
 When `tile_padding` is not supplied, Pixal3D exports resolve padding by UV
-backend: `face-atlas` keeps `0.08`, while `native-chart` uses `0.01`.
+backend: `face-atlas` keeps `0.08`, while `native-chart` uses `0.005`.
 Diagnostics record both `settings.tile_padding` and
 `settings.tile_padding_source`; explicit caller padding is preserved.
 
