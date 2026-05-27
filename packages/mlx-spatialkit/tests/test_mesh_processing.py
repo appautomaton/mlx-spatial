@@ -148,21 +148,30 @@ def test_simplify_mesh_reduces_faces_with_native_owned_interface() -> None:
     assert "degenerate_faces_present" not in metrics["export_blocking_reasons"]
 
 
-def test_simplify_mesh_records_unimplemented_production_backend_intent() -> None:
-    vertices, faces = _grid_mesh(10)
+def test_simplify_mesh_uses_distinct_topology_aware_backend() -> None:
+    vertices, faces = _warped_grid_mesh(10)
 
-    mesh, stats = simplify_mesh(vertices, faces, target_faces=40, min_component_faces=1, backend="topology-aware")
+    preview_mesh, preview_stats = simplify_mesh(vertices, faces, target_faces=80, min_component_faces=1)
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=80, min_component_faces=1, backend="topology-aware")
     metrics = mesh_metrics(mesh.vertices, mesh.faces)
 
+    assert preview_stats["backend"] == "spatial-cluster"
     assert stats["requested_backend"] == "topology-aware"
-    assert stats["backend"] == "spatial-cluster"
-    assert stats["algorithm"] == "native_spatial_vertex_clustering"
-    assert stats["quality_tier"] == "geometry_aware_preview"
-    assert stats["production_ready"] is False
-    assert stats["backend_selection_status"] == "fallback_preview_unimplemented"
-    assert "implementation is pending" in stats["backend_selection_reason"]
+    assert stats["backend"] == "topology-aware"
+    assert stats["algorithm"] == "native_topology_aware_representative_clustering"
+    assert stats["algorithm"] != preview_stats["algorithm"]
+    assert stats["quality_tier"] == "production"
+    assert stats["production_ready"] is True
+    assert stats["production_blockers"] == []
+    assert stats["backend_selection_status"] == "selected"
+    assert stats["backend_selection_reason"] == "topology_aware_backend_requested"
+    assert stats["candidate_faces_considered"] == faces.shape[0]
+    assert stats["accepted_faces"] == mesh.faces.shape[0]
+    assert stats["representative_vertices_selected"] > 0
     assert stats["target_reached"] is True
     assert metrics["export_blocking_reasons"] == []
+    if preview_mesh.vertices.shape == mesh.vertices.shape:
+        assert not np.allclose(preview_mesh.vertices, mesh.vertices)
 
 
 def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
@@ -180,6 +189,12 @@ def _grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
             faces.append([vid(x, y), vid(x + 1, y), vid(x, y + 1)])
             faces.append([vid(x + 1, y), vid(x + 1, y + 1), vid(x, y + 1)])
     return np.array(vertices, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _warped_grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
+    vertices, faces = _grid_mesh(quads_per_axis)
+    vertices[:, 2] = 0.05 * vertices[:, 0] * vertices[:, 0] + 0.02 * vertices[:, 1]
+    return vertices, faces
 
 
 def test_mesh_processing_rejects_invalid_face_indices() -> None:

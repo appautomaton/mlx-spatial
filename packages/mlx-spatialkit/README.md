@@ -35,18 +35,17 @@ GLB/diagnostic artifacts under `/tmp`.
 
 ## Quality Tier
 
-`mlx-spatialkit` currently produces a preview-quality Pixal3D GLB. The native
-texture path uses Metal exact sparse-voxel sampling, bounded sparse-neighbor
-fallback, and native UV-surface dilation. Diagnostics record raw exact coverage,
-fallback-filled texels, final visible base-color coverage, runtime, and RSS
-samples.
+`mlx-spatialkit` separates preview exports from the reference-target quality
+gate. The native texture path uses Metal exact sparse-voxel sampling, bounded
+sparse-neighbor fallback, and native UV-surface dilation. Diagnostics record raw
+exact coverage, fallback-filled texels, final visible base-color coverage,
+runtime, and RSS samples.
 
-Mesh simplification is currently labeled `spatial-cluster` with
-`quality_tier=geometry_aware_preview`. The native C++ path clusters vertices
-spatially, remaps source faces, removes degenerate/duplicate output faces, and
-rejects faces that would create nonmanifold edges. A written GLB can be
-`artifact_ready=true` while `production_quality_ready=false`; production
-remeshing parity is still a later phase.
+Default preview simplification still uses `spatial-cluster` with
+`quality_tier=geometry_aware_preview`. `quality_preset="reference-target"`
+selects the native `topology-aware` simplifier, which uses representative source
+vertices inside the topology-guarded clustering flow and reports
+`quality_tier=production` only when its self-checks pass.
 
 The UV stage uses a native paired-triangle face atlas: two unrelated triangle
 faces share one atlas tile in complementary halves. This is still not xatlas
@@ -58,6 +57,6 @@ Pixal3D reference trace when available and records threshold checks for topology
 face-count ratio, raw/final texture coverage, and backend tier. The current
 reference-target heavy fixture passes face-count, topology, and final global
 coverage thresholds, with final visible coverage around `0.602` versus the older
-one-triangle atlas baseline of about `0.269`. Production readiness still fails
-because the active simplifier is `geometry_aware_preview`, so
-`production_quality_ready=false` remains the correct result.
+one-triangle atlas baseline of about `0.269`; it now also passes the backend-tier
+gate with `production_quality_ready=true`. This is not a claim of upstream
+xatlas, 4096-texture, or 1M-face export parity.

@@ -110,11 +110,21 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert diagnostics["settings"]["quality_preset"] == "reference-target"
     assert diagnostics["settings"]["target_faces"] == 212_542
     assert diagnostics["settings"]["target_faces_source"] == "reference_final_faces"
+    assert diagnostics["settings"]["requested_simplifier_backend"] == "topology-aware"
     assert diagnostics["settings"]["reference_available"] is True
     assert diagnostics["result"]["artifact_ready"] is True
-    assert diagnostics["result"]["production_quality_ready"] is False
-    assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "blocked"
-    assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_blocked"
+    assert diagnostics["result"]["production_quality_ready"] is True
+    assert diagnostics["result"]["quality_warnings"] == []
+    assert diagnostics["quality"]["native_geometry_candidate"]["status"] == "candidate"
+    assert diagnostics["quality"]["native_geometry_candidate"]["reason"] == "native_geometry_candidate_available"
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    assert simplify_stats["requested_backend"] == "topology-aware"
+    assert simplify_stats["backend"] == "topology-aware"
+    assert simplify_stats["algorithm"] == "native_topology_aware_representative_clustering"
+    assert simplify_stats["quality_tier"] == "production"
+    assert simplify_stats["production_ready"] is True
+    assert simplify_stats["production_blockers"] == []
+    assert simplify_stats["target_reached"] is True
     uv_stats = diagnostics["stages"]["uv"]["stats"]
     assert uv_stats["backend"] == "face-atlas"
     assert uv_stats["packing"] == "paired-triangles"
@@ -130,15 +140,14 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert thresholds["topology_exportability"]["passed"] is True
     assert thresholds["face_count_ratio"]["passed"] is True
     assert 0.80 <= thresholds["face_count_ratio"]["actual"] <= 1.25
-    assert thresholds["backend_tier"]["passed"] is False
+    assert thresholds["backend_tier"]["passed"] is True
+    assert thresholds["backend_tier"]["actual"] == "production"
     assert thresholds["final_coverage_ratio"]["actual"] == pytest.approx(
         texture_stats["final_visible_coverage_ratio"]
     )
-    assert thresholds["final_coverage_ratio"]["passed"] == (
-        thresholds["final_coverage_ratio"]["actual"] >= thresholds["final_coverage_ratio"]["required_min"]
-    )
+    assert thresholds["final_coverage_ratio"]["passed"] is True
+    assert thresholds["final_coverage_ratio"]["actual"] >= thresholds["final_coverage_ratio"]["required_min"]
     assert thresholds["raw_coverage_ratio"]["passed"] is True
-    assert "production_thresholds_failed" in diagnostics["result"]["quality_warnings"]
     assert diagnostics["reference_comparison"]["reference_bake_backend"] == "xatlas-kdtree"
     assert "after_write_glb" in diagnostics["memory_samples"]
 

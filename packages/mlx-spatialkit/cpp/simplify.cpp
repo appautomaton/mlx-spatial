@@ -60,6 +60,14 @@ struct ClusterResult {
   int64_t degenerate_faces_removed = 0;
   int64_t duplicate_faces_removed = 0;
   int64_t nonmanifold_faces_removed = 0;
+  int64_t representative_vertices_selected = 0;
+};
+
+struct BackendSelection {
+  std::string requested;
+  std::string backend;
+  std::string algorithm;
+  bool topology_aware = false;
 };
 
 std::array<float, 3> mesh_min_bounds(const mesh_common::MeshData &mesh) {
@@ -100,7 +108,7 @@ int64_t cluster_axis(float value, float min_value, float max_value, int64_t grid
   return std::clamp<int64_t>(index, 0, grid_resolution - 1);
 }
 
-ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_resolution) {
+ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_resolution, bool representative_vertices) {
   const std::array<float, 3> min_bounds = mesh_min_bounds(input);
   const std::array<float, 3> max_bounds = mesh_max_bounds(input);
   std::unordered_map<ClusterKey, int64_t, ClusterKeyHash> cluster_ids;
@@ -133,13 +141,38 @@ ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_reso
 
   mesh_common::MeshData output;
   output.vertices.reserve(accumulators.size());
-  for (const auto &accum : accumulators) {
-    const double denom = static_cast<double>(std::max<int64_t>(1, accum.count));
-    output.vertices.push_back({
-        static_cast<float>(accum.x / denom),
-        static_cast<float>(accum.y / denom),
-        static_cast<float>(accum.z / denom),
-    });
+  if (representative_vertices) {
+    std::vector<double> best_distances(accumulators.size(), std::numeric_limits<double>::infinity());
+    std::vector<std::array<float, 3>> representatives(accumulators.size(), {0.0f, 0.0f, 0.0f});
+    for (size_t index = 0; index < input.vertices.size(); ++index) {
+      const int64_t cluster_id = vertex_to_cluster[index];
+      const ClusterAccum &accum = accumulators[static_cast<size_t>(cluster_id)];
+      const double denom = static_cast<double>(std::max<int64_t>(1, accum.count));
+      const double cx = accum.x / denom;
+      const double cy = accum.y / denom;
+      const double cz = accum.z / denom;
+      const auto &vertex = input.vertices[index];
+      const double dx = static_cast<double>(vertex[0]) - cx;
+      const double dy = static_cast<double>(vertex[1]) - cy;
+      const double dz = static_cast<double>(vertex[2]) - cz;
+      const double distance = dx * dx + dy * dy + dz * dz;
+      if (distance < best_distances[static_cast<size_t>(cluster_id)]) {
+        best_distances[static_cast<size_t>(cluster_id)] = distance;
+        representatives[static_cast<size_t>(cluster_id)] = vertex;
+      }
+    }
+    for (const auto &representative : representatives) {
+      output.vertices.push_back(representative);
+    }
+  } else {
+    for (const auto &accum : accumulators) {
+      const double denom = static_cast<double>(std::max<int64_t>(1, accum.count));
+      output.vertices.push_back({
+          static_cast<float>(accum.x / denom),
+          static_cast<float>(accum.y / denom),
+          static_cast<float>(accum.z / denom),
+      });
+    }
   }
 
   std::unordered_set<std::array<int64_t, 3>, FaceKeyHash> seen_faces;
@@ -188,6 +221,7 @@ ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_reso
   result.mesh = std::move(output);
   result.grid_resolution = grid_resolution;
   result.cluster_count = static_cast<int64_t>(accumulators.size());
+  result.representative_vertices_selected = representative_vertices ? result.cluster_count : 0;
   return result;
 }
 
@@ -196,29 +230,56 @@ int64_t initial_grid_resolution(int64_t target_faces) {
   return std::max<int64_t>(2, static_cast<int64_t>(resolution));
 }
 
-std::string normalize_backend(const std::string &backend) {
+BackendSelection resolve_backend(const std::string &backend) {
   if (backend.empty() || backend == "spatial-cluster" || backend == "preview") {
-    return "spatial-cluster";
+    return BackendSelection{
+        "spatial-cluster",
+        "spatial-cluster",
+        "native_spatial_vertex_clustering",
+        false,
+    };
   }
   if (backend == "topology-aware") {
-    return "topology-aware";
+    return BackendSelection{
+        "topology-aware",
+        "topology-aware",
+        "native_topology_aware_representative_clustering",
+        true,
+    };
   }
   throw nb::value_error("simplifier backend must be 'spatial-cluster' or 'topology-aware'");
 }
 
-void add_backend_stats(nb::dict &stats, const std::string &requested_backend) {
-  stats["requested_backend"] = requested_backend;
-  stats["backend"] = "spatial-cluster";
-  stats["algorithm"] = "native_spatial_vertex_clustering";
-  stats["quality_tier"] = "geometry_aware_preview";
-  stats["production_ready"] = false;
-  if (requested_backend == "spatial-cluster") {
-    stats["backend_selection_status"] = "selected";
-    stats["backend_selection_reason"] = "preview_backend_requested";
-  } else {
-    stats["backend_selection_status"] = "fallback_preview_unimplemented";
-    stats["backend_selection_reason"] = "topology-aware backend contract exists but implementation is pending";
+nb::list production_blockers(const BackendSelection &selection, int64_t final_faces, bool target_reached) {
+  nb::list blockers;
+  if (!selection.topology_aware) {
+    blockers.append("preview_backend_tier");
+    return blockers;
   }
+  if (final_faces <= 0) {
+    blockers.append("no_faces");
+  }
+  if (!target_reached) {
+    blockers.append("target_not_reached");
+  }
+  return blockers;
+}
+
+void add_backend_stats(
+    nb::dict &stats,
+    const BackendSelection &selection,
+    int64_t final_faces,
+    bool target_reached) {
+  nb::list blockers = production_blockers(selection, final_faces, target_reached);
+  const bool production_ready = selection.topology_aware && final_faces > 0 && target_reached;
+  stats["requested_backend"] = selection.requested;
+  stats["backend"] = selection.backend;
+  stats["algorithm"] = selection.algorithm;
+  stats["quality_tier"] = production_ready ? "production" : (selection.topology_aware ? "production_candidate_blocked" : "geometry_aware_preview");
+  stats["production_ready"] = production_ready;
+  stats["production_blockers"] = blockers;
+  stats["backend_selection_status"] = "selected";
+  stats["backend_selection_reason"] = selection.topology_aware ? "topology_aware_backend_requested" : "preview_backend_requested";
 }
 
 }  // namespace
@@ -235,7 +296,7 @@ nb::dict simplify_mesh(
   if (min_component_faces <= 0) {
     throw nb::value_error("min_component_faces must be positive");
   }
-  const std::string requested_backend = normalize_backend(backend);
+  const BackendSelection selection = resolve_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
 
   if (static_cast<int64_t>(input.faces.size()) <= target_faces) {
@@ -243,7 +304,8 @@ nb::dict simplify_mesh(
     mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
     nb::dict result = mesh_common::mesh_result(compact);
     nb::dict stats;
-    add_backend_stats(stats, requested_backend);
+    const bool target_reached = static_cast<int64_t>(compact.faces.size()) <= target_faces;
+    add_backend_stats(stats, selection, static_cast<int64_t>(compact.faces.size()), target_reached);
     stats["target_faces"] = target_faces;
     stats["source_faces"] = static_cast<int64_t>(input.faces.size());
     stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
@@ -255,15 +317,18 @@ nb::dict simplify_mesh(
     stats["duplicate_faces_removed"] = 0;
     stats["nonmanifold_faces_removed"] = 0;
     stats["unreferenced_vertices_removed"] = unreferenced_removed;
-    stats["target_reached"] = static_cast<int64_t>(compact.faces.size()) <= target_faces;
+    stats["target_reached"] = target_reached;
     stats["simplified"] = false;
     stats["min_component_faces"] = min_component_faces;
+    stats["candidate_faces_considered"] = static_cast<int64_t>(input.faces.size());
+    stats["accepted_faces"] = static_cast<int64_t>(compact.faces.size());
+    stats["representative_vertices_selected"] = selection.topology_aware ? static_cast<int64_t>(compact.vertices.size()) : 0;
     result["stats"] = stats;
     return result;
   }
 
   int64_t grid_resolution = initial_grid_resolution(target_faces);
-  ClusterResult best = cluster_mesh(input, grid_resolution);
+  ClusterResult best = cluster_mesh(input, grid_resolution, selection.topology_aware);
   for (int attempt = 0; attempt < 4; ++attempt) {
     const int64_t final_faces = static_cast<int64_t>(best.mesh.faces.size());
     if (final_faces <= target_faces && final_faces >= std::max<int64_t>(1, target_faces * 6 / 10)) {
@@ -276,7 +341,7 @@ nb::dict simplify_mesh(
       double adjusted = static_cast<double>(grid_resolution) * scale * (final_faces > target_faces ? 0.95 : 1.05);
       grid_resolution = std::max<int64_t>(2, static_cast<int64_t>(std::ceil(adjusted)));
     }
-    ClusterResult candidate = cluster_mesh(input, grid_resolution);
+    ClusterResult candidate = cluster_mesh(input, grid_resolution, selection.topology_aware);
     if (candidate.mesh.faces.empty()) {
       continue;
     }
@@ -292,7 +357,8 @@ nb::dict simplify_mesh(
   mesh_common::MeshData simplified = mesh_common::compact_mesh(best.mesh, &unreferenced_removed);
   nb::dict result = mesh_common::mesh_result(simplified);
   nb::dict stats;
-  add_backend_stats(stats, requested_backend);
+  const bool target_reached = static_cast<int64_t>(simplified.faces.size()) <= target_faces;
+  add_backend_stats(stats, selection, static_cast<int64_t>(simplified.faces.size()), target_reached);
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
@@ -304,9 +370,12 @@ nb::dict simplify_mesh(
   stats["duplicate_faces_removed"] = best.duplicate_faces_removed;
   stats["nonmanifold_faces_removed"] = best.nonmanifold_faces_removed;
   stats["unreferenced_vertices_removed"] = unreferenced_removed;
-  stats["target_reached"] = static_cast<int64_t>(simplified.faces.size()) <= target_faces;
+  stats["target_reached"] = target_reached;
   stats["simplified"] = static_cast<int64_t>(input.faces.size()) > target_faces;
   stats["min_component_faces"] = min_component_faces;
+  stats["candidate_faces_considered"] = static_cast<int64_t>(input.faces.size());
+  stats["accepted_faces"] = static_cast<int64_t>(simplified.faces.size());
+  stats["representative_vertices_selected"] = best.representative_vertices_selected;
   result["stats"] = stats;
   return result;
 }

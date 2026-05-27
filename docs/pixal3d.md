@@ -229,15 +229,13 @@ this path are marked `heavy` and write generated artifacts under `/tmp`.
 Spatialkit diagnostics separate artifact readiness from production-quality
 readiness. The current native texture path uses Metal exact sparse-voxel
 sampling plus bounded fallback/fill and records raw exact coverage, final visible
-base-color coverage, fallback-filled texels, timings, and RSS samples. Current
+base-color coverage, fallback-filled texels, timings, and RSS samples. Preview
 mesh simplification is reported as `spatial-cluster` with
-`quality_tier=geometry_aware_preview`: native C++ spatially clusters vertices,
-remaps source faces, drops degenerate/duplicate faces, and rejects clustered
-faces that would create nonmanifold edges. When the checked-in Pixal3D reference
-trace is available, diagnostics include `reference_comparison` face-count and
-coverage ratios. Generated GLBs are still preview artifacts rather than
-upstream-style production remesh parity, so `production_quality_ready` remains
-false until stronger remesh/unwrap/texture parity thresholds are met.
+`quality_tier=geometry_aware_preview`. Reference-target exports request the
+native `topology-aware` simplifier, which keeps the topology guard and chooses
+representative source vertices for clustered output vertices. When the checked-in
+Pixal3D reference trace is available, diagnostics include `reference_comparison`
+face-count and coverage ratios.
 
 The native UV path now uses paired-triangle face-atlas packing. Each atlas tile
 can hold two unrelated triangle faces in complementary halves, and diagnostics
@@ -252,7 +250,8 @@ the checked-in reference trace when available and records
 `production_thresholds` for reference availability, preset, backend tier,
 topology exportability, face-count ratio, final coverage ratio, and raw coverage
 reporting. Current reference-target diagnostics are expected to stay
-`artifact_ready=true` and `production_quality_ready=false`: face-count,
-topology, and final global coverage checks pass on the current heavy fixture,
-while the native geometry candidate is explicitly blocked because
-`spatial-cluster` is still preview-tier.
+`artifact_ready=true`; on the current heavy fixture they also reach
+`production_quality_ready=true` because backend tier, face-count, topology,
+final coverage, raw coverage reporting, preset, and reference checks all pass.
+This closes the measured native spatialkit gate, not full upstream xatlas,
+4096-texture, or 1M-face export-setting parity.

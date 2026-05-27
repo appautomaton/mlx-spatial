@@ -233,15 +233,14 @@ Script defaults:
 - spatialkit export writes `model.glb` and a `diagnostics.json` sidecar from
   decoded `shape_decoder_fields.npz` and `texture_decoder_pbr.npz`; if the
   optional package is missing, the Pixal3D script records the fallback and uses
-  the internal writer. Current spatialkit output is preview-quality: native
-  Metal texture fallback/fill and paired-triangle face-atlas packing are
-  enabled, while simplification is reported as `spatial-cluster` with
-  `quality_tier=geometry_aware_preview`; diagnostics compare against the
-  checked-in Pixal3D reference trace when available. The companion API also
-  exposes `quality_preset="reference-target"` for decoded NPZ validation; it
-  records production threshold pass/fail details and currently keeps
-  `production_quality_ready=false` because the simplifier backend is still
-  preview-tier.
+  the internal writer. Native Metal texture fallback/fill and paired-triangle
+  face-atlas packing are enabled. Default preview exports use `spatial-cluster`
+  with `quality_tier=geometry_aware_preview`; decoded NPZ validation can call
+  the companion API with `quality_preset="reference-target"` to select the
+  native `topology-aware` simplifier and record production threshold pass/fail
+  details against the checked-in Pixal3D reference trace. The current
+  reference-target heavy fixture passes the measured spatialkit production gate,
+  but this is not full upstream xatlas, 4096-texture, or 1M-face setting parity.
 
 ### LiTo
 

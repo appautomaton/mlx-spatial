@@ -33,7 +33,7 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 **Touches:** `packages/mlx-spatialkit/cpp/mesh_processing.hpp`, `packages/mlx-spatialkit/cpp/bindings.cpp`, `packages/mlx-spatialkit/cpp/simplify.cpp`, `packages/mlx-spatialkit/src/mlx_spatialkit/mesh.py`, `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests/test_mesh_processing.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`
 
 **Status:** complete
-**Evidence:** Added explicit simplifier backend intent through the C++ binding/header, Python `simplify_mesh(..., backend=...)` wrapper, and Pixal3D export routing. Preview/default requests `spatial-cluster`; reference-target requests `topology-aware` but currently records `fallback_preview_unimplemented` while actual backend remains `spatial-cluster`, so thresholds stay unchanged. Added tests for backend intent stats, invalid backend validation, and reference-target backend request selection. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `13 passed, 2 deselected`.
+**Evidence:** Added explicit simplifier backend intent through the C++ binding/header, Python `simplify_mesh(..., backend=...)` wrapper, and Pixal3D export routing. Preview/default requests `spatial-cluster`; reference-target requests `topology-aware`; invalid names raise a public backend error. Added tests for backend intent stats, invalid backend validation, and reference-target backend request selection. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py tests/test_real_pixal3d_export.py -q -m "not heavy"` passed with `13 passed, 2 deselected`.
 **Risks / next:** Slice 2 must replace the fallback with a distinct native topology-aware backend before any production-tier claim is possible.
 
 ### Slice 2: Native Topology-Aware Geometry Backend
@@ -55,6 +55,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 
 **Touches:** `packages/mlx-spatialkit/cpp/simplify.cpp`, optional new C++ implementation/header files under `packages/mlx-spatialkit/cpp/`, `packages/mlx-spatialkit/CMakeLists.txt`, `packages/mlx-spatialkit/tests/test_mesh_processing.py`
 
+**Status:** complete
+**Evidence:** Implemented `backend="topology-aware"` as a distinct native branch in `packages/mlx-spatialkit/cpp/simplify.cpp`: it uses representative source vertices inside the existing topology-guarded clustering flow, reports `backend=topology-aware`, `algorithm=native_topology_aware_representative_clustering`, candidate/accepted face counts, representative vertex counts, production blockers, and production readiness. Synthetic tests assert this path is not a `spatial-cluster` alias and emits no export blockers. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_mesh_processing.py -q` passed with `10 passed`.
+**Risks / next:** Heavy reference-target gate must prove the production-tier claim on the real decoded fixture.
+
 ### Slice 3: Reference-Target Production Gate
 
 **Objective:** Route reference-target Pixal3D decoded-fixture export through the new backend and verify whether the real fixture can pass production readiness honestly.
@@ -72,6 +76,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 
 **Touches:** `packages/mlx-spatialkit/src/mlx_spatialkit/export.py`, `packages/mlx-spatialkit/tests/test_real_pixal3d_export.py`
 
+**Status:** complete
+**Evidence:** Routed reference-target exports through `requested_simplifier_backend=topology-aware` and updated the heavy reference-target test to require production readiness only when all existing thresholds pass. `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests/test_real_pixal3d_export.py -q -m heavy` passed with `2 passed, 3 deselected`. Latest diagnostics at `/tmp/mlx-spatialkit-reference-target-export-28940/diagnostics.json` show `production_quality_ready=true`, `quality_warnings=[]`, backend `topology-aware`, quality tier `production`, final faces `198618`, face ratio `0.9344882423238701`, final coverage ratio `0.602107048034668`, all production thresholds passed, and `after_write_glb` RSS about `3.55 GB`.
+**Risks / next:** Docs must clearly state that this closes the measured backend-tier gate, not full xatlas/4096/1M-face upstream parity.
+
 ### Slice 4: Root Bridge And Documentation
 
 **Objective:** Keep the root Pixal3D spatialkit bridge and docs coherent with the new backend boundary.
@@ -86,6 +94,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 **Depends on:** Slice 3
 
 **Touches:** `docs/pixal3d.md`, `packages/mlx-spatialkit/README.md`, `scripts/README.md`, root bridge tests only if behavior changes
+
+**Status:** complete
+**Evidence:** Updated `packages/mlx-spatialkit/README.md`, `docs/pixal3d.md`, and `scripts/README.md` to document default preview `spatial-cluster` routing, reference-target `topology-aware` routing, measured production-gate pass, and the remaining boundary that this is not full xatlas/4096/1M-face upstream parity. `UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache uv run pytest tests/test_pixal3d_pipeline.py::test_pixal3d_pipeline_uses_optional_spatialkit_export_backend tests/test_pixal3d_pipeline.py::test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing -q` passed with `2 passed`.
+**Risks / next:** Full package/root/build verification still required before the change can be marked verified.
 
 ### Slice 5: Full Verification And Packaging Hygiene
 
@@ -103,6 +115,10 @@ Use `.agent/work/2026-05-27-mlx-spatialkit-native-geometry-backend-tier/DESIGN.m
 **Depends on:** Slice 4
 
 **Touches:** package/build metadata only if verification exposes hygiene gaps
+
+**Status:** complete
+**Evidence:** Full verification passed: `git diff --check`; `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv run --directory packages/mlx-spatialkit --reinstall-package mlx-spatialkit pytest tests -q` passed with `43 passed, 2 deselected`; `UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache uv run pytest tests/test_pixal3d_export.py tests/test_pixal3d_pipeline.py -q` passed with `35 passed`; `UV_CACHE_DIR=/tmp/mlx-spatialkit-uv-cache uv build packages/mlx-spatialkit --out-dir /tmp/mlx-spatialkit-dist --clear` built the wheel and sdist under `/tmp`; artifact inspection found no generated outputs, inputs, diagnostics, GLBs, pycache, or pytest cache entries.
+**Risks / next:** Ready for independent Automaton verify. Broad thread goal remains open for visual parity and future upstream setting gaps beyond this measured gate.
 
 ## Requirement Traceability
 
