@@ -636,10 +636,13 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   std::vector<int32_t> chart_labels(mesh.faces.size(), -1);
   std::vector<std::vector<int64_t>> charts;
   std::vector<int64_t> stack;
+  int64_t chart_edge_rejected_adjacency_count = 0;
+  int64_t chart_cone_rejected_adjacency_count = 0;
   for (int64_t seed = 0; seed < face_count; ++seed) {
     if (chart_labels[static_cast<size_t>(seed)] >= 0) {
       continue;
     }
+    const auto seed_normal = face_normals[static_cast<size_t>(seed)];
     const int32_t chart_id = static_cast<int32_t>(charts.size());
     charts.push_back({});
     chart_labels[static_cast<size_t>(seed)] = chart_id;
@@ -653,6 +656,11 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
           continue;
         }
         if (dot3(face_normals[static_cast<size_t>(current)], face_normals[static_cast<size_t>(neighbor)]) < cos_threshold) {
+          chart_edge_rejected_adjacency_count += 1;
+          continue;
+        }
+        if (dot3(seed_normal, face_normals[static_cast<size_t>(neighbor)]) < cos_threshold) {
+          chart_cone_rejected_adjacency_count += 1;
           continue;
         }
         chart_labels[static_cast<size_t>(neighbor)] = chart_id;
@@ -1370,6 +1378,10 @@ nb::dict make_native_chart_uvs(nb::object vertices, nb::object faces, double cha
   stats["average_chart_faces"] = static_cast<double>(face_count) / static_cast<double>(chart_count);
   stats["chart_angle_degrees"] = chart_angle_degrees;
   stats["chart_normal_cos_threshold"] = cos_threshold;
+  stats["chart_cluster_normal_policy"] = "edge-and-seed-cone";
+  stats["chart_cone_half_angle_degrees"] = chart_angle_degrees;
+  stats["chart_edge_rejected_adjacency_count"] = chart_edge_rejected_adjacency_count;
+  stats["chart_cone_rejected_adjacency_count"] = chart_cone_rejected_adjacency_count;
   stats["projection"] = "local-frame-pca";
   stats["projection_rotation_candidates"] = projection_rotation_candidates;
   stats["projection_rotation_step_degrees"] = projection_rotation_step_degrees;

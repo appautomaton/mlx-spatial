@@ -1,24 +1,17 @@
 # Roadmap
 
-## Phase 48: Alternative Triangulation Repair
+## Phase 1: Pixal3D GLB Quality Reference Port
 
 - status: done
-- change: `2026-05-27-mlx-spatialkit-alternative-triangulation-repair`
-- objective: Fill topology-blocked small boundary loops by trying bounded alternate ear-clipping triangulations under existing native guards.
-- why now: The latest fixture still has many small boundary loops rejected for duplicate/nonmanifold topology, and probing showed alternate triangulation can reduce holes without nonmanifold or readiness regressions.
-- likely outputs: C++ alternate triangulation search, focused mesh tests, real-fixture topology evidence, docs, package/build verification.
-- evidence: `.agent/work/2026-05-27-mlx-spatialkit-alternative-triangulation-repair/SPEC.md`
-- exit signal: Focused and package tests pass, native build succeeds, and the real fixture lowers boundary-loop/open-boundary topology without nonmanifold or readiness regressions.
-
-## Current State
-
-- Last verified change: `2026-05-27-mlx-spatialkit-alternative-triangulation-repair`.
-- Native geometry repair uses bounded projected ear-clipping, guarded alternative triangulation for topology-blocked small loops, 8-edge centroid-fan fallback, and guarded 6-edge branch-cycle repair with effective caps clamped by the public Pixal3D repair setting.
-- The real fixture still has remaining holes/topology work, and xatlas/1M parity remains deferred.
-- Native-chart export is scalar production-quality ready for the reference-target fixture, but production equivalence remains false because xatlas chart parity and upstream 1M-face export parity are still deferred.
-- Prior completed phases are consolidated here instead of kept as roadmap history; detailed evidence remains in `.agent/work/<change>/`.
+- change: `2026-05-27-mlx-spatialkit-pixal3d-export-reference-port`
+- objective: Make `mlx-spatialkit` generate high-quality Pixal3D GLB artifacts by following the Pixal3D/o-voxel/CuMesh export contract and xatlas behavior metrics without adding an unapproved xatlas dependency.
+- why now: Recent native GLBs became structurally better but showed color/granularity smear around repaired areas; the next work needs a source-grounded export reference port before more implementation changes.
+- likely outputs: One source-grounded plan, C++/Metal mesh/UV/bake changes, focused unit tests, real Pixal3D heavy fixture verification under `/tmp`, visual comparison artifacts, and docs aligned to actual readiness.
+- evidence: `.agent/work/2026-05-27-mlx-spatialkit-pixal3d-export-reference-port/SPEC.md` | user-stated | `vendors/Pixal3D/inference.py:263` | `vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:14` | `/tmp/CuMesh/src/clean_up.cu:450`
+- exit signal: The real decoded Pixal3D fixture writes inspectable GLBs under `/tmp`, tests and diagnostics prove the implemented reference-critical stages and explicit blockers, remaining parity gaps are explicit, and no generated heavy artifacts pollute the repo.
 
 ## Deferred or Not Now
 
-- Release, tag, publish, or push work is explicitly not part of this roadmap cycle.
-- Implementing endpoint-chain repair, arbitrary branch graph closure, full remesh, xatlas parity, 1M-face export parity, or CUDA/cuMesh behavior remains outside the active phase.
+- Release, tag, publish, or push work is not part of this roadmap cycle.
+- Copying or line-porting `nvdiffrast` CUDA code is out of scope; it is behavior reference only.
+- Broad model-inference changes outside decoded Pixal3D NPZ to GLB export are out of scope.

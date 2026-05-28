@@ -18,6 +18,8 @@ nanobind::dict bake_pbr_texture_metal(
     int64_t atlas_rows,
     int64_t atlas_faces_per_tile,
     double tile_padding,
-    int64_t max_texture_pixels);
+    int64_t max_texture_pixels,
+    nanobind::object source_vertices,
+    nanobind::object source_faces);
 
 }  // namespace mlx_spatialkit

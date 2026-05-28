@@ -134,6 +134,7 @@ kernel void mlx_spatialkit_bake_pbr_texture(
     device uchar *coverage [[buffer(8)]],
     device const uint *uv_bin_offsets [[buffer(9)]],
     device const int *uv_bin_faces [[buffer(10)]],
+    device float *surface_positions [[buffer(11)]],
     uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= config.texture_size || gid.y >= config.texture_size) {
     return;
@@ -215,6 +216,9 @@ kernel void mlx_spatialkit_bake_pbr_texture(
 
   if (face_index < 0) {
     coverage[texel] = 0;
+    surface_positions[texel * 3 + 0] = 0.0f;
+    surface_positions[texel * 3 + 1] = 0.0f;
+    surface_positions[texel * 3 + 2] = 0.0f;
     base_color_rgba[texel * 4 + 0] = 0;
     base_color_rgba[texel * 4 + 1] = 0;
     base_color_rgba[texel * 4 + 2] = 0;
@@ -233,6 +237,9 @@ kernel void mlx_spatialkit_bake_pbr_texture(
   float3 b = float3(vertices[ib * 3 + 0], vertices[ib * 3 + 1], vertices[ib * 3 + 2]);
   float3 c = float3(vertices[ic * 3 + 0], vertices[ic * 3 + 1], vertices[ic * 3 + 2]);
   float3 position = weights.x * a + weights.y * b + weights.z * c;
+  surface_positions[texel * 3 + 0] = position.x;
+  surface_positions[texel * 3 + 1] = position.y;
+  surface_positions[texel * 3 + 2] = position.z;
 
   int x = int(floor((position.x - config.origin_x) / config.voxel_size + 0.5f));
   int y = int(floor((position.y - config.origin_y) / config.voxel_size + 0.5f));

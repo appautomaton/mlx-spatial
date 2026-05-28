@@ -40,6 +40,8 @@ def bake_pbr_texture(
     voxel_size: float | None = None,
     decode_resolution: int | None = None,
     max_texture_pixels: int = 1_048_576,
+    source_vertices: np.ndarray | None = None,
+    source_faces: np.ndarray | None = None,
 ) -> NativeTextureBakeResult:
     """Bake Pixal3D/TRELLIS-style PBR textures through the native Metal backend."""
 
@@ -62,6 +64,8 @@ def bake_pbr_texture(
         atlas_faces_per_tile,
         tile_padding,
         int(max_texture_pixels),
+        source_vertices,
+        source_faces,
     )
     stats = dict(result["stats"])
     coverage_status = np.asarray(result["coverage_mask"], dtype=np.uint8)

@@ -239,16 +239,14 @@ Script defaults:
   the companion API with `quality_preset="reference-target"` to select the
   native `topology-aware` simplifier and record production threshold pass/fail
   details against the checked-in Pixal3D reference trace. The current
-  reference-target heavy fixture passes the measured spatialkit production gate,
-  and the 4096 texture-size gate passes after atlas-size-aware Metal fallback
-  and native dilation budgets are applied. Explicit 1M/4096 upstream-style
-  exports report a separate `quality.upstream_export_settings` gate; passing
-  that gate removes only the 1M-face setting deferral. The opt-in native-chart
-  backend also has a 1M/4096 heavy gate where upstream-setting readiness and
-  native-chart quality readiness pass, while 1024-reference visual comparison
-  stays visibly mismatched on face count and texture size. This is not full
-  upstream xatlas charting, xatlas chart equivalence, or CUDA/cuMesh remesh
-  parity.
+  reference-target heavy fixture writes an inspectable GLB and passes
+  deterministic visual comparison, but the measured production gate remains
+  false because QEM edge-collapse, narrow-band DC remesh, and xatlas chart
+  parity are not implemented. Explicit 1M/4096 upstream-style exports report a
+  separate `quality.upstream_export_settings` gate. That gate currently remains
+  false because backend tier and island-safe final coverage are not ready, so
+  the 1M-face setting deferral stays visible. This is not full upstream xatlas
+  charting, xatlas chart equivalence, or CUDA/cuMesh remesh parity.
   Arbitrary non-atlas UV bakes now use `metal-uv-binned-nearest`, a bounded
   UV-space face-bin Metal lookup that reports bin grid and candidate diagnostics
   instead of scanning every face per texel. The current Pixal3D export still
@@ -279,35 +277,31 @@ Script defaults:
   separately. They also fill a bounded no-face RGB/MR gutter for linear-filter
   seam robustness without changing alpha, coverage status, UV-surface counts,
   or visible-coverage ratios; visual comparison keeps raw RGB footprint separate
-  from visible RGB coverage. Chart diagnostics separate `artifact_ready` from `quality_ready`;
-  the current real fixture clears scalar native-chart coverage while xatlas
-  chart parity remains deferred. `result.production_equivalence_ready` is the
-  stricter production-equivalence gate and remains false while xatlas,
-  upstream-setting, or visual-comparison boundaries remain open. Native export diagnostics also include
+  from visible RGB coverage. Chart diagnostics separate artifact readiness from
+  scalar native-chart candidate checks. For the current native-chart reference
+  fixture, deterministic visual comparison passes; production equivalence remains
+  false because xatlas parity, missing QEM/DC geometry, and upstream 1M/4096
+  readiness remain open. Native export diagnostics also include
   boundary-loop topology under
   `source_metrics.metrics` and `export_metrics.metrics`, so geometry holes are
   not conflated with UV chart coverage or xatlas parity.
   Open-boundary diagnostics also report simple versus branched open components,
   endpoint counts, branch-vertex counts, and open-component edge totals; this
   is diagnostic only and does not repair open chains.
-  The topology-aware simplifier also runs a bounded native small-loop fill for
-  closed boundary loops up to 8 edges when target-face budget remains, using
-  projected ear-clipping first, bounded alternate triangulations when the first
-  diagonal is topology-blocked, and a guarded centroid-fan fallback with the
-  same 8-edge policy cap. It can also fill small simple cycles, with a more
-  conservative 6-edge policy cap, found inside branched open-boundary
-  components. Direct decoded-NPZ exports expose this as
-  `small_boundary_loop_fill_max_edges=8`, which clamps the effective fallback
-  and branched-cycle caps; use `0` to disable the repair for comparison runs.
-  Diagnostics report policy/effective caps, method counts, alternate
-  triangulation counts, branch-cycle counts, rejection reasons, and faces added.
+  The topology-aware candidate simplifier also runs a bounded native small-loop
+  fill for closed boundary loops when target-face budget remains, using
+  CuMesh-style perimeter-limited centroid-fan patches. Projected ear clipping,
+  alternate triangulation, and branched-cycle repair are disabled for the
+  reference path. Direct decoded-NPZ exports expose this as
+  `small_boundary_loop_fill_max_edges=8`; use `0` to disable the repair for
+  comparison runs. Diagnostics report policy caps, perimeter and edge-cap
+  rejections, rejection reasons, and faces added.
   With `quality_preset="reference-target"` and `uv_backend="native-chart"`,
-  the real fixture also passes production and
-  deterministic visual-comparison gates; this means scalar native readiness, not
-  full Pixal3D production equivalence, and it does not remove xatlas or
-  1M/4096 upstream-setting parity boundaries. With explicit
-  `target_faces=1000000` and `texture_size=4096`, the same backend passes its
-  upstream-setting gate and leaves only xatlas chart parity deferred.
+  the real fixture writes an inspectable GLB and passes deterministic visual
+  comparison, but production readiness remains blocked by missing QEM/DC
+  geometry and xatlas parity. With explicit
+  `target_faces=1000000` and `texture_size=4096`, the gate still remains false
+  because backend tier and island-safe final coverage are not ready.
   Native spatialkit GLBs include generated normals and split large meshes into
   chunk-local uint16-indexed primitives. The diagnostics sidecar records
   `quality.glb_viewer_compatibility` for parseability, PBR texture presence,
@@ -318,11 +312,12 @@ Script defaults:
   `visual_parity/` sidecar with machine-readable GLB/texture comparison metrics
   plus extracted candidate/reference base-color PNG previews. The checked-in
   reference GLB is 1024, so a 4096 candidate is expected to report texture-size
-  mismatch while still passing coverage. Default deferred visual parity
-  boundaries are limited to xatlas chart parity and 1M-face export-setting
-  parity; the 1M boundary is removed for explicit 1M/4096 exports only after
-  upstream-setting readiness passes, including explicit native-chart 1M/4096
-  exports.
+  mismatch while coverage and backend readiness remain explicit. For the visual
+  sidecar, deferred boundaries are limited to xatlas chart parity and 1M-face
+  export-setting parity; the 1M boundary is removed for explicit 1M/4096 exports
+  only after upstream-setting readiness passes. Production readiness also remains
+  blocked by missing QEM edge-collapse, missing narrow-band DC remesh, and
+  current poor 4096 face-atlas coverage.
   The `diagnostics.json` file also includes observed process RSS peaks per
   export stage from `ps` and `resource.getrusage`; this is host-process
   telemetry, not full system pressure or Metal allocator accounting. During

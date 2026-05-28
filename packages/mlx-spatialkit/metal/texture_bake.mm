@@ -67,6 +67,43 @@ struct UvBins {
   uint32_t non_empty_bins = 0;
 };
 
+struct BvhTriangle {
+  int64_t face_index = 0;
+  std::array<float, 3> min_bounds{};
+  std::array<float, 3> max_bounds{};
+  std::array<float, 3> centroid{};
+};
+
+struct BvhNode {
+  std::array<float, 3> min_bounds{};
+  std::array<float, 3> max_bounds{};
+  int32_t left = -1;
+  int32_t right = -1;
+  int32_t start = 0;
+  int32_t count = 0;
+};
+
+struct ClosestPointResult {
+  std::array<float, 3> point{};
+  std::array<float, 3> barycentric{};
+  int64_t face_index = -1;
+  double distance2 = std::numeric_limits<double>::infinity();
+};
+
+struct ReferenceSampleStats {
+  bool enabled = false;
+  int64_t source_vertices = 0;
+  int64_t source_faces = 0;
+  int64_t bvh_nodes = 0;
+  int64_t uv_surface_texels = 0;
+  int64_t projected_texels = 0;
+  int64_t trilinear_sampled_texels = 0;
+  int64_t trilinear_missing_corner_texels = 0;
+  int64_t trilinear_out_of_grid_corner_texels = 0;
+  int64_t trilinear_invalid_texels = 0;
+  double max_projection_distance = 0.0;
+};
+
 NSString *texture_bake_metallib_path() {
   Dl_info info;
   if (dladdr(reinterpret_cast<const void *>(&metal_device_available), &info) == 0 || info.dli_fname == nullptr) {
@@ -154,6 +191,122 @@ std::vector<int32_t> flatten_faces_i32(const mesh_common::MeshData &mesh) {
   return values;
 }
 
+std::array<float, 3> min3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
+  return {
+      std::min(left[0], right[0]),
+      std::min(left[1], right[1]),
+      std::min(left[2], right[2]),
+  };
+}
+
+std::array<float, 3> max3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
+  return {
+      std::max(left[0], right[0]),
+      std::max(left[1], right[1]),
+      std::max(left[2], right[2]),
+  };
+}
+
+double distance2_aabb(
+    const std::array<float, 3> &point,
+    const std::array<float, 3> &min_bounds,
+    const std::array<float, 3> &max_bounds) {
+  double distance = 0.0;
+  for (int axis = 0; axis < 3; ++axis) {
+    const double value = point[static_cast<size_t>(axis)];
+    const double lo = min_bounds[static_cast<size_t>(axis)];
+    const double hi = max_bounds[static_cast<size_t>(axis)];
+    if (value < lo) {
+      const double delta = lo - value;
+      distance += delta * delta;
+    } else if (value > hi) {
+      const double delta = value - hi;
+      distance += delta * delta;
+    }
+  }
+  return distance;
+}
+
+ClosestPointResult closest_point_on_triangle(
+    const std::array<float, 3> &point,
+    const std::array<float, 3> &a,
+    const std::array<float, 3> &b,
+    const std::array<float, 3> &c,
+    int64_t face_index) {
+  auto sub = [](const std::array<float, 3> &left, const std::array<float, 3> &right) {
+    return std::array<double, 3>{
+        static_cast<double>(left[0]) - static_cast<double>(right[0]),
+        static_cast<double>(left[1]) - static_cast<double>(right[1]),
+        static_cast<double>(left[2]) - static_cast<double>(right[2]),
+    };
+  };
+  auto dot = [](const std::array<double, 3> &left, const std::array<double, 3> &right) {
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+  };
+  auto make_result = [&](double wa, double wb, double wc) {
+    std::array<float, 3> projected{
+        static_cast<float>(wa * a[0] + wb * b[0] + wc * c[0]),
+        static_cast<float>(wa * a[1] + wb * b[1] + wc * c[1]),
+        static_cast<float>(wa * a[2] + wb * b[2] + wc * c[2]),
+    };
+    const double dx = static_cast<double>(point[0]) - projected[0];
+    const double dy = static_cast<double>(point[1]) - projected[1];
+    const double dz = static_cast<double>(point[2]) - projected[2];
+    return ClosestPointResult{
+        projected,
+        {static_cast<float>(wa), static_cast<float>(wb), static_cast<float>(wc)},
+        face_index,
+        dx * dx + dy * dy + dz * dz,
+    };
+  };
+
+  const std::array<double, 3> ab = sub(b, a);
+  const std::array<double, 3> ac = sub(c, a);
+  const std::array<double, 3> ap = sub(point, a);
+  const double d1 = dot(ab, ap);
+  const double d2 = dot(ac, ap);
+  if (d1 <= 0.0 && d2 <= 0.0) {
+    return make_result(1.0, 0.0, 0.0);
+  }
+
+  const std::array<double, 3> bp = sub(point, b);
+  const double d3 = dot(ab, bp);
+  const double d4 = dot(ac, bp);
+  if (d3 >= 0.0 && d4 <= d3) {
+    return make_result(0.0, 1.0, 0.0);
+  }
+
+  const double vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    const double v = d1 / (d1 - d3);
+    return make_result(1.0 - v, v, 0.0);
+  }
+
+  const std::array<double, 3> cp = sub(point, c);
+  const double d5 = dot(ab, cp);
+  const double d6 = dot(ac, cp);
+  if (d6 >= 0.0 && d5 <= d6) {
+    return make_result(0.0, 0.0, 1.0);
+  }
+
+  const double vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    const double w = d2 / (d2 - d6);
+    return make_result(1.0 - w, 0.0, w);
+  }
+
+  const double va = d3 * d6 - d5 * d4;
+  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    return make_result(0.0, 1.0 - w, w);
+  }
+
+  const double denom = 1.0 / (va + vb + vc);
+  const double v = vb * denom;
+  const double w = vc * denom;
+  return make_result(1.0 - v - w, v, w);
+}
+
 std::vector<float> load_uvs_flat(nb::object uvs_object, int64_t vertex_count) {
   mesh_common::validate_matrix(uvs_object, "texture bake UVs", 2, "float32");
   if (mesh_common::dimension(uvs_object, "texture bake UVs", 0) != vertex_count) {
@@ -179,6 +332,159 @@ std::vector<float> load_uvs_flat(nb::object uvs_object, int64_t vertex_count) {
   }
   return values;
 }
+
+class TriangleBvh {
+ public:
+  explicit TriangleBvh(const mesh_common::MeshData &mesh) : mesh_(mesh) {
+    triangles_.reserve(mesh_.faces.size());
+    for (size_t index = 0; index < mesh_.faces.size(); ++index) {
+      const auto &face = mesh_.faces[index];
+      const auto &a = mesh_.vertices[static_cast<size_t>(face[0])];
+      const auto &b = mesh_.vertices[static_cast<size_t>(face[1])];
+      const auto &c = mesh_.vertices[static_cast<size_t>(face[2])];
+      BvhTriangle triangle;
+      triangle.face_index = static_cast<int64_t>(index);
+      triangle.min_bounds = min3(min3(a, b), c);
+      triangle.max_bounds = max3(max3(a, b), c);
+      triangle.centroid = {
+          (a[0] + b[0] + c[0]) / 3.0f,
+          (a[1] + b[1] + c[1]) / 3.0f,
+          (a[2] + b[2] + c[2]) / 3.0f,
+      };
+      triangles_.push_back(triangle);
+    }
+    if (!triangles_.empty()) {
+      build_node(0, static_cast<int32_t>(triangles_.size()));
+    }
+  }
+
+  int64_t node_count() const {
+    return static_cast<int64_t>(nodes_.size());
+  }
+
+  ClosestPointResult closest_point(const std::array<float, 3> &point) const {
+    ClosestPointResult best;
+    if (nodes_.empty()) {
+      return best;
+    }
+    std::vector<int32_t> stack;
+    stack.reserve(64);
+    stack.push_back(0);
+    while (!stack.empty()) {
+      const int32_t node_index = stack.back();
+      stack.pop_back();
+      const BvhNode &node = nodes_[static_cast<size_t>(node_index)];
+      if (distance2_aabb(point, node.min_bounds, node.max_bounds) > best.distance2) {
+        continue;
+      }
+      if (node.left < 0 && node.right < 0) {
+        for (int32_t offset = 0; offset < node.count; ++offset) {
+          const BvhTriangle &triangle = triangles_[static_cast<size_t>(node.start + offset)];
+          const auto &face = mesh_.faces[static_cast<size_t>(triangle.face_index)];
+          const ClosestPointResult candidate = closest_point_on_triangle(
+              point,
+              mesh_.vertices[static_cast<size_t>(face[0])],
+              mesh_.vertices[static_cast<size_t>(face[1])],
+              mesh_.vertices[static_cast<size_t>(face[2])],
+              triangle.face_index);
+          if (candidate.distance2 < best.distance2) {
+            best = candidate;
+          }
+        }
+        continue;
+      }
+      const int32_t left = node.left;
+      const int32_t right = node.right;
+      if (left >= 0 && right >= 0) {
+        const BvhNode &left_node = nodes_[static_cast<size_t>(left)];
+        const BvhNode &right_node = nodes_[static_cast<size_t>(right)];
+        const double left_distance = distance2_aabb(point, left_node.min_bounds, left_node.max_bounds);
+        const double right_distance = distance2_aabb(point, right_node.min_bounds, right_node.max_bounds);
+        if (left_distance < right_distance) {
+          if (right_distance <= best.distance2) {
+            stack.push_back(right);
+          }
+          if (left_distance <= best.distance2) {
+            stack.push_back(left);
+          }
+        } else {
+          if (left_distance <= best.distance2) {
+            stack.push_back(left);
+          }
+          if (right_distance <= best.distance2) {
+            stack.push_back(right);
+          }
+        }
+      } else if (left >= 0) {
+        stack.push_back(left);
+      } else if (right >= 0) {
+        stack.push_back(right);
+      }
+    }
+    return best;
+  }
+
+ private:
+  int32_t build_node(int32_t start, int32_t end) {
+    BvhNode node;
+    node.start = start;
+    node.count = end - start;
+    node.min_bounds = {
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+    };
+    node.max_bounds = {
+        -std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+    };
+    std::array<float, 3> centroid_min = node.min_bounds;
+    std::array<float, 3> centroid_max = node.max_bounds;
+    for (int32_t index = start; index < end; ++index) {
+      const BvhTriangle &triangle = triangles_[static_cast<size_t>(index)];
+      node.min_bounds = min3(node.min_bounds, triangle.min_bounds);
+      node.max_bounds = max3(node.max_bounds, triangle.max_bounds);
+      centroid_min = min3(centroid_min, triangle.centroid);
+      centroid_max = max3(centroid_max, triangle.centroid);
+    }
+    const int32_t node_index = static_cast<int32_t>(nodes_.size());
+    nodes_.push_back(node);
+    if (node.count <= 8) {
+      return node_index;
+    }
+
+    int axis = 0;
+    float best_extent = centroid_max[0] - centroid_min[0];
+    for (int candidate_axis = 1; candidate_axis < 3; ++candidate_axis) {
+      const float extent = centroid_max[static_cast<size_t>(candidate_axis)] - centroid_min[static_cast<size_t>(candidate_axis)];
+      if (extent > best_extent) {
+        axis = candidate_axis;
+        best_extent = extent;
+      }
+    }
+    if (best_extent <= 1e-12f) {
+      return node_index;
+    }
+    const int32_t mid = start + node.count / 2;
+    std::nth_element(
+        triangles_.begin() + start,
+        triangles_.begin() + mid,
+        triangles_.begin() + end,
+        [axis](const BvhTriangle &left, const BvhTriangle &right) {
+          return left.centroid[static_cast<size_t>(axis)] < right.centroid[static_cast<size_t>(axis)];
+        });
+    nodes_[static_cast<size_t>(node_index)].left = build_node(start, mid);
+    nodes_[static_cast<size_t>(node_index)].right = build_node(mid, end);
+    nodes_[static_cast<size_t>(node_index)].start = 0;
+    nodes_[static_cast<size_t>(node_index)].count = 0;
+    return node_index;
+  }
+
+  const mesh_common::MeshData &mesh_;
+  std::vector<BvhTriangle> triangles_;
+  std::vector<BvhNode> nodes_;
+};
 
 int64_t resolve_uv_bin_side(int64_t texture_size, int64_t face_count) {
   const double face_side = std::ceil(std::sqrt(static_cast<double>(std::max<int64_t>(1, face_count)) / 4.0));
@@ -370,6 +676,204 @@ std::vector<VoxelRecord> load_voxels(
   return records;
 }
 
+bool has_source_projection_inputs(nb::object source_vertices, nb::object source_faces) {
+  const bool vertices_none = source_vertices.ptr() == Py_None;
+  const bool faces_none = source_faces.ptr() == Py_None;
+  if (vertices_none != faces_none) {
+    throw nb::value_error("source_vertices and source_faces must either both be provided or both be None");
+  }
+  return !vertices_none;
+}
+
+int64_t find_voxel_record(const std::vector<VoxelRecord> &records, uint64_t key) {
+  size_t left = 0;
+  size_t right = records.size();
+  while (left < right) {
+    const size_t mid = left + ((right - left) >> 1);
+    if (records[mid].key < key) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  if (left < records.size() && records[left].key == key) {
+    return static_cast<int64_t>(left);
+  }
+  return -1;
+}
+
+bool trilinear_sample_attributes(
+    const std::vector<VoxelRecord> &records,
+    const std::array<float, 3> &position,
+    const std::array<float, 3> &origin,
+    float voxel_size,
+    int32_t grid_z,
+    int32_t grid_y,
+    int32_t grid_x,
+    std::array<float, 6> *sampled,
+    bool *missing_corner,
+    bool *out_of_grid_corner) {
+  sampled->fill(0.0f);
+  *missing_corner = false;
+  *out_of_grid_corner = false;
+  if (voxel_size <= 0.0f || records.empty()) {
+    *missing_corner = true;
+    return false;
+  }
+
+  const double gx = (static_cast<double>(position[0]) - static_cast<double>(origin[0])) / static_cast<double>(voxel_size);
+  const double gy = (static_cast<double>(position[1]) - static_cast<double>(origin[1])) / static_cast<double>(voxel_size);
+  const double gz = (static_cast<double>(position[2]) - static_cast<double>(origin[2])) / static_cast<double>(voxel_size);
+  if (!std::isfinite(gx) || !std::isfinite(gy) || !std::isfinite(gz)) {
+    *out_of_grid_corner = true;
+    return false;
+  }
+  const int64_t base_x = static_cast<int64_t>(std::floor(gx));
+  const int64_t base_y = static_cast<int64_t>(std::floor(gy));
+  const int64_t base_z = static_cast<int64_t>(std::floor(gz));
+  const double fx = gx - static_cast<double>(base_x);
+  const double fy = gy - static_cast<double>(base_y);
+  const double fz = gz - static_cast<double>(base_z);
+  const uint64_t stride_y = static_cast<uint64_t>(grid_x);
+  const uint64_t stride_z = checked_mul(static_cast<uint64_t>(grid_y), stride_y, "texture grid stride");
+  double present_weight = 0.0;
+  constexpr double eps = 1e-6;
+  for (int oz = 0; oz <= 1; ++oz) {
+    const double wz = oz == 1 ? fz : 1.0 - fz;
+    for (int oy = 0; oy <= 1; ++oy) {
+      const double wy = oy == 1 ? fy : 1.0 - fy;
+      for (int ox = 0; ox <= 1; ++ox) {
+        const double wx = ox == 1 ? fx : 1.0 - fx;
+        const double weight = wx * wy * wz;
+        if (weight <= eps) {
+          continue;
+        }
+        const int64_t x = base_x + ox;
+        const int64_t y = base_y + oy;
+        const int64_t z = base_z + oz;
+        if (x < 0 || y < 0 || z < 0 || x >= grid_x || y >= grid_y || z >= grid_z) {
+          *out_of_grid_corner = true;
+          continue;
+        }
+        const uint64_t key = static_cast<uint64_t>(z) * stride_z
+            + static_cast<uint64_t>(y) * stride_y
+            + static_cast<uint64_t>(x);
+        const int64_t record_index = find_voxel_record(records, key);
+        if (record_index < 0) {
+          *missing_corner = true;
+          continue;
+        }
+        const VoxelRecord &record = records[static_cast<size_t>(record_index)];
+        for (size_t channel = 0; channel < sampled->size(); ++channel) {
+          (*sampled)[channel] += static_cast<float>(weight) * record.attributes[channel];
+        }
+        present_weight += weight;
+      }
+    }
+  }
+  return present_weight > eps;
+}
+
+void write_pbr_texel_cpu(
+    const std::array<float, 6> &attributes,
+    size_t texel,
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness) {
+  auto to_u8 = [](float value) {
+    return static_cast<uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+  };
+  base_color[texel * 4 + 0] = to_u8(attributes[0]);
+  base_color[texel * 4 + 1] = to_u8(attributes[1]);
+  base_color[texel * 4 + 2] = to_u8(attributes[2]);
+  base_color[texel * 4 + 3] = to_u8(attributes[5]);
+  metallic_roughness[texel * 3 + 0] = 0;
+  metallic_roughness[texel * 3 + 1] = to_u8(attributes[4]);
+  metallic_roughness[texel * 3 + 2] = to_u8(attributes[3]);
+}
+
+void clear_pbr_texel_cpu(
+    size_t texel,
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness) {
+  std::fill(base_color.begin() + static_cast<std::ptrdiff_t>(texel * 4),
+            base_color.begin() + static_cast<std::ptrdiff_t>(texel * 4 + 4),
+            static_cast<uint8_t>(0));
+  metallic_roughness[texel * 3 + 0] = 0;
+  metallic_roughness[texel * 3 + 1] = 255;
+  metallic_roughness[texel * 3 + 2] = 0;
+}
+
+ReferenceSampleStats apply_reference_projection_and_trilinear_sampling(
+    const mesh_common::MeshData &source_mesh,
+    const std::vector<float> &surface_positions,
+    const std::vector<VoxelRecord> &records,
+    const std::array<float, 3> &origin,
+    float voxel_size,
+    int32_t grid_z,
+    int32_t grid_y,
+    int32_t grid_x,
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness,
+    std::vector<uint8_t> &coverage) {
+  ReferenceSampleStats stats;
+  stats.enabled = true;
+  stats.source_vertices = static_cast<int64_t>(source_mesh.vertices.size());
+  stats.source_faces = static_cast<int64_t>(source_mesh.faces.size());
+  TriangleBvh bvh(source_mesh);
+  stats.bvh_nodes = bvh.node_count();
+  const size_t texel_count = coverage.size();
+  for (size_t texel = 0; texel < texel_count; ++texel) {
+    if (coverage[texel] == 0) {
+      continue;
+    }
+    stats.uv_surface_texels += 1;
+    const std::array<float, 3> surface_position{
+        surface_positions[texel * 3 + 0],
+        surface_positions[texel * 3 + 1],
+        surface_positions[texel * 3 + 2],
+    };
+    ClosestPointResult projected = bvh.closest_point(surface_position);
+    if (projected.face_index < 0) {
+      coverage[texel] = 2;
+      clear_pbr_texel_cpu(texel, base_color, metallic_roughness);
+      stats.trilinear_invalid_texels += 1;
+      continue;
+    }
+    stats.projected_texels += 1;
+    stats.max_projection_distance = std::max(stats.max_projection_distance, std::sqrt(projected.distance2));
+    std::array<float, 6> sampled{};
+    bool missing_corner = false;
+    bool out_of_grid_corner = false;
+    const bool valid = trilinear_sample_attributes(
+        records,
+        projected.point,
+        origin,
+        voxel_size,
+        grid_z,
+        grid_y,
+        grid_x,
+        &sampled,
+        &missing_corner,
+        &out_of_grid_corner);
+    if (missing_corner) {
+      stats.trilinear_missing_corner_texels += 1;
+    }
+    if (out_of_grid_corner) {
+      stats.trilinear_out_of_grid_corner_texels += 1;
+    }
+    if (!valid) {
+      coverage[texel] = out_of_grid_corner ? 3 : 2;
+      clear_pbr_texel_cpu(texel, base_color, metallic_roughness);
+      stats.trilinear_invalid_texels += 1;
+      continue;
+    }
+    coverage[texel] = 1;
+    write_pbr_texel_cpu(sampled, texel, base_color, metallic_roughness);
+    stats.trilinear_sampled_texels += 1;
+  }
+  return stats;
+}
+
 id<MTLBuffer> make_buffer(id<MTLDevice> device, const void *data, size_t bytes, NSString *label) {
   id<MTLBuffer> buffer = [device newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
   if (buffer == nil) {
@@ -468,7 +972,8 @@ int64_t fill_remaining_surface_texels(
     std::vector<uint8_t> &metallic_roughness,
     std::vector<uint8_t> &coverage,
     int64_t texture_size,
-    int64_t *seed_count) {
+    int64_t *seed_count,
+    int64_t *cross_gap_prevented_count) {
   const size_t side = checked_size(static_cast<uint64_t>(texture_size), "texture surface-fill side");
   const size_t pixel_count = checked_size(
       checked_mul(static_cast<uint64_t>(texture_size), static_cast<uint64_t>(texture_size), "texture surface-fill pixels"),
@@ -478,6 +983,7 @@ int64_t fill_remaining_surface_texels(
   std::vector<uint32_t> queue;
   queue.reserve(pixel_count);
   *seed_count = 0;
+  *cross_gap_prevented_count = 0;
 
   for (size_t texel = 0; texel < pixel_count; ++texel) {
     if (coverage[texel] != 1 && coverage[texel] != 4) {
@@ -513,6 +1019,10 @@ int64_t fill_remaining_surface_texels(
         }
         const size_t target = static_cast<size_t>(y) * side + static_cast<size_t>(x);
         if (nearest_source[target] != unvisited) {
+          continue;
+        }
+        if (coverage[target] == 0) {
+          *cross_gap_prevented_count += 1;
           continue;
         }
         const uint32_t fill_source = nearest_source[source];
@@ -675,7 +1185,9 @@ nb::dict bake_pbr_texture_metal(
     int64_t atlas_rows,
     int64_t atlas_faces_per_tile,
     double tile_padding,
-    int64_t max_texture_pixels) {
+    int64_t max_texture_pixels,
+    nb::object source_vertices,
+    nb::object source_faces) {
   if (texture_size <= 0) {
     throw nb::value_error("texture_size must be positive");
   }
@@ -708,6 +1220,14 @@ nb::dict bake_pbr_texture_metal(
   mesh_common::MeshData mesh = mesh_common::load_mesh(vertices_object, faces_object);
   if (mesh.faces.empty()) {
     throw nb::value_error("texture bake requires at least one face");
+  }
+  const bool source_projection_enabled = has_source_projection_inputs(source_vertices, source_faces);
+  mesh_common::MeshData source_mesh;
+  if (source_projection_enabled) {
+    source_mesh = mesh_common::load_mesh(source_vertices, source_faces);
+    if (source_mesh.faces.empty()) {
+      throw nb::value_error("source projection mesh requires at least one face");
+    }
   }
   std::vector<float> vertices = flatten_vertices(mesh);
   std::vector<int32_t> faces = flatten_faces_i32(mesh);
@@ -753,6 +1273,9 @@ nb::dict bake_pbr_texture_metal(
   const size_t base_bytes = checked_size(checked_mul(pixel_count, 4, "base color output"), "base color output");
   const size_t mr_bytes = checked_size(checked_mul(pixel_count, 3, "metallic roughness output"), "metallic roughness output");
   const size_t coverage_bytes = checked_size(pixel_count, "coverage output");
+  const size_t surface_position_bytes = checked_size(
+      checked_mul(pixel_count, 3 * sizeof(float), "surface position output"),
+      "surface position output");
 
   @autoreleasepool {
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -813,6 +1336,8 @@ nb::dict bake_pbr_texture_metal(
     id<MTLBuffer> base_buffer = make_output_buffer(device, base_bytes, @"mlx-spatialkit base color");
     id<MTLBuffer> mr_buffer = make_output_buffer(device, mr_bytes, @"mlx-spatialkit metallic roughness");
     id<MTLBuffer> coverage_buffer = make_output_buffer(device, coverage_bytes, @"mlx-spatialkit coverage");
+    id<MTLBuffer> surface_position_buffer =
+        make_output_buffer(device, surface_position_bytes, @"mlx-spatialkit UV surface positions");
     id<MTLBuffer> uv_bin_offsets_buffer = make_buffer(
         device,
         uv_bins.offsets.data(),
@@ -844,6 +1369,7 @@ nb::dict bake_pbr_texture_metal(
     [encoder setBuffer:coverage_buffer offset:0 atIndex:8];
     [encoder setBuffer:uv_bin_offsets_buffer offset:0 atIndex:9];
     [encoder setBuffer:uv_bin_faces_buffer offset:0 atIndex:10];
+    [encoder setBuffer:surface_position_buffer offset:0 atIndex:11];
     const NSUInteger thread_width = std::min<NSUInteger>(16, [pipeline threadExecutionWidth]);
     const NSUInteger thread_height = std::max<NSUInteger>(1, std::min<NSUInteger>(16, [pipeline maxTotalThreadsPerThreadgroup] / thread_width));
     MTLSize threads_per_group = MTLSizeMake(thread_width, thread_height, 1);
@@ -862,9 +1388,30 @@ nb::dict bake_pbr_texture_metal(
     const auto *base_ptr = static_cast<const uint8_t *>([base_buffer contents]);
     const auto *mr_ptr = static_cast<const uint8_t *>([mr_buffer contents]);
     const auto *coverage_ptr = static_cast<const uint8_t *>([coverage_buffer contents]);
+    const auto *surface_position_ptr = static_cast<const float *>([surface_position_buffer contents]);
     std::vector<uint8_t> base_color(base_ptr, base_ptr + base_bytes);
     std::vector<uint8_t> metallic_roughness(mr_ptr, mr_ptr + mr_bytes);
     std::vector<uint8_t> coverage(coverage_ptr, coverage_ptr + coverage_bytes);
+    const uint64_t surface_position_float_count = checked_mul(pixel_count, 3, "surface position float count");
+    std::vector<float> surface_positions(
+        surface_position_ptr,
+        surface_position_ptr + checked_size(surface_position_float_count, "surface position floats"));
+
+    ReferenceSampleStats reference_sample_stats;
+    if (source_projection_enabled) {
+      reference_sample_stats = apply_reference_projection_and_trilinear_sampling(
+          source_mesh,
+          surface_positions,
+          records,
+          origin,
+          resolved_voxel_size,
+          grid_z,
+          grid_y,
+          grid_x,
+          base_color,
+          metallic_roughness,
+          coverage);
+    }
 
     int64_t exact_missing_before_fill = 0;
     for (uint8_t value : coverage) {
@@ -882,12 +1429,14 @@ nb::dict bake_pbr_texture_metal(
         dilation_max_passes,
         &dilation_passes);
     int64_t surface_fill_seed_texels = 0;
+    int64_t surface_fill_cross_gap_prevented = 0;
     const int64_t surface_filled = fill_remaining_surface_texels(
         base_color,
         metallic_roughness,
         coverage,
         texture_size,
-        &surface_fill_seed_texels);
+        &surface_fill_seed_texels,
+        &surface_fill_cross_gap_prevented);
     constexpr int64_t gutter_fill_max_passes = 4;
     int64_t gutter_fill_passes = 0;
     const int64_t gutter_filled = fill_no_face_gutter_texels(
@@ -947,7 +1496,9 @@ nb::dict bake_pbr_texture_metal(
     stats["sampled_texel_count"] = sampled;
     stats["fallback_filled_texel_count"] = fallback_filled;
     stats["surface_fill_enabled"] = true;
+    stats["surface_fill_traversal_policy"] = "uv-surface-only-no-face-gap-blocked";
     stats["surface_fill_seed_texel_count"] = surface_fill_seed_texels;
+    stats["surface_fill_cross_gap_prevented_count"] = surface_fill_cross_gap_prevented;
     stats["surface_filled_texel_count"] = surface_filled_count;
     stats["surface_fill_filled_texel_count"] = surface_filled;
     stats["surface_unfilled_texel_count"] = missing + out_of_grid;
@@ -985,6 +1536,24 @@ nb::dict bake_pbr_texture_metal(
     stats["uv_bin_guard_passed"] = true;
     stats["fallback_radius"] = config.fallback_radius;
     stats["dilation_max_passes"] = dilation_max_passes;
+    stats["uv_raster_interpolate_reference"] = source_projection_enabled;
+    stats["source_projection_used"] = source_projection_enabled;
+    stats["source_projection_detail"] = source_projection_enabled ? "native_bvh" : "none";
+    stats["source_projection_source_vertices"] = reference_sample_stats.source_vertices;
+    stats["source_projection_source_faces"] = reference_sample_stats.source_faces;
+    stats["source_projection_bvh_nodes"] = reference_sample_stats.bvh_nodes;
+    stats["source_projection_input_texel_count"] = reference_sample_stats.uv_surface_texels;
+    stats["source_projection_projected_texel_count"] = reference_sample_stats.projected_texels;
+    stats["source_projection_returns_face_id"] = source_projection_enabled;
+    stats["source_projection_returns_barycentric"] = source_projection_enabled;
+    stats["source_projection_max_distance"] = reference_sample_stats.max_projection_distance;
+    stats["sampling_mode"] = source_projection_enabled ? "trilinear" : "nearest";
+    stats["nearest_fallback_enabled"] = !source_projection_enabled;
+    stats["trilinear_sampled_texel_count"] = reference_sample_stats.trilinear_sampled_texels;
+    stats["trilinear_missing_corner_texel_count"] = reference_sample_stats.trilinear_missing_corner_texels;
+    stats["trilinear_out_of_grid_corner_texel_count"] = reference_sample_stats.trilinear_out_of_grid_corner_texels;
+    stats["trilinear_invalid_texel_count"] = reference_sample_stats.trilinear_invalid_texels;
+    stats["postprocess_mode"] = "native-dilation-and-surface-fill";
 
     nb::dict result;
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);

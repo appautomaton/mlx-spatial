@@ -105,5 +105,7 @@ NB_MODULE(_native, module) {
              nb::arg("atlas_faces_per_tile") = 0,
              nb::arg("tile_padding") = 0.08,
              nb::arg("max_texture_pixels") = 1048576,
+             nb::arg("source_vertices") = nb::none(),
+             nb::arg("source_faces") = nb::none(),
              "Bake PBR texture buffers with the Metal backend.");
 }

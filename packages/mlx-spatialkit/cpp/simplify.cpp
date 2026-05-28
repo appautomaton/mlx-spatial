@@ -65,6 +65,11 @@ struct ClusterResult {
   int64_t duplicate_faces_removed = 0;
   int64_t nonmanifold_faces_removed = 0;
   int64_t representative_vertices_selected = 0;
+  int64_t quadric_representative_candidates_evaluated = 0;
+  int64_t quadric_representative_nonfinite_candidates = 0;
+  double quadric_representative_error_sum = 0.0;
+  double quadric_representative_error_max = 0.0;
+  std::string representative_selection_strategy = "not_requested";
 };
 
 struct SmallLoopFillResult {
@@ -81,6 +86,8 @@ struct SmallLoopFillResult {
   int64_t loops_rejected = 0;
   int64_t loops_rejected_ordering = 0;
   int64_t loops_rejected_triangulation = 0;
+  int64_t loops_rejected_perimeter = 0;
+  int64_t loops_rejected_edge_cap = 0;
   int64_t loops_rejected_fallback_cap = 0;
   int64_t loops_rejected_degenerate = 0;
   int64_t loops_rejected_duplicate = 0;
@@ -105,11 +112,16 @@ struct BackendSelection {
   bool topology_aware = false;
 };
 
-constexpr const char *kSmallBoundaryLoopFillAlgorithm = "projected-ear-clipping";
-constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "centroid-fan";
-constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 8;
-constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 6;
-constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 2;
+struct Quadric {
+  std::array<double, 16> values{};
+};
+
+constexpr const char *kSmallBoundaryLoopFillAlgorithm = "cumesh-perimeter-centroid-fan";
+constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "disabled";
+constexpr double kSmallBoundaryLoopFillMaxPerimeter = 3.0e-2;
+constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 0;
+constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 0;
+constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 1;
 constexpr size_t kSmallBoundaryAlternativeTriangulationMaxVariants = 256;
 
 enum class PatchRejectReason {
@@ -157,6 +169,77 @@ int64_t cluster_axis(float value, float min_value, float max_value, int64_t grid
   return std::clamp<int64_t>(index, 0, grid_resolution - 1);
 }
 
+void add_plane_to_quadric(Quadric &quadric, const std::array<double, 4> &plane) {
+  for (size_t row = 0; row < 4; ++row) {
+    for (size_t col = 0; col < 4; ++col) {
+      quadric.values[row * 4 + col] += plane[row] * plane[col];
+    }
+  }
+}
+
+void add_quadric(Quadric &left, const Quadric &right) {
+  for (size_t index = 0; index < left.values.size(); ++index) {
+    left.values[index] += right.values[index];
+  }
+}
+
+double evaluate_quadric(const Quadric &quadric, const std::array<float, 3> &vertex) {
+  const std::array<double, 4> value{
+      static_cast<double>(vertex[0]),
+      static_cast<double>(vertex[1]),
+      static_cast<double>(vertex[2]),
+      1.0,
+  };
+  double result = 0.0;
+  for (size_t row = 0; row < 4; ++row) {
+    double row_value = 0.0;
+    for (size_t col = 0; col < 4; ++col) {
+      row_value += quadric.values[row * 4 + col] * value[col];
+    }
+    result += value[row] * row_value;
+  }
+  return result;
+}
+
+std::vector<Quadric> vertex_plane_quadrics(const mesh_common::MeshData &input) {
+  std::vector<Quadric> quadrics(input.vertices.size());
+  for (const auto &face : input.faces) {
+    const auto &a = input.vertices[static_cast<size_t>(face[0])];
+    const auto &b = input.vertices[static_cast<size_t>(face[1])];
+    const auto &c = input.vertices[static_cast<size_t>(face[2])];
+    const std::array<double, 3> ab{
+        static_cast<double>(b[0]) - static_cast<double>(a[0]),
+        static_cast<double>(b[1]) - static_cast<double>(a[1]),
+        static_cast<double>(b[2]) - static_cast<double>(a[2]),
+    };
+    const std::array<double, 3> ac{
+        static_cast<double>(c[0]) - static_cast<double>(a[0]),
+        static_cast<double>(c[1]) - static_cast<double>(a[1]),
+        static_cast<double>(c[2]) - static_cast<double>(a[2]),
+    };
+    std::array<double, 3> normal{
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    const double length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+    if (!std::isfinite(length) || length <= 1e-18) {
+      continue;
+    }
+    normal[0] /= length;
+    normal[1] /= length;
+    normal[2] /= length;
+    const double d =
+        -(normal[0] * static_cast<double>(a[0]) + normal[1] * static_cast<double>(a[1]) +
+          normal[2] * static_cast<double>(a[2]));
+    const std::array<double, 4> plane{normal[0], normal[1], normal[2], d};
+    for (int corner = 0; corner < 3; ++corner) {
+      add_plane_to_quadric(quadrics[static_cast<size_t>(face[corner])], plane);
+    }
+  }
+  return quadrics;
+}
+
 ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_resolution, bool representative_vertices) {
   const std::array<float, 3> min_bounds = mesh_min_bounds(input);
   const std::array<float, 3> max_bounds = mesh_max_bounds(input);
@@ -188,31 +271,74 @@ ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_reso
     accum.count += 1;
   }
 
+  ClusterResult result;
   mesh_common::MeshData output;
   output.vertices.reserve(accumulators.size());
   if (representative_vertices) {
-    std::vector<double> best_distances(accumulators.size(), std::numeric_limits<double>::infinity());
-    std::vector<std::array<float, 3>> representatives(accumulators.size(), {0.0f, 0.0f, 0.0f});
+    const std::vector<Quadric> vertex_quadrics = vertex_plane_quadrics(input);
+    std::vector<Quadric> cluster_quadrics(accumulators.size());
+    std::vector<std::vector<size_t>> cluster_members(accumulators.size());
+    for (auto &members : cluster_members) {
+      members.reserve(8);
+    }
     for (size_t index = 0; index < input.vertices.size(); ++index) {
       const int64_t cluster_id = vertex_to_cluster[index];
+      if (cluster_id < 0) {
+        continue;
+      }
+      cluster_members[static_cast<size_t>(cluster_id)].push_back(index);
+      add_quadric(cluster_quadrics[static_cast<size_t>(cluster_id)], vertex_quadrics[index]);
+    }
+    std::vector<std::array<float, 3>> representatives(accumulators.size(), {0.0f, 0.0f, 0.0f});
+    for (size_t cluster_id = 0; cluster_id < cluster_members.size(); ++cluster_id) {
       const ClusterAccum &accum = accumulators[static_cast<size_t>(cluster_id)];
       const double denom = static_cast<double>(std::max<int64_t>(1, accum.count));
       const double cx = accum.x / denom;
       const double cy = accum.y / denom;
       const double cz = accum.z / denom;
-      const auto &vertex = input.vertices[index];
-      const double dx = static_cast<double>(vertex[0]) - cx;
-      const double dy = static_cast<double>(vertex[1]) - cy;
-      const double dz = static_cast<double>(vertex[2]) - cz;
-      const double distance = dx * dx + dy * dy + dz * dz;
-      if (distance < best_distances[static_cast<size_t>(cluster_id)]) {
-        best_distances[static_cast<size_t>(cluster_id)] = distance;
-        representatives[static_cast<size_t>(cluster_id)] = vertex;
+      double best_error = std::numeric_limits<double>::infinity();
+      double best_distance = std::numeric_limits<double>::infinity();
+      size_t best_source_index = std::numeric_limits<size_t>::max();
+      for (size_t source_index : cluster_members[cluster_id]) {
+        const auto &vertex = input.vertices[source_index];
+        double error = evaluate_quadric(cluster_quadrics[cluster_id], vertex);
+        if (!std::isfinite(error)) {
+          result.quadric_representative_nonfinite_candidates += 1;
+          error = std::numeric_limits<double>::infinity();
+        }
+        const double dx = static_cast<double>(vertex[0]) - cx;
+        const double dy = static_cast<double>(vertex[1]) - cy;
+        const double dz = static_cast<double>(vertex[2]) - cz;
+        const double distance = dx * dx + dy * dy + dz * dz;
+        result.quadric_representative_candidates_evaluated += 1;
+        if (error < best_error - 1e-18 ||
+            (std::fabs(error - best_error) <= 1e-18 && distance < best_distance - 1e-18) ||
+            (std::fabs(error - best_error) <= 1e-18 && std::fabs(distance - best_distance) <= 1e-18 &&
+             source_index < best_source_index)) {
+          best_error = error;
+          best_distance = distance;
+          best_source_index = source_index;
+        }
+      }
+      if (best_source_index == std::numeric_limits<size_t>::max()) {
+        representatives[cluster_id] = {
+            static_cast<float>(cx),
+            static_cast<float>(cy),
+            static_cast<float>(cz),
+        };
+      } else {
+        representatives[cluster_id] = input.vertices[best_source_index];
+        if (std::isfinite(best_error)) {
+          result.quadric_representative_error_sum += best_error;
+          result.quadric_representative_error_max =
+              std::max(result.quadric_representative_error_max, best_error);
+        }
       }
     }
     for (const auto &representative : representatives) {
       output.vertices.push_back(representative);
     }
+    result.representative_selection_strategy = "cluster_quadric_error_minimizer";
   } else {
     for (const auto &accum : accumulators) {
       const double denom = static_cast<double>(std::max<int64_t>(1, accum.count));
@@ -229,7 +355,6 @@ ClusterResult cluster_mesh(const mesh_common::MeshData &input, int64_t grid_reso
   std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> edge_usage;
   edge_usage.reserve(input.faces.size() * 3);
   output.faces.reserve(input.faces.size());
-  ClusterResult result;
   for (const auto &face : input.faces) {
     std::array<int64_t, 3> remapped{
         vertex_to_cluster[static_cast<size_t>(face[0])],
@@ -630,20 +755,53 @@ std::vector<std::array<int64_t, 3>> centroid_fan_loop_patch(
   return patch_faces;
 }
 
-std::array<float, 3> loop_centroid(const mesh_common::MeshData &mesh, const std::vector<int64_t> &loop) {
-  std::array<double, 3> centroid{0.0, 0.0, 0.0};
-  for (const int64_t vertex_id : loop) {
-    const auto &vertex = mesh.vertices[static_cast<size_t>(vertex_id)];
-    centroid[0] += vertex[0];
-    centroid[1] += vertex[1];
-    centroid[2] += vertex[2];
+double loop_perimeter(const mesh_common::MeshData &mesh, const std::vector<int64_t> &loop) {
+  if (loop.size() < 3) {
+    return 0.0;
+  }
+  double perimeter = 0.0;
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const auto &left = mesh.vertices[static_cast<size_t>(loop[index])];
+    const auto &right = mesh.vertices[static_cast<size_t>(loop[(index + 1) % loop.size()])];
+    const double dx = static_cast<double>(right[0]) - static_cast<double>(left[0]);
+    const double dy = static_cast<double>(right[1]) - static_cast<double>(left[1]);
+    const double dz = static_cast<double>(right[2]) - static_cast<double>(left[2]);
+    perimeter += std::sqrt(dx * dx + dy * dy + dz * dz);
+  }
+  return perimeter;
+}
+
+std::array<float, 3> loop_boundary_midpoint_mean(const mesh_common::MeshData &mesh, const std::vector<int64_t> &loop) {
+  std::array<double, 3> center{0.0, 0.0, 0.0};
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const auto &left = mesh.vertices[static_cast<size_t>(loop[index])];
+    const auto &right = mesh.vertices[static_cast<size_t>(loop[(index + 1) % loop.size()])];
+    center[0] += (static_cast<double>(left[0]) + static_cast<double>(right[0])) * 0.5;
+    center[1] += (static_cast<double>(left[1]) + static_cast<double>(right[1])) * 0.5;
+    center[2] += (static_cast<double>(left[2]) + static_cast<double>(right[2])) * 0.5;
   }
   const double denom = static_cast<double>(std::max<size_t>(1, loop.size()));
   return {
-      static_cast<float>(centroid[0] / denom),
-      static_cast<float>(centroid[1] / denom),
-      static_cast<float>(centroid[2] / denom),
+      static_cast<float>(center[0] / denom),
+      static_cast<float>(center[1] / denom),
+      static_cast<float>(center[2] / denom),
   };
+}
+
+std::vector<std::array<int64_t, 3>> cumesh_centroid_fan_loop_patch(
+    const std::vector<int64_t> &loop,
+    int64_t center_vertex_id) {
+  if (loop.size() < 3) {
+    return {};
+  }
+
+  std::vector<std::array<int64_t, 3>> patch_faces;
+  patch_faces.reserve(loop.size());
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const mesh_common::EdgeKey edge = mesh_common::edge_key(loop[index], loop[(index + 1) % loop.size()]);
+    patch_faces.push_back({edge.b, edge.a, center_vertex_id});
+  }
+  return patch_faces;
 }
 
 void record_patch_rejection(SmallLoopFillResult &result, PatchRejectReason reason) {
@@ -832,10 +990,6 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
   if (result.face_budget <= 0 || result.mesh.faces.empty()) {
     return result;
   }
-  const int64_t fallback_max_edges = effective_repair_cap(max_loop_edges, kSmallBoundaryLoopFillFallbackMaxEdges);
-  const int64_t branched_cycle_max_edges =
-      effective_repair_cap(max_loop_edges, kSmallBoundaryBranchedCycleFillMaxEdges);
-
   std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> edge_counts =
       mesh_common::edge_counts(result.mesh.faces);
   std::unordered_map<int64_t, std::vector<int64_t>> adjacency;
@@ -863,88 +1017,50 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
     std::sort(neighbors.begin(), neighbors.end());
   }
 
-  auto apply_loop_patch = [&](const std::vector<int64_t> &loop, bool branched_cycle) {
+  auto apply_loop_patch = [&](const std::vector<int64_t> &loop) {
     result.loops_considered += 1;
-    if (branched_cycle) {
-      result.branched_cycle_candidates += 1;
-    }
     const int64_t loop_edges = static_cast<int64_t>(loop.size());
-
-    std::vector<std::array<int64_t, 3>> patch_faces = triangulate_loop_patch(result.mesh, loop);
-    bool centroid_fan_patch = false;
-    bool alternative_triangulation_patch = false;
+    const double perimeter = loop_perimeter(result.mesh, loop);
+    if (!std::isfinite(perimeter) || perimeter <= 0.0) {
+      result.loops_rejected += 1;
+      result.loops_rejected_degenerate += 1;
+      return;
+    }
+    if (perimeter >= kSmallBoundaryLoopFillMaxPerimeter) {
+      result.loops_rejected += 1;
+      result.loops_rejected_perimeter += 1;
+      return;
+    }
+    if (loop_edges > max_loop_edges) {
+      result.loops_rejected += 1;
+      result.loops_rejected_edge_cap += 1;
+      return;
+    }
+    result.loops_centroid_fan_attempted += 1;
+    const int64_t center_vertex_id = static_cast<int64_t>(result.mesh.vertices.size());
+    const std::array<float, 3> center = loop_boundary_midpoint_mean(result.mesh, loop);
+    if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
+      result.loops_rejected += 1;
+      result.loops_rejected_triangulation += 1;
+      return;
+    }
+    result.mesh.vertices.push_back(center);
+    std::vector<std::array<int64_t, 3>> patch_faces = cumesh_centroid_fan_loop_patch(loop, center_vertex_id);
     if (patch_faces.empty()) {
-      if (loop_edges > fallback_max_edges) {
-        result.loops_rejected += 1;
-        result.loops_rejected_fallback_cap += 1;
-        if (branched_cycle) {
-          result.branched_cycles_rejected += 1;
-        }
-        return;
-      }
-      result.loops_centroid_fan_attempted += 1;
-      const int64_t center_vertex_id = static_cast<int64_t>(result.mesh.vertices.size());
-      const std::array<float, 3> center = loop_centroid(result.mesh, loop);
-      if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
-        result.loops_rejected += 1;
-        result.loops_rejected_triangulation += 1;
-        if (branched_cycle) {
-          result.branched_cycles_rejected += 1;
-        }
-        return;
-      }
-      result.mesh.vertices.push_back(center);
-      patch_faces = centroid_fan_loop_patch(result.mesh, loop, center_vertex_id);
-      centroid_fan_patch = true;
-      if (patch_faces.empty()) {
-        result.mesh.vertices.pop_back();
-        result.loops_rejected += 1;
-        result.loops_rejected_triangulation += 1;
-        if (branched_cycle) {
-          result.branched_cycles_rejected += 1;
-        }
-        return;
-      }
+      result.mesh.vertices.pop_back();
+      result.loops_rejected += 1;
+      result.loops_rejected_triangulation += 1;
+      return;
     }
-
     PatchRejectReason reject_reason = validate_patch_faces(result.mesh, patch_faces, seen_faces, edge_counts);
-    if (!centroid_fan_patch
-        && (reject_reason == PatchRejectReason::duplicate || reject_reason == PatchRejectReason::nonmanifold)) {
-      std::vector<std::vector<std::array<int64_t, 3>>> variants =
-          triangulate_loop_patch_variants(result.mesh, loop, kSmallBoundaryAlternativeTriangulationMaxVariants);
-      if (variants.size() > 1) {
-        result.loops_alternative_triangulation_attempted += 1;
-      }
-      for (const auto &variant : variants) {
-        const PatchRejectReason variant_reject =
-            validate_patch_faces(result.mesh, variant, seen_faces, edge_counts);
-        if (variant_reject == PatchRejectReason::none) {
-          patch_faces = variant;
-          alternative_triangulation_patch = true;
-          reject_reason = PatchRejectReason::none;
-          break;
-        }
-      }
-    }
-
     if (reject_reason != PatchRejectReason::none) {
-      if (centroid_fan_patch) {
-        result.mesh.vertices.pop_back();
-      }
+      result.mesh.vertices.pop_back();
       record_patch_rejection(result, reject_reason);
-      if (branched_cycle) {
-        result.branched_cycles_rejected += 1;
-      }
       return;
     }
     if (static_cast<int64_t>(patch_faces.size()) > result.face_budget - result.faces_added) {
-      if (centroid_fan_patch) {
-        result.mesh.vertices.pop_back();
-      }
+      result.mesh.vertices.pop_back();
       result.loops_budget_limited += 1;
-      if (branched_cycle) {
-        result.branched_cycles_budget_limited += 1;
-      }
       return;
     }
     for (const auto &face : patch_faces) {
@@ -958,17 +1074,7 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
     }
     result.faces_added += static_cast<int64_t>(patch_faces.size());
     result.loops_filled += 1;
-    if (branched_cycle) {
-      result.branched_cycles_filled += 1;
-    }
-    if (centroid_fan_patch) {
-      result.loops_filled_by_centroid_fan += 1;
-    } else {
-      result.loops_filled_by_ear_clipping += 1;
-      if (alternative_triangulation_patch) {
-        result.loops_filled_by_alternative_triangulation += 1;
-      }
-    }
+    result.loops_filled_by_centroid_fan += 1;
   };
 
   std::unordered_set<int64_t> visited;
@@ -1019,9 +1125,6 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
       continue;
     }
     if (closed) {
-      if (component_edges > max_loop_edges) {
-        continue;
-      }
       const std::vector<int64_t> loop = ordered_closed_loop(adjacency, component_vertices);
       if (loop.size() < 3 || static_cast<int64_t>(loop.size()) != component_edges) {
         result.loops_considered += 1;
@@ -1029,17 +1132,8 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
         result.loops_rejected_ordering += 1;
         continue;
       }
-      apply_loop_patch(loop, false);
+      apply_loop_patch(loop);
       continue;
-    }
-
-    if (branched_cycle_max_edges < 3) {
-      continue;
-    }
-    std::vector<std::vector<int64_t>> cycles =
-        branched_component_cycles(adjacency, component_vertices, branched_cycle_max_edges);
-    for (const auto &cycle : cycles) {
-      apply_loop_patch(cycle, true);
     }
   }
   return result;
@@ -1057,6 +1151,8 @@ void accumulate_fill_pass(SmallLoopFillResult &total, SmallLoopFillResult &&pass
   total.loops_rejected += pass.loops_rejected;
   total.loops_rejected_ordering += pass.loops_rejected_ordering;
   total.loops_rejected_triangulation += pass.loops_rejected_triangulation;
+  total.loops_rejected_perimeter += pass.loops_rejected_perimeter;
+  total.loops_rejected_edge_cap += pass.loops_rejected_edge_cap;
   total.loops_rejected_fallback_cap += pass.loops_rejected_fallback_cap;
   total.loops_rejected_degenerate += pass.loops_rejected_degenerate;
   total.loops_rejected_duplicate += pass.loops_rejected_duplicate;
@@ -1113,26 +1209,39 @@ BackendSelection resolve_backend(const std::string &backend) {
     return BackendSelection{
         "topology-aware",
         "topology-aware",
-        "native_topology_aware_representative_clustering",
+        "native_topology_aware_quadric_representative_clustering",
         true,
     };
   }
   throw nb::value_error("simplifier backend must be 'spatial-cluster' or 'topology-aware'");
 }
 
-nb::list production_blockers(const BackendSelection &selection, int64_t final_faces, bool target_reached) {
-  nb::list blockers;
+std::vector<std::string> production_blocker_values(
+    const BackendSelection &selection,
+    int64_t final_faces,
+    bool target_reached) {
+  std::vector<std::string> blockers;
   if (!selection.topology_aware) {
-    blockers.append("preview_backend_tier");
+    blockers.push_back("preview_backend_tier");
     return blockers;
   }
   if (final_faces <= 0) {
-    blockers.append("no_faces");
+    blockers.push_back("no_faces");
   }
   if (!target_reached) {
-    blockers.append("target_not_reached");
+    blockers.push_back("target_not_reached");
   }
+  blockers.push_back("missing_qem_edge_collapse_simplification");
+  blockers.push_back("missing_narrow_band_dc_remesh");
   return blockers;
+}
+
+nb::list string_list(const std::vector<std::string> &values) {
+  nb::list result;
+  for (const auto &value : values) {
+    result.append(value.c_str());
+  }
+  return result;
 }
 
 void add_backend_stats(
@@ -1140,16 +1249,26 @@ void add_backend_stats(
     const BackendSelection &selection,
     int64_t final_faces,
     bool target_reached) {
-  nb::list blockers = production_blockers(selection, final_faces, target_reached);
-  const bool production_ready = selection.topology_aware && final_faces > 0 && target_reached;
+  const std::vector<std::string> blockers = production_blocker_values(selection, final_faces, target_reached);
+  const bool production_ready = blockers.empty();
   stats["requested_backend"] = selection.requested;
   stats["backend"] = selection.backend;
   stats["algorithm"] = selection.algorithm;
   stats["quality_tier"] = production_ready ? "production" : (selection.topology_aware ? "production_candidate_blocked" : "geometry_aware_preview");
   stats["production_ready"] = production_ready;
-  stats["production_blockers"] = blockers;
+  stats["production_blockers"] = string_list(blockers);
   stats["backend_selection_status"] = "selected";
   stats["backend_selection_reason"] = selection.topology_aware ? "topology_aware_backend_requested" : "preview_backend_requested";
+  stats["remesh_backend"] = "not_implemented";
+  stats["remesh_equivalence_status"] = "blocked_missing_narrow_band_dc";
+  stats["qem_simplification_backend"] = "not_implemented";
+  stats["qem_equivalence_status"] = selection.topology_aware
+      ? "qem_scored_not_edge_collapse"
+      : "not_requested_preview_backend";
+  stats["reference_geometry_backend_status"] = production_ready
+      ? "reference_ready"
+      : "blocked_missing_reference_geometry";
+  stats["reference_geometry_blockers"] = string_list(blockers);
 }
 
 void add_small_loop_fill_stats(
@@ -1160,16 +1279,16 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loop_fill_enabled"] = enabled;
   stats["small_boundary_loop_fill_algorithm"] = kSmallBoundaryLoopFillAlgorithm;
   stats["small_boundary_loop_fill_fallback_algorithm"] = kSmallBoundaryLoopFillFallbackAlgorithm;
-  stats["small_boundary_loop_fill_fallback_enabled"] = enabled;
+  stats["small_boundary_loop_fill_fallback_enabled"] = false;
   stats["small_boundary_loop_fill_fallback_policy_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
   stats["small_boundary_loop_fill_fallback_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
   stats["small_boundary_loop_fill_fallback_effective_max_edges"] =
       enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryLoopFillFallbackMaxEdges) : 0;
-  stats["small_boundary_branched_cycle_fill_enabled"] = enabled;
+  stats["small_boundary_loop_fill_max_perimeter"] = kSmallBoundaryLoopFillMaxPerimeter;
+  stats["small_boundary_branched_cycle_fill_enabled"] = false;
   stats["small_boundary_branched_cycle_fill_policy_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
   stats["small_boundary_branched_cycle_fill_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
-  stats["small_boundary_branched_cycle_fill_effective_max_edges"] =
-      enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryBranchedCycleFillMaxEdges) : 0;
+  stats["small_boundary_branched_cycle_fill_effective_max_edges"] = 0;
   stats["small_boundary_loop_repair_max_passes"] = kSmallBoundaryLoopRepairMaxPasses;
   stats["small_boundary_loop_repair_pass_count"] = fill.repair_pass_count;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
@@ -1186,6 +1305,8 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loops_rejected"] = fill.loops_rejected;
   stats["small_boundary_loops_rejected_ordering"] = fill.loops_rejected_ordering;
   stats["small_boundary_loops_rejected_triangulation"] = fill.loops_rejected_triangulation;
+  stats["small_boundary_loops_rejected_perimeter"] = fill.loops_rejected_perimeter;
+  stats["small_boundary_loops_rejected_edge_cap"] = fill.loops_rejected_edge_cap;
   stats["small_boundary_loops_rejected_fallback_cap"] = fill.loops_rejected_fallback_cap;
   stats["small_boundary_loops_rejected_degenerate"] = fill.loops_rejected_degenerate;
   stats["small_boundary_loops_rejected_duplicate"] = fill.loops_rejected_duplicate;
@@ -1253,7 +1374,12 @@ nb::dict simplify_mesh(
     stats["min_component_faces"] = min_component_faces;
     stats["candidate_faces_considered"] = static_cast<int64_t>(input.faces.size());
     stats["accepted_faces"] = static_cast<int64_t>(compact.faces.size());
-    stats["representative_vertices_selected"] = selection.topology_aware ? static_cast<int64_t>(compact.vertices.size()) : 0;
+    stats["representative_vertices_selected"] = 0;
+    stats["representative_selection_strategy"] = selection.topology_aware ? "not_run_input_under_target" : "not_requested";
+    stats["quadric_representative_candidates_evaluated"] = 0;
+    stats["quadric_representative_nonfinite_candidates"] = 0;
+    stats["quadric_representative_error_sum"] = 0.0;
+    stats["quadric_representative_error_max"] = 0.0;
     result["stats"] = stats;
     return result;
   }
@@ -1318,6 +1444,11 @@ nb::dict simplify_mesh(
   stats["candidate_faces_considered"] = static_cast<int64_t>(input.faces.size());
   stats["accepted_faces"] = static_cast<int64_t>(simplified.faces.size());
   stats["representative_vertices_selected"] = best.representative_vertices_selected;
+  stats["representative_selection_strategy"] = best.representative_selection_strategy;
+  stats["quadric_representative_candidates_evaluated"] = best.quadric_representative_candidates_evaluated;
+  stats["quadric_representative_nonfinite_candidates"] = best.quadric_representative_nonfinite_candidates;
+  stats["quadric_representative_error_sum"] = best.quadric_representative_error_sum;
+  stats["quadric_representative_error_max"] = best.quadric_representative_error_max;
   result["stats"] = stats;
   return result;
 }

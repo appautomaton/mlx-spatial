@@ -372,6 +372,8 @@ def export_pixal3d_glb(
     del mesh
     gc.collect()
     sample("after_clean_mesh")
+    source_projection_vertices = cleaned.vertices
+    source_projection_faces = cleaned.faces
 
     simplified, simplify_stats = _timed_stage(
         diagnostics,
@@ -427,11 +429,13 @@ def export_pixal3d_glb(
             decode_resolution=texture_decode_resolution,
             voxel_size=texture_voxel_size,
             max_texture_pixels=resolved_max_texture_pixels,
+            source_vertices=source_projection_vertices,
+            source_faces=source_projection_faces,
         ),
         memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["texture_bake"].update(_texture_shape(baked))
-    del texture_coordinates, texture_attributes
+    del texture_coordinates, texture_attributes, source_projection_vertices, source_projection_faces
     gc.collect()
     sample("after_texture_bake")
 
@@ -445,6 +449,7 @@ def export_pixal3d_glb(
         baked.stats,
         reference,
         quality_preset=resolved_quality_preset,
+        uv_stats=uv_mesh.stats,
     )
     chart_uv_candidate = _native_chart_uv_candidate_status(
         uv_mesh.stats,
@@ -983,11 +988,19 @@ def _export_quality_summary(
     reference: dict[str, Any] | None = None,
     *,
     quality_preset: str = "preview",
+    uv_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blockers = tuple(str(item) for item in export_metrics.get("export_blocking_reasons", ()))
     simplifier_quality = str(simplify_stats.get("quality_tier", "unknown"))
     simplifier_backend = str(simplify_stats.get("backend", "unknown"))
     preset = _normalize_quality_preset(quality_preset)
+    reference_contract = _pixal3d_reference_stage_contract(
+        simplify_stats,
+        uv_stats or {},
+        texture_stats or {},
+        reference,
+        quality_preset=preset,
+    )
     thresholds = _production_thresholds(
         simplify_stats,
         export_metrics,
@@ -1004,17 +1017,229 @@ def _export_quality_summary(
         warnings.append("export_blocking_reasons_present")
     if not thresholds["all_passed"]:
         warnings.append("production_thresholds_failed")
+    if preset == "reference-target" and not bool(reference_contract["passed"]):
+        warnings.append("reference_stage_contract_incomplete")
     artifact_ready = len(blockers) == 0
+    production_quality_ready = (
+        artifact_ready
+        and bool(thresholds["all_passed"])
+        and bool(reference_contract["passed"])
+    )
     return {
         "artifact_ready": artifact_ready,
-        "production_quality_ready": artifact_ready and bool(thresholds["all_passed"]),
+        "production_quality_ready": production_quality_ready,
         "quality_preset": preset,
         "simplifier_backend": simplifier_backend,
         "simplifier_quality_tier": simplifier_quality,
+        "reference_stage_contract": reference_contract,
         "native_geometry_candidate": _native_geometry_candidate_status(simplify_stats, thresholds, preset),
         "export_blocking_reasons": blockers,
         "production_thresholds": thresholds,
         "warnings": tuple(warnings),
+    }
+
+
+def _stage_status(
+    *,
+    passed: bool,
+    status: str,
+    source: str,
+    spatialkit_backend: Any,
+    required: str,
+    detail: str,
+) -> dict[str, Any]:
+    return {
+        "passed": bool(passed),
+        "status": status,
+        "source": source,
+        "spatialkit_backend": spatialkit_backend,
+        "required": required,
+        "detail": detail,
+    }
+
+
+def _pixal3d_reference_stage_contract(
+    simplify_stats: dict[str, Any],
+    uv_stats: dict[str, Any],
+    texture_stats: dict[str, Any],
+    reference: dict[str, Any] | None,
+    *,
+    quality_preset: str,
+) -> dict[str, Any]:
+    """Report whether the current export path satisfies the Pixal3D reference stages."""
+
+    preset = _normalize_quality_preset(quality_preset)
+    if preset != "reference-target":
+        return {
+            "status": "not_requested",
+            "passed": None,
+            "quality_preset": preset,
+            "required_stage_names": (),
+            "blockers": (),
+            "heuristic_stage_names": (),
+            "stages": {},
+        }
+
+    simplifier_backend = str(simplify_stats.get("backend", "unknown"))
+    simplifier_algorithm = str(simplify_stats.get("algorithm", "unknown"))
+    simplifier_quality = str(simplify_stats.get("quality_tier", "unknown"))
+    hole_fill_algorithm = str(simplify_stats.get("small_boundary_loop_fill_algorithm", "unknown"))
+    hole_fill_fallback = str(simplify_stats.get("small_boundary_loop_fill_fallback_algorithm", "unknown"))
+    uv_backend = str(uv_stats.get("backend", "unknown"))
+    texture_backend = str(texture_stats.get("backend", "unknown"))
+    sampling_mode = str(texture_stats.get("sampling_mode", "nearest"))
+    source_projection_used = texture_stats.get("source_projection_used")
+    source_projection_detail = texture_stats.get("source_projection_detail")
+    seam_fill_mode = str(texture_stats.get("postprocess_mode", "native-dilation-and-surface-fill"))
+    reference_available = reference is not None
+    xatlas_backend = str(reference.get("unwrap_backend", "")) if reference is not None else ""
+
+    hole_fill_reference = hole_fill_algorithm in {
+        "perimeter-centroid-fan",
+        "cumesh-perimeter-centroid-fan",
+    }
+    remesh_reference = str(simplify_stats.get("remesh_backend", "")) in {
+        "narrow-band-dc",
+        "cumesh-narrow-band-dc",
+    }
+    simplify_reference = (
+        simplifier_quality == "production"
+        and ("qem" in simplifier_algorithm or "edge-collapse" in simplifier_algorithm)
+    )
+    unwrap_reference = uv_backend.startswith("xatlas")
+    raster_reference = bool(texture_stats.get("uv_raster_interpolate_reference"))
+    projection_reference = source_projection_used is True
+    sampling_reference = sampling_mode == "trilinear"
+    postprocess_reference = seam_fill_mode in {
+        "telea-inpaint",
+        "inpaint-equivalent",
+        "reference-inpaint-equivalent",
+    }
+
+    stages = {
+        "reference_trace": _stage_status(
+            passed=reference_available,
+            status="available" if reference_available else "missing",
+            source="inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/trace.json",
+            spatialkit_backend=reference.get("trace_path") if reference is not None else None,
+            required="reference Pixal3D GLB trace available",
+            detail="Reference trace anchors face count, xatlas metrics, texture size, and visual comparison.",
+        ),
+        "decoded_npz_validation": _stage_status(
+            passed=True,
+            status="native_contract",
+            source="packages/mlx-spatialkit/cpp/pixal3d_contracts.cpp",
+            spatialkit_backend="native_pixal3d_contracts",
+            required="decoded shape and texture NPZ native validation",
+            detail="Reaching export quality summary requires decoded arrays to pass native contract checks.",
+        ),
+        "flexi_dual_grid_extract": _stage_status(
+            passed=True,
+            status="native_port",
+            source="vendors/TRELLIS.2/o-voxel/src/convert",
+            spatialkit_backend="native_flexi_dual_grid",
+            required="o-voxel compatible mesh extraction",
+            detail="Mesh extraction is already a native spatialkit boundary.",
+        ),
+        "cumesh_hole_fill_cleanup": _stage_status(
+            passed=hole_fill_reference,
+            status="reference_matched" if hole_fill_reference else "heuristic_quarantined",
+            source="/tmp/CuMesh/src/clean_up.cu:450",
+            spatialkit_backend={
+                "algorithm": hole_fill_algorithm,
+                "fallback_algorithm": hole_fill_fallback,
+            },
+            required="perimeter-limited centroid-fan boundary-loop fill",
+            detail="Current projected ear-clipping or branch-cycle repair cannot claim CuMesh hole-fill parity.",
+        ),
+        "narrow_band_dc_remesh": _stage_status(
+            passed=remesh_reference,
+            status="reference_matched" if remesh_reference else "missing_or_deferred",
+            source="/tmp/CuMesh/cumesh/remeshing.py:24",
+            spatialkit_backend=simplify_stats.get("remesh_backend"),
+            required="narrow-band dual contour remesh or measured equivalent",
+            detail="Pixal3D's export path uses remesh=True with remesh_band=1.",
+        ),
+        "qem_simplification": _stage_status(
+            passed=simplify_reference,
+            status="reference_matched" if simplify_reference else "heuristic_quarantined",
+            source="/tmp/CuMesh/src/simplify.cu:531",
+            spatialkit_backend={
+                "backend": simplifier_backend,
+                "algorithm": simplifier_algorithm,
+                "quality_tier": simplifier_quality,
+            },
+            required="QEM-like edge-collapse simplification",
+            detail="Topology-aware clustering remains non-reference until the simplifier is QEM-like or explicitly proven equivalent.",
+        ),
+        "xatlas_unwrap": _stage_status(
+            passed=unwrap_reference,
+            status="reference_matched" if unwrap_reference else "heuristic_quarantined",
+            source="/tmp/CuMesh/cumesh/cumesh.py:408",
+            spatialkit_backend={
+                "uv_backend": uv_backend,
+                "chart_cluster_normal_policy": uv_stats.get("chart_cluster_normal_policy"),
+                "requires_xatlas_dependency": False,
+            },
+            required="xatlas/CuMesh behavior-compatible unwrap without an unapproved required xatlas dependency",
+            detail=(
+                f"Reference unwrap backend is {xatlas_backend or 'unknown'}; native chart remains a measured "
+                "behavior candidate until chart, coverage, seam, and visual checks prove equivalence."
+            ),
+        ),
+        "uv_raster_interpolate": _stage_status(
+            passed=raster_reference,
+            status="reference_matched" if raster_reference else "behavior_gap",
+            source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:229",
+            spatialkit_backend=texture_backend,
+            required="UV-space rasterize and barycentric interpolation equivalent to nvdiffrast behavior",
+            detail="Metal raster/interpolate must be behavior-equivalent without copying nvdiffrast CUDA code.",
+        ),
+        "original_mesh_bvh_projection": _stage_status(
+            passed=projection_reference,
+            status="reference_matched" if projection_reference else "missing_or_deferred",
+            source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:252",
+            spatialkit_backend=source_projection_detail,
+            required="project UV-sampled positions back to original high-resolution mesh before voxel sampling",
+            detail="This is the main guard against texture smear after simplification or remeshing.",
+        ),
+        "trilinear_pbr_sampling": _stage_status(
+            passed=sampling_reference,
+            status="reference_matched" if sampling_reference else "heuristic_quarantined",
+            source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:258",
+            spatialkit_backend=sampling_mode,
+            required="trilinear sparse-grid PBR voxel sampling",
+            detail="Nearest-voxel sampling and broad fallback fill cannot claim Pixal3D sampling parity.",
+        ),
+        "texture_postprocess": _stage_status(
+            passed=postprocess_reference,
+            status="reference_matched" if postprocess_reference else "heuristic_quarantined",
+            source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:287",
+            spatialkit_backend={
+                "postprocess_mode": seam_fill_mode,
+                "surface_fill_enabled": texture_stats.get("surface_fill_enabled"),
+                "gutter_fill_enabled": texture_stats.get("gutter_fill_enabled"),
+            },
+            required="reference-like texture inpaint/fill with sample/fill diagnostics",
+            detail="Native dilation, BFS surface fill, and gutter fill are useful diagnostics but remain quarantined until reference-equivalent.",
+        ),
+    }
+    required_stage_names = tuple(stages)
+    blockers = tuple(name for name in required_stage_names if not bool(stages[name]["passed"]))
+    heuristic_stage_names = tuple(
+        name
+        for name in required_stage_names
+        if str(stages[name]["status"]) in {"heuristic_quarantined", "behavior_gap"}
+    )
+    return {
+        "status": "reference_ready" if not blockers else "blocked",
+        "passed": not blockers,
+        "quality_preset": preset,
+        "policy": "Pixal3D production quality requires every reference-critical export stage to pass or be proven equivalent.",
+        "required_stage_names": required_stage_names,
+        "blockers": blockers,
+        "heuristic_stage_names": heuristic_stage_names,
+        "stages": stages,
     }
 
 
@@ -1091,6 +1316,11 @@ def _native_chart_uv_candidate_status(
     surface_unfilled_texels = _maybe_int(texture_stats.get("surface_unfilled_texel_count"))
     texture_pixel_count = _maybe_int(texture_stats.get("texture_pixel_count"))
     uv_surface_texel_count = _maybe_int(texture_stats.get("uv_surface_texel_count"))
+    chart_rect_fill_ratio = _maybe_float(uv_stats.get("chart_rect_fill_ratio"))
+    atlas_rect_coverage_ratio = _maybe_float(uv_stats.get("atlas_rect_coverage_ratio"))
+    shelf_packing_efficiency = _maybe_float(uv_stats.get("shelf_packing_efficiency"))
+    duplicated_vertex_ratio = _maybe_float(uv_stats.get("duplicated_vertex_ratio"))
+    chart_cluster_normal_policy = str(uv_stats.get("chart_cluster_normal_policy", "unknown"))
     uv_surface_occupancy = None
     if texture_pixel_count not in (None, 0) and uv_surface_texel_count is not None:
         uv_surface_occupancy = float(uv_surface_texel_count) / float(texture_pixel_count)
@@ -1176,7 +1406,7 @@ def _native_chart_uv_candidate_status(
         "chart_count": _maybe_int(uv_stats.get("chart_count")),
         "output_vertices": _maybe_int(uv_stats.get("output_vertices")),
         "output_faces": _maybe_int(uv_stats.get("output_faces")),
-        "duplicated_vertex_ratio": _maybe_float(uv_stats.get("duplicated_vertex_ratio")),
+        "duplicated_vertex_ratio": duplicated_vertex_ratio,
         "global_coverage_ratio": final_coverage,
         "raw_coverage_ratio": raw_coverage,
         "uv_surface_occupancy_ratio": uv_surface_occupancy,
@@ -1188,6 +1418,24 @@ def _native_chart_uv_candidate_status(
         "texture_pixel_count": texture_pixel_count,
         "uv_bin_face_reference_count": _maybe_int(texture_stats.get("uv_bin_face_reference_count")),
         "uv_bin_max_candidate_faces": _maybe_int(texture_stats.get("uv_bin_max_candidate_faces")),
+        "native_behavior_diagnostics": {
+            "policy": "CuMesh/xatlas behavior metrics without required xatlas dependency",
+            "requires_xatlas_dependency": False,
+            "cluster_normal_policy": chart_cluster_normal_policy,
+            "chart_cone_half_angle_degrees": _maybe_float(uv_stats.get("chart_cone_half_angle_degrees")),
+            "chart_edge_rejected_adjacency_count": _maybe_int(uv_stats.get("chart_edge_rejected_adjacency_count")),
+            "chart_cone_rejected_adjacency_count": _maybe_int(uv_stats.get("chart_cone_rejected_adjacency_count")),
+            "packing": str(uv_stats.get("packing", "unknown")),
+            "chart_rect_fill_ratio": chart_rect_fill_ratio,
+            "atlas_rect_coverage_ratio": atlas_rect_coverage_ratio,
+            "shelf_packing_efficiency": shelf_packing_efficiency,
+            "duplicated_vertex_ratio": duplicated_vertex_ratio,
+            "seam_island_risk": {
+                "status": "measured",
+                "seam_proxy": "duplicated seam vertices plus chart count",
+                "island_proxy": "chart count, chart rect fill, atlas rect coverage, and UV surface occupancy",
+            },
+        },
         "checks": checks,
         "artifact_blockers": artifact_blockers,
         "quality_blockers": quality_blockers,
@@ -1683,6 +1931,8 @@ def _production_equivalence_summary(
 ) -> dict[str, Any]:
     artifact_ready = bool(quality.get("artifact_ready"))
     scalar_quality_ready = bool(quality.get("production_quality_ready"))
+    reference_contract = quality.get("reference_stage_contract", {})
+    reference_contract_ready = bool(reference_contract.get("passed"))
     upstream_settings = quality.get("upstream_export_settings", {})
     upstream_settings_ready = bool(upstream_settings.get("all_passed"))
     xatlas_parity = quality.get("xatlas_chart_parity", {})
@@ -1694,6 +1944,8 @@ def _production_equivalence_summary(
     remaining_boundaries: list[str] = []
     if visual_comparison is not None:
         remaining_boundaries.extend(str(item) for item in visual_comparison.get("deferred_parity_boundaries", ()))
+    if not reference_contract_ready:
+        remaining_boundaries.append("not_reference_stage_contract")
     if not upstream_settings_ready:
         remaining_boundaries.append("not_1m_face_export_setting_parity")
     if not xatlas_chart_parity_ready:
@@ -1705,6 +1957,8 @@ def _production_equivalence_summary(
         blockers.append("artifact_not_ready")
     if not scalar_quality_ready:
         blockers.append("scalar_production_quality_not_ready")
+    if not reference_contract_ready:
+        blockers.append("reference_stage_contract_not_ready")
     if not upstream_settings_ready:
         blockers.append("upstream_export_settings_not_ready")
     if not xatlas_chart_parity_ready:
@@ -1720,6 +1974,7 @@ def _production_equivalence_summary(
     ready = (
         artifact_ready
         and scalar_quality_ready
+        and reference_contract_ready
         and upstream_settings_ready
         and xatlas_chart_parity_ready
         and visual_comparison_ready
@@ -1729,6 +1984,7 @@ def _production_equivalence_summary(
         "ready": ready,
         "artifact_ready": artifact_ready,
         "scalar_production_quality_ready": scalar_quality_ready,
+        "reference_stage_contract_ready": reference_contract_ready,
         "upstream_export_settings_ready": upstream_settings_ready,
         "xatlas_chart_parity_ready": xatlas_chart_parity_ready,
         "visual_comparison_available": visual_available,
@@ -1740,6 +1996,11 @@ def _production_equivalence_summary(
             "scalar_production_quality_ready": {
                 "passed": scalar_quality_ready,
                 "actual": scalar_quality_ready,
+                "required": True,
+            },
+            "reference_stage_contract_ready": {
+                "passed": reference_contract_ready,
+                "actual": reference_contract_ready,
                 "required": True,
             },
             "upstream_export_settings_ready": {

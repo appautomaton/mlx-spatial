@@ -189,6 +189,41 @@ def test_make_native_chart_uvs_splits_hard_crease() -> None:
     assert np.all(mesh.uvs <= 1.0)
 
 
+def test_make_native_chart_uvs_limits_curved_surface_normal_drift() -> None:
+    vertices: list[list[float]] = []
+    for angle_degrees in range(0, 121, 20):
+        angle = np.deg2rad(float(angle_degrees))
+        x = float(np.sin(angle))
+        z = float(np.cos(angle))
+        vertices.append([x, 0.0, z])
+        vertices.append([x, 1.0, z])
+
+    faces: list[list[int]] = []
+    for segment in range((len(vertices) // 2) - 1):
+        lower_left = segment * 2
+        upper_left = lower_left + 1
+        lower_right = lower_left + 2
+        upper_right = lower_left + 3
+        faces.append([lower_left, lower_right, upper_left])
+        faces.append([upper_left, lower_right, upper_right])
+
+    mesh = make_native_chart_uvs(
+        np.asarray(vertices, dtype=np.float32),
+        np.asarray(faces, dtype=np.int64),
+        chart_angle_degrees=30.0,
+        tile_padding=0.02,
+    )
+
+    assert mesh.stats["backend"] == "native-chart-atlas"
+    assert mesh.stats["chart_cluster_normal_policy"] == "edge-and-seed-cone"
+    assert mesh.stats["source_chart_count"] > 1
+    assert mesh.stats["chart_cone_rejected_adjacency_count"] > 0
+    assert mesh.stats["chart_normal_cos_threshold"] == pytest.approx(np.cos(np.deg2rad(30.0)))
+    assert mesh.stats["output_vertices"] > mesh.stats["source_vertices"]
+    assert np.all(mesh.uvs >= 0.0)
+    assert np.all(mesh.uvs <= 1.0)
+
+
 def test_make_native_chart_uvs_local_projection_fills_rotated_rectangle() -> None:
     width = 4.0
     height = 1.0

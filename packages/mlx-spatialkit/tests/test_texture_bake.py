@@ -90,7 +90,9 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     assert baked.stats["sampled_texel_count"] > 0
     assert baked.stats["fallback_filled_texel_count"] >= 0
     assert baked.stats["surface_fill_enabled"] is True
+    assert baked.stats["surface_fill_traversal_policy"] == "uv-surface-only-no-face-gap-blocked"
     assert baked.stats["surface_fill_seed_texel_count"] > 0
+    assert baked.stats["surface_fill_cross_gap_prevented_count"] >= 0
     assert baked.stats["surface_filled_texel_count"] >= 0
     assert baked.stats["surface_fill_filled_texel_count"] == baked.stats["surface_filled_texel_count"]
     assert baked.stats["uv_surface_texel_count"] == (
@@ -196,6 +198,60 @@ def test_bake_pbr_texture_metal_supports_provided_uv_scan_path() -> None:
     np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([255, 0, 0, 255], dtype=np.uint8))
 
 
+def test_bake_pbr_texture_projects_to_source_mesh_and_samples_trilinear() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.8],
+                [1.0, 0.0, 0.8],
+                [0.0, 1.0, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    source_vertices = mesh.vertices.copy()
+    source_vertices[:, 2] = 0.0
+    source_faces = mesh.faces.copy()
+
+    coordinates = []
+    attributes = []
+    for z in range(2):
+        for y in range(2):
+            for x in range(2):
+                coordinates.append([0, z, y, x])
+                attributes.append([float(x), float(y), float(z), 0.0, 0.5, 1.0])
+
+    baked = bake_pbr_texture(
+        mesh,
+        np.asarray(coordinates, dtype=np.int32),
+        np.asarray(attributes, dtype=np.float32),
+        texture_size=2,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        source_vertices=source_vertices,
+        source_faces=source_faces,
+    )
+
+    assert baked.stats["uv_raster_interpolate_reference"] is True
+    assert baked.stats["source_projection_used"] is True
+    assert baked.stats["source_projection_detail"] == "native_bvh"
+    assert baked.stats["source_projection_source_faces"] == 1
+    assert baked.stats["source_projection_projected_texel_count"] > 0
+    assert baked.stats["source_projection_returns_face_id"] is True
+    assert baked.stats["source_projection_returns_barycentric"] is True
+    assert baked.stats["sampling_mode"] == "trilinear"
+    assert baked.stats["nearest_fallback_enabled"] is False
+    assert baked.stats["trilinear_sampled_texel_count"] > 0
+    np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([64, 64, 0, 255], dtype=np.uint8))
+
+
 def test_bake_pbr_texture_metal_uses_binned_path_for_native_chart_uvs() -> None:
     vertices = np.array(
         [
@@ -268,6 +324,8 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
     assert baked.stats["missing_texel_count"] >= 0
     assert baked.stats["fallback_filled_texel_count"] > 0
     assert baked.stats["surface_fill_enabled"] is True
+    assert baked.stats["surface_fill_traversal_policy"] == "uv-surface-only-no-face-gap-blocked"
+    assert baked.stats["surface_fill_cross_gap_prevented_count"] > 0
     assert baked.stats["surface_filled_texel_count"] > 0
     assert baked.stats["surface_unfilled_texel_count"] == (
         baked.stats["missing_texel_count"] + baked.stats["out_of_grid_texel_count"]
