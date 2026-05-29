@@ -79,10 +79,24 @@ def test_compare_textured_glbs_writes_report_and_preview_artifacts(tmp_path: Pat
     report = compare_textured_glbs(candidate, reference, output_dir=output_dir)
 
     assert report["summary"]["all_passed"] is True
+    assert report["summary"]["comparison_kind"] == "coarse_glb_structure_texture_heuristic"
+    assert report["summary"]["spatial_proof_ready"] is False
+    assert report["comparison_scope"] == {
+        "kind": "coarse_glb_structure_texture_heuristic",
+        "spatial_proof": False,
+        "viewer_render_proof": False,
+        "texture_registration_proof": False,
+        "reason": (
+            "Checks compare GLB structure and embedded texture statistics only; they are not "
+            "spatially registered UV, rendered-view, or per-surface proof."
+        ),
+    }
     assert report["summary"]["face_count_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_alpha_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_rgb_coverage_ratio"] == pytest.approx(1.0)
     assert report["summary"]["base_color_raw_rgb_coverage_ratio"] == pytest.approx(1.0)
+    assert report["summary"]["base_color_visible_dark_ratio"] == pytest.approx(0.0)
+    assert report["summary"]["base_color_visible_grayish_ratio"] == pytest.approx(0.0)
     assert report["summary"]["texture_resolution_match"] is True
     assert report["deferred_parity_boundaries"] == [
         "not_xatlas_chart_parity",
@@ -95,7 +109,29 @@ def test_compare_textured_glbs_writes_report_and_preview_artifacts(tmp_path: Pat
     assert (output_dir / "reference_base_color.png").read_bytes().startswith(b"\x89PNG")
 
 
-def _write_fixture_glb(tmp_path: Path) -> Path:
+def test_compare_textured_glbs_fails_dim_gray_glossy_render_texture(tmp_path: Path) -> None:
+    reference_base = np.full((4, 4, 4), [128, 96, 64, 255], dtype=np.uint8)
+    reference_mr = np.full((4, 4, 3), [0, 255, 175], dtype=np.uint8)
+    candidate_base = np.full((4, 4, 4), [32, 32, 32, 255], dtype=np.uint8)
+    candidate_mr = np.full((4, 4, 3), [0, 32, 175], dtype=np.uint8)
+    candidate = _write_fixture_glb(tmp_path / "candidate", candidate_base, candidate_mr)
+    reference = _write_fixture_glb(tmp_path / "reference", reference_base, reference_mr)
+
+    report = compare_textured_glbs(candidate, reference)
+
+    assert report["summary"]["all_passed"] is False
+    assert report["checks"]["base_color_visible_grayish_ratio"]["passed"] is False
+    assert report["checks"]["roughness_mean_ratio"]["passed"] is False
+    assert report["checks"]["roughness_low_ratio"]["passed"] is False
+    assert report["summary"]["roughness_mean_ratio"] == pytest.approx(32 / 255)
+    assert report["summary"]["base_color_visible_grayish_ratio"] == pytest.approx(1.0)
+
+
+def _write_fixture_glb(
+    tmp_path: Path,
+    base_color: np.ndarray | None = None,
+    metallic_roughness: np.ndarray | None = None,
+) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     vertices = np.array(
         [
@@ -108,9 +144,11 @@ def _write_fixture_glb(tmp_path: Path) -> Path:
     )
     faces = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int64)
     mesh = make_face_atlas_uvs(vertices, faces, tile_padding=0.0)
-    base_color = np.zeros((4, 4, 4), dtype=np.uint8)
-    base_color[:2, :2] = np.array([255, 0, 0, 255], dtype=np.uint8)
-    metallic_roughness = np.zeros((4, 4, 3), dtype=np.uint8)
+    if base_color is None:
+        base_color = np.zeros((4, 4, 4), dtype=np.uint8)
+        base_color[:2, :2] = np.array([255, 0, 0, 255], dtype=np.uint8)
+    if metallic_roughness is None:
+        metallic_roughness = np.zeros((4, 4, 3), dtype=np.uint8)
     payload = textured_glb_payload(
         mesh,
         base_color_rgba=base_color,

@@ -13,7 +13,8 @@ Usage:
     --candidate /tmp/export/model.glb \\
     --reference inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/model.glb \\
     --output-dir /tmp/export/visual_parity/browser_render \\
-    [--visual-report /tmp/export/visual_parity/visual_parity.json]
+    [--visual-report /tmp/export/visual_parity/visual_parity.json] \\
+    [--artifact-manifest /tmp/export/artifact-manifest.json]
 
 Dev dependency setup, kept out of package runtime:
   npm install --prefix /tmp/mlx-spatialkit-render-deps playwright@1.60.0 three@0.181.2
@@ -36,6 +37,9 @@ async function main() {
   const reference = requiredFile(args.reference, "--reference");
   const outputDir = requiredPath(args.outputDir, "--output-dir");
   const visualReport = args.visualReport ? requiredFile(args.visualReport, "--visual-report") : null;
+  const artifactManifest = args.artifactManifest
+    ? requiredFile(args.artifactManifest, "--artifact-manifest")
+    : null;
   const width = positiveInt(args.width || "384", "--width");
   const height = positiveInt(args.height || "384", "--height");
   const channel = args.channel || "chrome";
@@ -89,6 +93,9 @@ async function main() {
       fs.writeFileSync(htmlPath, reportHtml(report), "utf8");
       if (visualReport !== null) {
         augmentVisualReport(visualReport, report);
+      }
+      if (artifactManifest !== null) {
+        augmentArtifactManifest(artifactManifest, report);
       }
       if (!report.summary.all_passed) {
         process.stderr.write(`browser render checks failed; see ${reportPath}\n`);
@@ -444,6 +451,22 @@ function augmentVisualReport(visualReportPath, browserReport) {
     );
   }
   writeJson(visualReportPath, payload);
+}
+
+function augmentArtifactManifest(manifestPath, browserReport) {
+  const payload = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (!payload.roles || !payload.roles.B) {
+    throw new Error(`artifact manifest missing roles.B: ${manifestPath}`);
+  }
+  payload.roles.B.browser_render_report_path = browserReport.artifacts.report_json;
+  payload.roles.B.browser_render_comparison_png_path = browserReport.artifacts.comparison_png;
+  payload.roles.B.browser_render_html_path = browserReport.artifacts.html_report;
+  payload.browser_render = {
+    summary: browserReport.summary,
+    checks: browserReport.checks,
+    artifacts: browserReport.artifacts,
+  };
+  writeJson(manifestPath, payload);
 }
 
 function reportHtmlShell() {

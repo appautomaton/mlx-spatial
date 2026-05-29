@@ -23,7 +23,7 @@ from .export import (
 )
 from .glb_compare import compare_textured_glbs, inspect_glb, parse_glb, png_coverage
 from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
-from .texture import NativeTextureBakeResult, bake_pbr_texture
+from .texture import COVERAGE_STATUS_LABELS, NativeTextureBakeResult, bake_pbr_texture, coverage_status_histogram
 
 __all__ = [
     "NativeMesh",
@@ -32,10 +32,12 @@ __all__ = [
     "NativeUvMesh",
     "Pixal3DDecodedInputs",
     "Pixal3DGlbExportResult",
+    "COVERAGE_STATUS_LABELS",
     "backend_info",
     "bake_pbr_texture",
     "clean_mesh",
     "compare_textured_glbs",
+    "coverage_status_histogram",
     "export_pixal3d_glb",
     "extract_flexi_dual_grid",
     "inspect_glb",

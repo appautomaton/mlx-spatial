@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import os
 import resource
 import subprocess
@@ -25,7 +26,7 @@ from ._native import (
     validate_pixal3d_texture_attributes,
 )
 from .glb_compare import compare_textured_glbs, inspect_glb
-from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
+from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, remesh_narrow_band, simplify_mesh
 
 _T = TypeVar("_T")
 
@@ -44,7 +45,10 @@ PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
 PIXAL3D_FACE_ATLAS_TILE_PADDING = 0.08
 PIXAL3D_NATIVE_CHART_TILE_PADDING = 0.001
 PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES = 8
+PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER = 0.03
 PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN = 0.95
+PIXAL3D_RENDERED_VISUAL_MAX_SURFACE_UNFILLED_TEXELS = 0
+PIXAL3D_RENDERED_VISUAL_MAX_BOUNDARY_OPEN_CHAINS = 0
 
 
 @dataclass(frozen=True)
@@ -223,7 +227,18 @@ def export_pixal3d_glb(
     chart_angle_degrees: float = 45.0,
     tile_padding: float | None = None,
     small_boundary_loop_fill_max_edges: int = PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES,
+    small_boundary_loop_fill_max_perimeter: float = PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER,
     max_texture_pixels: int | None = None,
+    source_projection: bool = True,
+    source_projection_fallback_mode: str = "knn",
+    source_projection_fallback_neighbors: int = 8,
+    source_projection_fallback_max_distance_voxels: float = 12.0,
+    render_padding: bool = True,
+    remesh: bool = False,
+    remesh_band: float = 1.0,
+    remesh_resolution: int | None = None,
+    remesh_project_back: float = 0.0,
+    remesh_repair_nonmanifold: bool = False,
     diagnostics_path: str | Path | None = None,
 ) -> Pixal3DGlbExportResult:
     """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
@@ -242,8 +257,27 @@ def export_pixal3d_glb(
     resolved_small_boundary_loop_fill_max_edges = int(small_boundary_loop_fill_max_edges)
     if resolved_small_boundary_loop_fill_max_edges < 0:
         raise ValueError("small_boundary_loop_fill_max_edges must be non-negative")
+    resolved_small_boundary_loop_fill_max_perimeter = float(small_boundary_loop_fill_max_perimeter)
+    if (
+        not math.isfinite(resolved_small_boundary_loop_fill_max_perimeter)
+        or resolved_small_boundary_loop_fill_max_perimeter <= 0
+    ):
+        raise ValueError("small_boundary_loop_fill_max_perimeter must be positive")
     if max_texture_pixels is not None and max_texture_pixels <= 0:
         raise ValueError("max_texture_pixels must be positive")
+    if source_projection_fallback_mode not in {"knn", "disabled"}:
+        raise ValueError("source_projection_fallback_mode must be 'knn' or 'disabled'")
+    if source_projection_fallback_neighbors <= 0:
+        raise ValueError("source_projection_fallback_neighbors must be positive")
+    if source_projection_fallback_max_distance_voxels <= 0:
+        raise ValueError("source_projection_fallback_max_distance_voxels must be positive")
+    if remesh:
+        if not math.isfinite(remesh_band) or remesh_band <= 0:
+            raise ValueError("remesh_band must be positive and finite")
+        if remesh_resolution is not None and remesh_resolution <= 0:
+            raise ValueError("remesh_resolution must be positive")
+        if not math.isfinite(remesh_project_back) or not (0.0 <= remesh_project_back <= 1.0):
+            raise ValueError("remesh_project_back must be in [0, 1]")
     resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
     resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
     resolved_tile_padding, tile_padding_source = _resolve_tile_padding(tile_padding, resolved_uv_backend)
@@ -255,7 +289,13 @@ def export_pixal3d_glb(
     if not texture_path.exists():
         raise ValueError(f"missing decoded texture artifact: {texture_path}")
 
-    export_settings = _resolve_pixal3d_export_settings(source_dir, quality_preset, target_faces)
+    fixture_manifest = _load_pixal3d_fixture_manifest(source_dir)
+    export_settings = _resolve_pixal3d_export_settings(
+        source_dir,
+        quality_preset,
+        target_faces,
+        fixture_manifest=fixture_manifest,
+    )
     reference = export_settings["reference"]
     resolved_quality_preset = str(export_settings["quality_preset"])
     resolved_target_faces = int(export_settings["target_faces"])
@@ -280,17 +320,30 @@ def export_pixal3d_glb(
             "grid_size": int(grid_size) if grid_size is not None else None,
             "min_component_faces": int(min_component_faces),
             "small_boundary_loop_fill_max_edges": resolved_small_boundary_loop_fill_max_edges,
+            "small_boundary_loop_fill_max_perimeter": resolved_small_boundary_loop_fill_max_perimeter,
             "requested_uv_backend": str(uv_backend),
             "uv_backend": resolved_uv_backend,
             "chart_angle_degrees": resolved_chart_angle_degrees,
             "tile_padding": resolved_tile_padding,
             "tile_padding_source": tile_padding_source,
             "max_texture_pixels": int(max_texture_pixels) if max_texture_pixels is not None else None,
+            "source_projection": bool(source_projection),
+            "source_projection_fallback_mode": source_projection_fallback_mode,
+            "source_projection_fallback_neighbors": int(source_projection_fallback_neighbors),
+            "source_projection_fallback_max_distance_voxels": float(source_projection_fallback_max_distance_voxels),
+            "render_padding": bool(render_padding),
+            "remesh": bool(remesh),
+            "remesh_band": float(remesh_band),
+            "remesh_resolution": int(remesh_resolution) if remesh_resolution is not None else None,
+            "remesh_project_back": float(remesh_project_back),
+            "remesh_repair_nonmanifold": bool(remesh_repair_nonmanifold),
         },
         "stages": {},
         "timings_sec": {},
         "memory_samples": {},
     }
+    if fixture_manifest is not None:
+        diagnostics["fixture_manifest"] = _fixture_manifest_summary(fixture_manifest)
 
     memory_monitor = _ProcessMemoryMonitor()
 
@@ -331,6 +384,9 @@ def export_pixal3d_glb(
         name="grid_size",
     )
     diagnostics["settings"]["grid_size"] = resolved_grid_size
+    resolved_remesh_resolution = int(remesh_resolution) if remesh_resolution is not None else resolved_grid_size
+    if remesh:
+        diagnostics["settings"]["remesh_resolution"] = resolved_remesh_resolution
     resolved_max_texture_pixels = max_texture_pixels if max_texture_pixels is not None else int(texture_size) * int(texture_size)
     diagnostics["settings"]["max_texture_pixels"] = resolved_max_texture_pixels
 
@@ -375,21 +431,51 @@ def export_pixal3d_glb(
     source_projection_vertices = cleaned.vertices
     source_projection_faces = cleaned.faces
 
+    simplify_source = cleaned
+    if remesh:
+        remeshed, remesh_stats = _timed_stage(
+            diagnostics,
+            "remesh",
+            lambda: remesh_narrow_band(
+                cleaned.vertices,
+                cleaned.faces,
+                resolution=resolved_remesh_resolution,
+                band=remesh_band,
+                project_back=remesh_project_back,
+                repair_nonmanifold=remesh_repair_nonmanifold,
+            ),
+            memory_monitor=memory_monitor,
+        )
+        diagnostics["stages"]["remesh"].update(_mesh_shape(remeshed, "remeshed"))
+        diagnostics["stages"]["remesh"]["stats"] = remesh_stats
+        diagnostics["stages"]["remesh"]["metrics"] = mesh_metrics(remeshed.vertices, remeshed.faces)
+        simplify_source = remeshed
+        sample("after_remesh")
+
     simplified, simplify_stats = _timed_stage(
         diagnostics,
         "simplify_mesh",
         lambda: simplify_mesh(
-            cleaned.vertices,
-            cleaned.faces,
+            simplify_source.vertices,
+            simplify_source.faces,
             target_faces=resolved_target_faces,
             min_component_faces=min_component_faces,
             backend=requested_simplifier_backend,
             small_boundary_loop_fill_max_edges=resolved_small_boundary_loop_fill_max_edges,
+            small_boundary_loop_fill_max_perimeter=resolved_small_boundary_loop_fill_max_perimeter,
         ),
         memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["simplify_mesh"].update(_mesh_shape(simplified, "simplified"))
     diagnostics["stages"]["simplify_mesh"]["stats"] = simplify_stats
+    if remesh:
+        simplify_stats["remesh_backend"] = "native-narrow-band-dc"
+        simplify_stats["remesh_equivalence_status"] = "native-narrow-band-dc-measured"
+        simplify_stats["production_blockers"] = tuple(
+            blocker
+            for blocker in simplify_stats.get("production_blockers", ())
+            if blocker != "missing_narrow_band_dc_remesh"
+        )
     del cleaned
     gc.collect()
     sample("after_simplify_mesh")
@@ -431,6 +517,11 @@ def export_pixal3d_glb(
             max_texture_pixels=resolved_max_texture_pixels,
             source_vertices=source_projection_vertices,
             source_faces=source_projection_faces,
+            source_projection=source_projection,
+            source_projection_fallback_mode=source_projection_fallback_mode,
+            source_projection_fallback_neighbors=source_projection_fallback_neighbors,
+            source_projection_fallback_max_distance_voxels=source_projection_fallback_max_distance_voxels,
+            render_padding=render_padding,
         ),
         memory_monitor=memory_monitor,
     )
@@ -530,7 +621,10 @@ def export_pixal3d_glb(
             diagnostics["visual_comparison"] = _visual_comparison_summary(
                 visual_report,
                 quality.get("upstream_export_settings"),
+                texture_stats=baked.stats,
+                export_metrics=post_metrics,
             )
+            quality["rendered_visual_ready"] = bool(diagnostics["visual_comparison"]["rendered_visual_ready"])
             quality["production_equivalence"] = _production_equivalence_summary(
                 quality,
                 diagnostics["visual_comparison"],
@@ -540,6 +634,7 @@ def export_pixal3d_glb(
     diagnostics["result"] = {
         "ready": bool(quality["artifact_ready"]),
         "artifact_ready": bool(quality["artifact_ready"]),
+        "rendered_visual_ready": bool(quality.get("rendered_visual_ready", False)),
         "production_quality_ready": bool(quality["production_quality_ready"]),
         "production_equivalence_ready": bool(quality["production_equivalence"]["ready"]),
         "remaining_parity_boundaries": quality["production_equivalence"]["remaining_parity_boundaries"],
@@ -549,6 +644,23 @@ def export_pixal3d_glb(
         "diagnostics_json": str(resolved_diagnostics_path),
         "bytes_written": int(glb.bytes_written),
     }
+    manifest_path = glb.path.parent / "artifact-manifest.json"
+    run_manifest = _build_pixal3d_run_manifest(
+        decoded_dir=source_dir,
+        shape_path=shape_path,
+        texture_path=texture_path,
+        glb=glb,
+        diagnostics_path=resolved_diagnostics_path,
+        diagnostics=diagnostics,
+        fixture_manifest=fixture_manifest,
+        reference=reference,
+    )
+    diagnostics["artifact_manifest"] = {
+        "path": str(manifest_path),
+        "lineage_id": run_manifest["lineage_id"],
+        "roles": tuple(run_manifest["roles"]),
+    }
+    _write_json_atomic(manifest_path, run_manifest)
     memory_monitor.stop()
     diagnostics["memory"] = memory_monitor.summary()
     _write_json_atomic(resolved_diagnostics_path, diagnostics)
@@ -914,9 +1026,11 @@ def _resolve_pixal3d_export_settings(
     decoded_dir: Path,
     quality_preset: str,
     target_faces: int | None,
+    *,
+    fixture_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     preset = _normalize_quality_preset(quality_preset)
-    reference = _load_pixal3d_reference_trace(decoded_dir)
+    reference = _load_pixal3d_reference_trace(decoded_dir, fixture_manifest=fixture_manifest)
     if target_faces is not None:
         resolved_target_faces = int(target_faces)
         target_source = "explicit"
@@ -1020,6 +1134,7 @@ def _export_quality_summary(
     if preset == "reference-target" and not bool(reference_contract["passed"]):
         warnings.append("reference_stage_contract_incomplete")
     artifact_ready = len(blockers) == 0
+    topology_blockers = _topology_blocker_map(simplify_stats, export_metrics)
     production_quality_ready = (
         artifact_ready
         and bool(thresholds["all_passed"])
@@ -1027,12 +1142,14 @@ def _export_quality_summary(
     )
     return {
         "artifact_ready": artifact_ready,
+        "rendered_visual_ready": False,
         "production_quality_ready": production_quality_ready,
         "quality_preset": preset,
         "simplifier_backend": simplifier_backend,
         "simplifier_quality_tier": simplifier_quality,
         "reference_stage_contract": reference_contract,
         "native_geometry_candidate": _native_geometry_candidate_status(simplify_stats, thresholds, preset),
+        "topology_blocker_map": topology_blockers,
         "export_blocking_reasons": blockers,
         "production_thresholds": thresholds,
         "warnings": tuple(warnings),
@@ -1101,6 +1218,7 @@ def _pixal3d_reference_stage_contract(
     remesh_reference = str(simplify_stats.get("remesh_backend", "")) in {
         "narrow-band-dc",
         "cumesh-narrow-band-dc",
+        "native-narrow-band-dc",
     }
     simplify_reference = (
         simplifier_quality == "production"
@@ -1282,6 +1400,102 @@ def _native_geometry_candidate_status(
         "backend_selection_status": simplify_stats.get("backend_selection_status"),
         "face_count_ratio": face_check.get("actual"),
         "topology_exportability_passed": bool(topology_check.get("passed")),
+    }
+
+
+def _topology_blocker_map(simplify_stats: dict[str, Any], export_metrics: dict[str, Any]) -> dict[str, Any]:
+    """Classify topology gaps from numeric diagnostics instead of screenshots."""
+
+    artifact_blockers = tuple(str(item) for item in export_metrics.get("export_blocking_reasons", ()))
+    nonmanifold_edges = _maybe_int(export_metrics.get("nonmanifold_edges")) or 0
+    closed_loops = _maybe_int(export_metrics.get("boundary_loop_count")) or 0
+    closed_loop_edges = _maybe_int(export_metrics.get("boundary_small_loop_edge_count")) or 0
+    simple_open_chains = _maybe_int(export_metrics.get("boundary_simple_open_chain_count")) or 0
+    simple_open_chain_edges = 0
+    if simple_open_chains:
+        simple_open_chain_edges = _maybe_int(export_metrics.get("boundary_open_chain_edge_count")) or 0
+    branched_open_chains = _maybe_int(export_metrics.get("boundary_branched_open_chain_count")) or 0
+    branched_branch_vertices = _maybe_int(export_metrics.get("boundary_open_chain_branch_vertex_count")) or 0
+    production_blockers = tuple(str(item) for item in simplify_stats.get("production_blockers", ()))
+    qem_missing = (
+        "missing_qem_edge_collapse_simplification" in production_blockers
+        or str(simplify_stats.get("qem_simplification_backend")) == "not_implemented"
+        or str(simplify_stats.get("qem_equivalence_status")) in {"qem_scored_not_edge_collapse", "blocked_missing_qem"}
+    )
+    narrow_band_missing = (
+        "missing_narrow_band_dc_remesh" in production_blockers
+        or str(simplify_stats.get("remesh_backend")) == "not_implemented"
+        or str(simplify_stats.get("remesh_equivalence_status")) == "blocked_missing_narrow_band_dc"
+    )
+
+    visual_blockers = []
+    if closed_loops > 0:
+        visual_blockers.append("clean_closed_boundary_loops")
+    if simple_open_chains > 0:
+        visual_blockers.append("simple_open_boundary_chains")
+    if branched_open_chains > 0:
+        visual_blockers.append("branched_open_boundary_chains")
+
+    production_backend_blockers = []
+    if qem_missing:
+        production_backend_blockers.append("missing_qem_edge_collapse_simplification")
+    if narrow_band_missing:
+        production_backend_blockers.append("missing_narrow_band_dc_remesh")
+
+    if artifact_blockers or nonmanifold_edges > 0:
+        status = "artifact_blocked"
+    elif visual_blockers:
+        status = "rendered_visual_blocked"
+    elif production_backend_blockers:
+        status = "production_backend_blocked"
+    else:
+        status = "topology_clear"
+
+    return {
+        "status": status,
+        "diagnostic_source": "stages.export_metrics.metrics plus stages.simplify_mesh.stats",
+        "artifact_blockers": artifact_blockers,
+        "visual_blockers": tuple(visual_blockers),
+        "production_backend_blockers": tuple(production_backend_blockers),
+        "classes": {
+            "clean_closed_boundary_loops": {
+                "present": closed_loops > 0,
+                "count": closed_loops,
+                "small_loop_edge_count": closed_loop_edges,
+                "export_blocking": False,
+            },
+            "simple_open_chains": {
+                "present": simple_open_chains > 0,
+                "count": simple_open_chains,
+                "edge_count": simple_open_chain_edges,
+                "export_blocking": False,
+            },
+            "branched_open_chains": {
+                "present": branched_open_chains > 0,
+                "count": branched_open_chains,
+                "branch_vertex_count": branched_branch_vertices,
+                "export_blocking": False,
+            },
+            "nonmanifold_edges": {
+                "present": nonmanifold_edges > 0,
+                "count": nonmanifold_edges,
+                "export_blocking": nonmanifold_edges > 0 or "nonmanifold_edges_present" in artifact_blockers,
+            },
+            "heuristic_qem": {
+                "present": qem_missing,
+                "backend": simplify_stats.get("qem_simplification_backend"),
+                "equivalence_status": simplify_stats.get("qem_equivalence_status"),
+                "export_blocking": False,
+                "production_blocking": qem_missing,
+            },
+            "missing_narrow_band_remesh": {
+                "present": narrow_band_missing,
+                "backend": simplify_stats.get("remesh_backend"),
+                "equivalence_status": simplify_stats.get("remesh_equivalence_status"),
+                "export_blocking": False,
+                "production_blocking": narrow_band_missing,
+            },
+        },
     }
 
 
@@ -1699,13 +1913,139 @@ def _production_thresholds(
     }
 
 
-def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
-    candidates = [
-        decoded_dir.parent / "pixal3d-1024-cascade-glb-reference" / "trace.json",
-        Path.cwd() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-glb-reference" / "trace.json",
-    ]
+def _load_pixal3d_fixture_manifest(decoded_dir: Path) -> dict[str, Any] | None:
+    decoded = decoded_dir.resolve()
+    candidates: list[Path] = []
+    direct_candidates = (
+        decoded_dir / "manifest.json",
+        decoded_dir.parent / "manifest.json",
+    )
+    for path in direct_candidates:
+        if path.exists():
+            candidates.append(path)
+    for path in sorted(decoded_dir.parent.glob("*/manifest.json")):
+        if path.exists():
+            candidates.append(path)
+
+    matching: list[dict[str, Any]] = []
+    seen: set[Path] = set()
     for path in candidates:
-        if not path.exists():
+        manifest_path = path.resolve()
+        if manifest_path in seen:
+            continue
+        seen.add(manifest_path)
+        payload = _read_fixture_manifest(path)
+        role_a = _manifest_role(payload, "A")
+        role_decoded = _manifest_resolve_path(path, role_a, "decoded_dir", "path")
+        if role_decoded is None or role_decoded.resolve() != decoded:
+            continue
+        _validate_fixture_manifest(payload, path, decoded)
+        payload = dict(payload)
+        payload["manifest_path"] = str(path)
+        matching.append(payload)
+
+    if len(matching) > 1:
+        paths = ", ".join(str(item["manifest_path"]) for item in matching)
+        raise ValueError(f"ambiguous Pixal3D fixture manifests for {decoded_dir}: {paths}")
+    if matching:
+        return matching[0]
+
+    fixture_root = (Path.cwd() / "inputs" / "mlx-spatialkit").resolve()
+    try:
+        decoded.relative_to(fixture_root)
+    except ValueError:
+        return None
+    raise ValueError(f"missing Pixal3D fixture manifest for local fixture: {decoded_dir}")
+
+
+def _read_fixture_manifest(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid Pixal3D fixture manifest JSON: {path}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"Pixal3D fixture manifest must be a JSON object: {path}")
+    if int(payload.get("manifest_version", 0)) != 1:
+        raise ValueError(f"Pixal3D fixture manifest_version must be 1: {path}")
+    return payload
+
+
+def _validate_fixture_manifest(payload: dict[str, Any], path: Path, decoded_dir: Path) -> None:
+    lineage_id = str(payload.get("lineage_id") or "").strip()
+    if not lineage_id:
+        raise ValueError(f"Pixal3D fixture manifest missing lineage_id: {path}")
+    role_a = _manifest_role(payload, "A")
+    role_c = _manifest_role(payload, "C")
+    for role_name, role in (("A", role_a), ("C", role_c)):
+        role_lineage = str(role.get("lineage_id") or "").strip()
+        if role_lineage != lineage_id:
+            raise ValueError(
+                f"Pixal3D fixture manifest role {role_name} lineage mismatch in {path}: "
+                f"{role_lineage!r} != {lineage_id!r}"
+            )
+    role_decoded = _manifest_resolve_path(path, role_a, "decoded_dir", "path")
+    if role_decoded is None or role_decoded.resolve() != decoded_dir:
+        raise ValueError(f"Pixal3D fixture manifest A role does not match decoded dir: {path}")
+    role_trace = _manifest_resolve_path(path, role_a, "trace_path")
+    if role_trace is not None and not role_trace.exists():
+        raise ValueError(f"Pixal3D fixture manifest A trace_path does not exist: {role_trace}")
+    reference_trace = _manifest_resolve_path(path, role_c, "trace_path")
+    reference_glb = _manifest_resolve_path(path, role_c, "model_glb_path", "path")
+    if reference_trace is None or not reference_trace.exists():
+        raise ValueError(f"Pixal3D fixture manifest C trace_path does not exist: {reference_trace}")
+    if reference_glb is None or not reference_glb.exists():
+        raise ValueError(f"Pixal3D fixture manifest C model_glb_path does not exist: {reference_glb}")
+
+
+def _manifest_role(payload: dict[str, Any], role_name: str) -> dict[str, Any]:
+    roles = payload.get("roles")
+    if not isinstance(roles, dict):
+        raise ValueError("Pixal3D fixture manifest missing roles object")
+    role = roles.get(role_name)
+    if not isinstance(role, dict):
+        raise ValueError(f"Pixal3D fixture manifest missing role {role_name}")
+    return role
+
+
+def _manifest_resolve_path(manifest_path: Path, role: dict[str, Any], *keys: str) -> Path | None:
+    for key in keys:
+        value = role.get(key)
+        if value is None:
+            continue
+        path = Path(str(value))
+        if not path.is_absolute():
+            path = manifest_path.parent / path
+        return path
+    return None
+
+
+def _fixture_manifest_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manifest_path": payload.get("manifest_path"),
+        "lineage_id": payload.get("lineage_id"),
+        "case_id": payload.get("case_id"),
+        "source_image": payload.get("source_image", {}),
+        "roles": tuple(payload.get("roles", {}).keys()),
+    }
+
+
+def _load_pixal3d_reference_trace(
+    decoded_dir: Path,
+    *,
+    fixture_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if fixture_manifest is not None:
+        role_c = _manifest_role(fixture_manifest, "C")
+        manifest_path = Path(str(fixture_manifest["manifest_path"]))
+        reference_trace = _manifest_resolve_path(manifest_path, role_c, "trace_path")
+        candidates = [reference_trace] if reference_trace is not None else []
+    else:
+        candidates = [
+            decoded_dir.parent / "pixal3d-1024-cascade-glb-reference" / "trace.json",
+            Path.cwd() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-glb-reference" / "trace.json",
+        ]
+    for path in candidates:
+        if path is None or not path.exists():
             continue
         with path.open("r", encoding="utf-8") as handle:
             trace = json.load(handle)
@@ -1713,7 +2053,7 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
         mesh_export = metadata.get("mesh_export", {})
         postprocess = mesh_export.get("postprocess_stats", {})
         artifact_metadata = metadata.get("textured_glb_artifact", {}).get("metadata", {})
-        return {
+        reference = {
             "trace_path": str(path),
             "model_glb_path": str(path.with_name("model.glb")) if path.with_name("model.glb").exists() else None,
             "final_faces": _maybe_int(postprocess.get("final_faces")),
@@ -1730,6 +2070,10 @@ def _load_pixal3d_reference_trace(decoded_dir: Path) -> dict[str, Any] | None:
             "xatlas_face_guard": _maybe_int(mesh_export.get("xatlas_face_guard", artifact_metadata.get("xatlas_face_guard"))),
             "unwrap_utilization": _maybe_float(mesh_export.get("unwrap_utilization", artifact_metadata.get("unwrap_utilization"))),
         }
+        if fixture_manifest is not None:
+            reference["lineage_id"] = fixture_manifest.get("lineage_id")
+            reference["manifest_path"] = fixture_manifest.get("manifest_path")
+        return reference
     return None
 
 
@@ -1911,15 +2255,45 @@ def _reference_glb_path(reference: dict[str, Any]) -> Path | None:
 def _visual_comparison_summary(
     report: dict[str, Any],
     upstream_export_settings: dict[str, Any] | None = None,
+    *,
+    texture_stats: dict[str, Any] | None = None,
+    export_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     deferred_boundaries = list(report["deferred_parity_boundaries"])
     if upstream_export_settings is not None and bool(upstream_export_settings.get("all_passed")):
         deferred_boundaries = [
             item for item in deferred_boundaries if item != "not_1m_face_export_setting_parity"
         ]
+    checks: dict[str, dict[str, Any]] = {
+        "texture_reference_scalar_gate": {
+            "passed": bool(report["summary"].get("all_passed")),
+            "actual": bool(report["summary"].get("all_passed")),
+            "required": True,
+        }
+    }
+    if texture_stats is not None:
+        surface_unfilled = _maybe_int(texture_stats.get("surface_unfilled_texel_count"))
+        checks["surface_unfilled_texels"] = {
+            "passed": surface_unfilled is not None
+            and surface_unfilled <= PIXAL3D_RENDERED_VISUAL_MAX_SURFACE_UNFILLED_TEXELS,
+            "actual": surface_unfilled,
+            "required_max": PIXAL3D_RENDERED_VISUAL_MAX_SURFACE_UNFILLED_TEXELS,
+        }
+    if export_metrics is not None:
+        boundary_open_chains = _maybe_int(export_metrics.get("boundary_open_chain_count"))
+        checks["boundary_open_chains"] = {
+            "passed": boundary_open_chains is not None
+            and boundary_open_chains <= PIXAL3D_RENDERED_VISUAL_MAX_BOUNDARY_OPEN_CHAINS,
+            "actual": boundary_open_chains,
+            "required_max": PIXAL3D_RENDERED_VISUAL_MAX_BOUNDARY_OPEN_CHAINS,
+        }
+    rendered_visual_ready = all(bool(check["passed"]) for check in checks.values())
     return {
+        "rendered_visual_ready": rendered_visual_ready,
         "summary": report["summary"],
         "checks": report["checks"],
+        "rendered_visual_checks": checks,
+        "rendered_visual_blockers": tuple(name for name, check in checks.items() if not bool(check["passed"])),
         "artifacts": report.get("artifacts", {}),
         "deferred_parity_boundaries": deferred_boundaries,
     }
@@ -1938,8 +2312,9 @@ def _production_equivalence_summary(
     xatlas_parity = quality.get("xatlas_chart_parity", {})
     xatlas_chart_parity_ready = xatlas_parity.get("parity_ready") is True
     visual_available = visual_comparison is not None
-    visual_summary = visual_comparison.get("summary", {}) if visual_comparison is not None else {}
-    visual_comparison_ready = visual_available and bool(visual_summary.get("all_passed"))
+    visual_comparison_ready = (
+        visual_available and visual_comparison.get("rendered_visual_ready") is True
+    )
 
     remaining_boundaries: list[str] = []
     if visual_comparison is not None:
@@ -1966,7 +2341,7 @@ def _production_equivalence_summary(
     if not visual_available:
         blockers.append("visual_comparison_missing")
     elif not visual_comparison_ready:
-        blockers.append("visual_comparison_not_all_passed")
+        blockers.append("rendered_visual_not_ready")
     if remaining_boundaries:
         blockers.append("deferred_parity_boundaries_present")
     blockers = _unique_strings(blockers)
@@ -2066,6 +2441,86 @@ def _reference_comparison(diagnostics: dict[str, Any], reference: dict[str, Any]
     if final_coverage is not None and reference_final not in (None, 0.0):
         comparison["final_coverage_ratio_vs_reference"] = final_coverage / reference_final
     return comparison
+
+
+def _build_pixal3d_run_manifest(
+    *,
+    decoded_dir: Path,
+    shape_path: Path,
+    texture_path: Path,
+    glb: NativeGlbArtifact,
+    diagnostics_path: Path,
+    diagnostics: dict[str, Any],
+    fixture_manifest: dict[str, Any] | None,
+    reference: dict[str, Any] | None,
+) -> dict[str, Any]:
+    lineage_id = (
+        str(fixture_manifest.get("lineage_id"))
+        if fixture_manifest is not None
+        else f"unmanifested:{decoded_dir.resolve()}"
+    )
+    source_image = (
+        fixture_manifest.get("source_image", {})
+        if fixture_manifest is not None
+        else {"path": decoded_metadata_value(diagnostics, "image_path"), "preprocess_variant": "unknown"}
+    )
+    roles: dict[str, Any] = {
+        "A": {
+            "role": "A",
+            "kind": "decoded_model_output",
+            "lineage_id": lineage_id,
+            "decoded_dir": str(decoded_dir),
+            "shape_decoder_fields": str(shape_path),
+            "texture_decoder_pbr": str(texture_path),
+            "trace_path": str(decoded_dir / "trace.json") if (decoded_dir / "trace.json").exists() else None,
+        },
+        "B": {
+            "role": "B",
+            "kind": "native_mlx_spatialkit_glb",
+            "lineage_id": lineage_id,
+            "model_glb_path": str(glb.path),
+            "diagnostics_path": str(diagnostics_path),
+            "visual_parity_report_path": _nested_get(
+                diagnostics,
+                ("visual_comparison", "artifacts", "report_json"),
+            ),
+            "browser_render_report_path": _nested_get(
+                diagnostics,
+                ("visual_comparison", "artifacts", "browser_render_report_json"),
+            ),
+            "settings": diagnostics.get("settings", {}),
+        },
+    }
+    if reference is not None:
+        roles["C"] = {
+            "role": "C",
+            "kind": "reference_control_glb",
+            "lineage_id": str(reference.get("lineage_id") or lineage_id),
+            "control_kind": "internal-xatlas-control",
+            "model_glb_path": reference.get("model_glb_path"),
+            "trace_path": reference.get("trace_path"),
+        }
+    if roles.get("C", {}).get("lineage_id") not in (None, lineage_id):
+        raise ValueError("Pixal3D run manifest C lineage does not match decoded lineage")
+    return {
+        "manifest_version": 1,
+        "kind": "pixal3d_glb_export_run",
+        "lineage_id": lineage_id,
+        "case_id": fixture_manifest.get("case_id") if fixture_manifest is not None else None,
+        "fixture_manifest_path": fixture_manifest.get("manifest_path") if fixture_manifest is not None else None,
+        "source_image": source_image,
+        "roles": roles,
+        "readiness": diagnostics.get("result", {}),
+    }
+
+
+def _nested_get(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    value: Any = payload
+    for key in keys:
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value
 
 
 def _maybe_int(value: Any) -> int | None:

@@ -2,6 +2,8 @@
 
 #include <nanobind/nanobind.h>
 
+#include <string>
+
 namespace mlx_spatialkit {
 
 nanobind::dict bake_pbr_texture_metal(
@@ -20,6 +22,11 @@ nanobind::dict bake_pbr_texture_metal(
     double tile_padding,
     int64_t max_texture_pixels,
     nanobind::object source_vertices,
-    nanobind::object source_faces);
+    nanobind::object source_faces,
+    std::string source_projection_fallback_mode,
+    int64_t source_projection_fallback_neighbors,
+    double source_projection_fallback_max_distance_voxels,
+    bool render_padding,
+    bool surface_fill);
 
 }  // namespace mlx_spatialkit

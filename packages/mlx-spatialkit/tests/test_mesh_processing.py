@@ -116,6 +116,41 @@ def test_mesh_metrics_reports_true_nonmanifold_edges_as_export_blockers() -> Non
     assert "nonmanifold_edges_present" in metrics["export_blocking_reasons"]
 
 
+def test_mesh_metrics_reports_simple_open_chain_boundary_components() -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.5, 0.5, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 4],
+            [0, 2, 3],
+            [1, 2, 3],
+        ],
+        dtype=np.int64,
+    )
+
+    metrics = mesh_metrics(vertices, faces)
+
+    assert metrics["nonmanifold_edges"] == 1
+    assert metrics["boundary_open_chain_count"] == 1
+    assert metrics["boundary_open_chain_edge_count"] == 2
+    assert metrics["boundary_simple_open_chain_count"] == 1
+    assert metrics["boundary_branched_open_chain_count"] == 0
+    assert metrics["boundary_open_chain_endpoint_count"] == 2
+    assert metrics["boundary_open_chain_branch_vertex_count"] == 0
+    assert metrics["boundary_max_open_chain_edges"] == 2
+    assert "nonmanifold_edges_present" in metrics["export_blocking_reasons"]
+
+
 def test_clean_mesh_removes_degenerates_duplicates_unreferenced_vertices_and_small_components() -> None:
     vertices, faces = _messy_mesh()
 
@@ -239,8 +274,8 @@ def test_simplify_mesh_topology_aware_fills_triangular_boundary_loop() -> None:
     assert stats["small_boundary_loop_fill_fallback_max_edges"] == 0
     assert stats["small_boundary_loop_fill_fallback_policy_max_edges"] == 0
     assert stats["small_boundary_loop_fill_fallback_effective_max_edges"] == 0
-    assert stats["small_boundary_loop_repair_max_passes"] == 1
-    assert stats["small_boundary_loop_repair_pass_count"] == 1
+    assert stats["small_boundary_loop_repair_max_passes"] == 3
+    assert 1 <= stats["small_boundary_loop_repair_pass_count"] <= 3
     assert stats["small_boundary_loop_fill_max_edges"] == 8
     assert stats["small_boundary_loop_fill_face_budget"] == 3
     assert stats["small_boundary_loops_considered"] == 2
@@ -292,7 +327,7 @@ def test_simplify_mesh_can_disable_small_boundary_loop_fill() -> None:
     assert stats["small_boundary_loop_fill_fallback_max_edges"] == 0
     assert stats["small_boundary_loop_fill_fallback_policy_max_edges"] == 0
     assert stats["small_boundary_loop_fill_fallback_effective_max_edges"] == 0
-    assert stats["small_boundary_loop_repair_max_passes"] == 1
+    assert stats["small_boundary_loop_repair_max_passes"] == 3
     assert stats["small_boundary_loop_repair_pass_count"] == 0
     assert stats["small_boundary_loop_fill_max_edges"] == 0
     assert stats["small_boundary_loops_considered"] == 0
@@ -335,6 +370,35 @@ def test_simplify_mesh_topology_aware_fills_four_edge_boundary_loop_by_default()
     assert after["boundary_edges"] == 4
     assert after["nonmanifold_edges"] == 0
     assert after["export_blocking_reasons"] == []
+
+
+def test_simplify_mesh_topology_aware_prefills_reference_sized_loop_before_clustering() -> None:
+    vertices, faces = _small_dodecagon_hole_mesh()
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=18,
+        min_component_faces=1,
+        backend="topology-aware",
+    )
+
+    assert stats["source_faces"] == faces.shape[0]
+    assert stats["pre_simplify_hole_fill_enabled"] is True
+    assert stats["pre_simplify_hole_fill_algorithm"] == "reference-clean-boundary-centroid-fan"
+    assert stats["pre_simplify_hole_fill_max_edges"] == 64
+    assert stats["pre_simplify_hole_fill_max_perimeter"] == pytest.approx(0.03)
+    assert stats["pre_simplify_hole_fill_boundary_edges_before"] == 24
+    assert stats["pre_simplify_hole_fill_clean_boundary_loops"] == 2
+    assert stats["pre_simplify_hole_fill_filled_loops"] == 1
+    assert stats["pre_simplify_hole_fill_skipped_large_loops"] == 1
+    assert stats["pre_simplify_hole_fill_skipped_complex_components"] == 0
+    assert stats["pre_simplify_hole_fill_vertices_added"] == 1
+    assert stats["pre_simplify_hole_fill_faces_added"] == 12
+    assert stats["pre_simplify_faces"] == faces.shape[0] + 12
+    assert stats["candidate_faces_considered"] == faces.shape[0] + 12
+    assert stats["small_boundary_loop_fill_max_edges"] == 8
+    assert stats["final_faces"] == mesh.faces.shape[0]
 
 
 def test_simplify_mesh_disables_alternative_triangulation_for_reference_hole_fill() -> None:
@@ -400,12 +464,13 @@ def test_simplify_mesh_topology_aware_rejects_large_concave_boundary_loop_by_per
 
 def test_simplify_mesh_topology_aware_fills_branched_small_cycles() -> None:
     vertices, faces = _pinched_triangular_hole_mesh()
+    vertices = vertices * 0.001
     before = mesh_metrics(vertices, faces)
 
     mesh, stats = simplify_mesh(
         vertices,
         faces,
-        target_faces=faces.shape[0] + 2,
+        target_faces=faces.shape[0] + 20,
         min_component_faces=1,
         backend="topology-aware",
         small_boundary_loop_fill_max_edges=8,
@@ -415,24 +480,25 @@ def test_simplify_mesh_topology_aware_fills_branched_small_cycles() -> None:
     assert before["boundary_simple_open_chain_count"] == 0
     assert before["boundary_branched_open_chain_count"] == 1
     assert before["boundary_open_chain_branch_vertex_count"] == 1
-    assert stats["small_boundary_branched_cycle_fill_enabled"] is False
-    assert stats["small_boundary_branched_cycle_fill_max_edges"] == 0
-    assert stats["small_boundary_branched_cycle_fill_policy_max_edges"] == 0
-    assert stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 0
-    assert stats["small_boundary_loop_repair_max_passes"] == 1
-    assert stats["small_boundary_loop_repair_pass_count"] == 1
-    assert stats["small_boundary_branched_cycle_candidates"] == 0
-    assert stats["small_boundary_branched_cycles_filled"] == 0
-    assert stats["small_boundary_loop_faces_added"] == 0
-    assert stats["final_faces"] == faces.shape[0]
-    assert after["boundary_branched_open_chain_count"] == before["boundary_branched_open_chain_count"]
-    assert after["boundary_open_chain_count"] == before["boundary_open_chain_count"]
+    assert stats["small_boundary_branched_cycle_fill_enabled"] is True
+    assert stats["small_boundary_branched_cycle_fill_max_edges"] == 8
+    assert stats["small_boundary_branched_cycle_fill_policy_max_edges"] == 8
+    assert stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 8
+    assert stats["small_boundary_loop_repair_max_passes"] == 3
+    assert 1 <= stats["small_boundary_loop_repair_pass_count"] <= 3
+    assert stats["small_boundary_branched_cycle_candidates"] == 2
+    assert stats["small_boundary_branched_cycles_filled"] == 2
+    assert stats["small_boundary_loop_faces_added"] > 0
+    assert stats["final_faces"] > faces.shape[0]
+    assert after["boundary_branched_open_chain_count"] == 0
+    assert after["boundary_open_chain_count"] == 0
     assert after["nonmanifold_edges"] == 0
     assert after["export_blocking_reasons"] == []
 
 
 def test_simplify_mesh_branched_cycles_respect_public_loop_cap() -> None:
     vertices, faces = _pinched_quad_hole_mesh()
+    vertices = vertices * 0.001
     before = mesh_metrics(vertices, faces)
 
     capped_mesh, capped_stats = simplify_mesh(
@@ -457,23 +523,23 @@ def test_simplify_mesh_branched_cycles_respect_public_loop_cap() -> None:
 
     assert before["boundary_branched_open_chain_count"] == 1
     assert before["boundary_open_chain_branch_vertex_count"] == 1
-    assert capped_stats["small_boundary_branched_cycle_fill_enabled"] is False
-    assert capped_stats["small_boundary_branched_cycle_fill_max_edges"] == 0
-    assert capped_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 0
+    assert capped_stats["small_boundary_branched_cycle_fill_enabled"] is True
+    assert capped_stats["small_boundary_branched_cycle_fill_max_edges"] == 8
+    assert capped_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 3
     assert capped_stats["small_boundary_branched_cycle_candidates"] == 0
     assert capped_stats["small_boundary_branched_cycles_filled"] == 0
     assert capped_after["boundary_branched_open_chain_count"] == before["boundary_branched_open_chain_count"]
     assert capped_after["boundary_open_chain_edge_count"] == before["boundary_open_chain_edge_count"]
     assert capped_after["nonmanifold_edges"] == 0
 
-    assert repaired_stats["small_boundary_branched_cycle_fill_enabled"] is False
-    assert repaired_stats["small_boundary_branched_cycle_fill_max_edges"] == 0
-    assert repaired_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 0
-    assert repaired_stats["small_boundary_branched_cycle_candidates"] == 0
-    assert repaired_stats["small_boundary_branched_cycles_filled"] == 0
-    assert repaired_stats["small_boundary_loop_faces_added"] == 0
-    assert repaired_after["boundary_branched_open_chain_count"] == before["boundary_branched_open_chain_count"]
-    assert repaired_after["boundary_open_chain_edge_count"] == before["boundary_open_chain_edge_count"]
+    assert repaired_stats["small_boundary_branched_cycle_fill_enabled"] is True
+    assert repaired_stats["small_boundary_branched_cycle_fill_max_edges"] == 8
+    assert repaired_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 4
+    assert repaired_stats["small_boundary_branched_cycle_candidates"] == 2
+    assert repaired_stats["small_boundary_branched_cycles_filled"] == 2
+    assert repaired_stats["small_boundary_loop_faces_added"] > 0
+    assert repaired_after["boundary_branched_open_chain_count"] == 0
+    assert repaired_after["boundary_open_chain_count"] == 0
     assert repaired_after["nonmanifold_edges"] == 0
 
 
@@ -622,6 +688,38 @@ def _small_quad_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
     return vertices, np.array(faces, dtype=np.int64)
 
 
+def _small_dodecagon_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
+    loop_size = 12
+    angles = np.linspace(0.0, 2.0 * np.pi, loop_size, endpoint=False, dtype=np.float32)
+    inner_radius = 0.003
+    inner = np.stack(
+        [
+            np.cos(angles) * inner_radius,
+            np.sin(angles) * inner_radius,
+            np.zeros_like(angles),
+        ],
+        axis=1,
+    )
+    outer = np.stack(
+        [
+            np.cos(angles),
+            np.sin(angles),
+            np.zeros_like(angles),
+        ],
+        axis=1,
+    )
+    vertices = np.concatenate([inner, outer], axis=0).astype(np.float32)
+
+    faces: list[list[int]] = []
+    for index in range(loop_size):
+        next_index = (index + 1) % loop_size
+        outer_index = loop_size + index
+        outer_next = loop_size + next_index
+        faces.append([index, outer_index, outer_next])
+        faces.append([index, outer_next, next_index])
+    return vertices, np.array(faces, dtype=np.int64)
+
+
 def _pinched_triangular_hole_mesh() -> tuple[np.ndarray, np.ndarray]:
     first_vertices, first_faces = _triangular_hole_mesh()
     second_vertices, second_faces = _triangular_hole_mesh()
@@ -760,3 +858,10 @@ def test_simplify_mesh_rejects_negative_small_boundary_loop_fill_cap() -> None:
 
     with pytest.raises(ValueError, match="small_boundary_loop_fill_max_edges"):
         simplify_mesh(vertices, faces, target_faces=4, small_boundary_loop_fill_max_edges=-1)
+
+
+def test_simplify_mesh_rejects_invalid_small_boundary_loop_fill_perimeter() -> None:
+    vertices, faces = _messy_mesh()
+
+    with pytest.raises(ValueError, match="small_boundary_loop_fill_max_perimeter"):
+        simplify_mesh(vertices, faces, target_faces=4, small_boundary_loop_fill_max_perimeter=0.0)

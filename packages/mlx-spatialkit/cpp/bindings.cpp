@@ -6,6 +6,7 @@
 #include "metal_probe.hpp"
 #include "mesh_processing.hpp"
 #include "pixal3d_contracts.hpp"
+#include "remesh.hpp"
 #include "texture_bake.hpp"
 
 namespace nb = nanobind;
@@ -60,7 +61,18 @@ NB_MODULE(_native, module) {
              nb::arg("min_component_faces") = 32,
              nb::arg("backend") = "spatial-cluster",
              nb::arg("small_boundary_loop_fill_max_edges") = 8,
+             nb::arg("small_boundary_loop_fill_max_perimeter") = 0.03,
              "Run the native-owned first-pass mesh simplification interface.");
+
+  module.def("remesh_narrow_band",
+             &mlx_spatialkit::remesh_narrow_band,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("resolution"),
+             nb::arg("band") = 1.0,
+             nb::arg("project_back") = 0.0,
+             nb::arg("repair_nonmanifold") = false,
+             "Narrow-band dual-contour remesh into a watertight triangle mesh.");
 
   module.def("make_face_atlas_uvs",
              &mlx_spatialkit::make_face_atlas_uvs,
@@ -107,5 +119,10 @@ NB_MODULE(_native, module) {
              nb::arg("max_texture_pixels") = 1048576,
              nb::arg("source_vertices") = nb::none(),
              nb::arg("source_faces") = nb::none(),
+             nb::arg("source_projection_fallback_mode") = "knn",
+             nb::arg("source_projection_fallback_neighbors") = 8,
+             nb::arg("source_projection_fallback_max_distance_voxels") = 12.0,
+             nb::arg("render_padding") = true,
+             nb::arg("surface_fill") = true,
              "Bake PBR texture buffers with the Metal backend.");
 }

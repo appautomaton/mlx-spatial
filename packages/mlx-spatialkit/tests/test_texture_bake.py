@@ -8,6 +8,7 @@ import pytest
 from mlx_spatialkit import (
     NativeUvMesh,
     bake_pbr_texture,
+    coverage_status_histogram,
     make_face_atlas_uvs,
     make_native_chart_uvs,
     metal_device_available,
@@ -32,9 +33,9 @@ def _texture_fields() -> tuple[np.ndarray, np.ndarray]:
     coordinates = np.array(
         [
             [0, 0, 0, 0],
-            [0, 0, 0, 1],
+            [0, 1, 0, 0],
             [0, 0, 1, 0],
-            [0, 0, 1, 1],
+            [0, 1, 1, 0],
         ],
         dtype=np.int32,
     )
@@ -48,6 +49,21 @@ def _texture_fields() -> tuple[np.ndarray, np.ndarray]:
         dtype=np.float32,
     )
     return coordinates, attributes
+
+
+def _assert_coverage_status_matches_stats(baked) -> None:
+    histogram = coverage_status_histogram(baked.coverage_status)
+    assert baked.stats["coverage_status_histogram"] == histogram
+    assert histogram == {
+        "no_face": baked.stats["no_face_texel_count"],
+        "exact_sampled": baked.stats["exact_sampled_texel_count"],
+        "missing_surface": baked.stats["missing_texel_count"],
+        "out_of_grid": baked.stats["out_of_grid_texel_count"],
+        "fallback_filled": baked.stats["fallback_filled_texel_count"],
+        "surface_filled": baked.stats["surface_filled_texel_count"],
+        "unknown": 0,
+    }
+    assert sum(histogram.values()) == baked.stats["texture_pixel_count"]
 
 
 def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() -> None:
@@ -83,6 +99,7 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     assert baked.coverage_mask.shape == (4, 4)
     assert baked.coverage_status.dtype == np.uint8
     assert baked.stats["backend"] == "metal-face-atlas-nearest"
+    _assert_coverage_status_matches_stats(baked)
     assert mesh.stats["packing"] == "paired-triangles"
     assert baked.stats["voxel_count"] == 4
     assert baked.stats["texture_pixel_count"] == 16
@@ -103,8 +120,16 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
         + baked.stats["out_of_grid_texel_count"]
     )
     assert baked.stats["no_face_texel_count"] + baked.stats["uv_surface_texel_count"] == 16
-    assert baked.stats["visible_base_color_texel_count"] == int(np.count_nonzero(baked.base_color_rgba[:, :, 3]))
+    uv_visible = np.isin(baked.coverage_status, [1, 4, 5]) & (baked.base_color_rgba[:, :, 3] != 0)
+    assert baked.stats["visible_base_color_texel_count"] == int(np.count_nonzero(uv_visible))
+    assert baked.stats["render_visible_base_color_texel_count"] == int(np.count_nonzero(baked.base_color_rgba[:, :, 3]))
     assert baked.stats["nonzero_rgb_texel_count"] == int(np.count_nonzero(np.any(baked.base_color_rgba[:, :, :3] != 0, axis=2)))
+    assert baked.stats["render_padding_enabled"] is True
+    assert baked.stats["render_padding_policy"] == "opaque-glb-nearest-inpaint-after-diagnostics"
+    assert baked.stats["render_padding_seed_texel_count"] >= baked.stats["visible_base_color_texel_count"]
+    assert baked.stats["render_alpha_coverage_ratio"] == pytest.approx(
+        baked.stats["render_visible_base_color_texel_count"] / 16.0
+    )
     assert baked.stats["raw_coverage_ratio"] == pytest.approx(float(np.count_nonzero(baked.coverage_mask)) / 16.0)
     assert baked.stats["final_visible_coverage_ratio"] == pytest.approx(
         float(baked.stats["visible_base_color_texel_count"]) / 16.0
@@ -125,6 +150,46 @@ def test_bake_pbr_texture_metal_returns_deterministic_buffers_and_diagnostics() 
     np.testing.assert_array_equal(baked.metallic_roughness[0, 0], np.array([0, 51, 26], dtype=np.uint8))
     np.testing.assert_array_equal(baked.base_color_rgba[0, 2], np.array([0, 255, 0, 204], dtype=np.uint8))
     np.testing.assert_array_equal(baked.metallic_roughness[0, 2], np.array([0, 102, 77], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_constant_fields_isolate_uv_occupancy_from_texture_values() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = _uv_mesh()
+    coordinates, attributes = _texture_fields()
+    red_attributes = attributes.copy()
+    red_attributes[:, :] = np.array([1.0, 0.0, 0.0, 0.1, 0.8, 1.0], dtype=np.float32)
+    blue_attributes = attributes.copy()
+    blue_attributes[:, :] = np.array([0.0, 0.0, 1.0, 0.7, 0.2, 1.0], dtype=np.float32)
+
+    red = bake_pbr_texture(
+        mesh,
+        coordinates,
+        red_attributes,
+        texture_size=4,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        render_padding=False,
+    )
+    blue = bake_pbr_texture(
+        mesh,
+        coordinates,
+        blue_attributes,
+        texture_size=4,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        render_padding=False,
+    )
+
+    np.testing.assert_array_equal(red.coverage_status, blue.coverage_status)
+    assert red.stats["coverage_status_histogram"] == blue.stats["coverage_status_histogram"]
+    visible = np.isin(red.coverage_status, [1, 4, 5])
+    assert np.any(visible)
+    assert np.all(red.base_color_rgba[visible, 0] >= blue.base_color_rgba[visible, 0])
+    assert np.all(blue.base_color_rgba[visible, 2] >= red.base_color_rgba[visible, 2])
 
 
 def test_bake_pbr_texture_metal_supports_concurrent_public_api_calls() -> None:
@@ -221,10 +286,10 @@ def test_bake_pbr_texture_projects_to_source_mesh_and_samples_trilinear() -> Non
 
     coordinates = []
     attributes = []
-    for z in range(2):
+    for x in range(2):
         for y in range(2):
-            for x in range(2):
-                coordinates.append([0, z, y, x])
+            for z in range(2):
+                coordinates.append([0, x, y, z])
                 attributes.append([float(x), float(y), float(z), 0.0, 0.5, 1.0])
 
     baked = bake_pbr_texture(
@@ -246,10 +311,310 @@ def test_bake_pbr_texture_projects_to_source_mesh_and_samples_trilinear() -> Non
     assert baked.stats["source_projection_projected_texel_count"] > 0
     assert baked.stats["source_projection_returns_face_id"] is True
     assert baked.stats["source_projection_returns_barycentric"] is True
-    assert baked.stats["sampling_mode"] == "trilinear"
-    assert baked.stats["nearest_fallback_enabled"] is False
+    assert baked.stats["sampling_mode"] == "trilinear-with-sparse-knn-fallback"
+    assert baked.stats["nearest_fallback_enabled"] is True
+    assert baked.stats["nearest_fallback_scope"] == "source-projection-sparse-knn"
+    assert baked.stats["source_projection_nearest_fallback_enabled"] is True
+    assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 8
+    assert baked.stats["source_projection_nearest_fallback_max_distance_voxels"] == pytest.approx(12.0)
+    assert baked.stats["source_projection_nearest_fallback_weight_epsilon_voxels"] == pytest.approx(0.1)
     assert baked.stats["trilinear_sampled_texel_count"] > 0
     np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([64, 64, 0, 255], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_normalizes_sparse_trilinear_present_corners() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.8],
+                [1.0, 0.0, 0.8],
+                [0.0, 1.0, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    source_vertices = mesh.vertices.copy()
+    source_vertices[:, 2] = 0.0
+
+    baked = bake_pbr_texture(
+        mesh,
+        np.asarray([[0, 0, 0, 0]], dtype=np.int32),
+        np.asarray([[1.0, 0.5, 0.0, 0.25, 1.0, 1.0]], dtype=np.float32),
+        texture_size=2,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        source_vertices=source_vertices,
+        source_faces=mesh.faces.copy(),
+    )
+
+    assert baked.stats["trilinear_sampled_texel_count"] > 0
+    assert baked.stats["trilinear_missing_corner_texel_count"] > 0
+    np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([255, 128, 0, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(baked.metallic_roughness[0, 0], np.array([0, 255, 64], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_source_projection_uses_sparse_knn_when_trilinear_has_no_present_corner() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.8],
+                [1.0, 0.0, 0.8],
+                [0.0, 1.0, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    source_vertices = mesh.vertices.copy()
+    source_vertices[:, 2] = 0.0
+
+    baked = bake_pbr_texture(
+        mesh,
+        np.asarray([[0, 2, 0, 0]], dtype=np.int32),
+        np.asarray([[0.0, 1.0, 0.25, 0.75, 0.9, 1.0]], dtype=np.float32),
+        texture_size=2,
+        origin=(-0.5, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=4,
+        source_vertices=source_vertices,
+        source_faces=mesh.faces.copy(),
+        source_projection_fallback_neighbors=4,
+        source_projection_fallback_max_distance_voxels=2.0,
+    )
+
+    assert baked.stats["source_projection_nearest_fallback_enabled"] is True
+    assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 4
+    assert baked.stats["source_projection_nearest_fallback_max_distance_voxels"] == pytest.approx(2.0)
+    assert baked.stats["source_projection_nearest_fallback_texel_count"] > 0
+    assert baked.stats["trilinear_invalid_texel_count"] == 0
+    assert baked.coverage_status[0, 0] == 4
+    np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([0, 255, 64, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(baked.metallic_roughness[0, 0], np.array([0, 230, 191], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_source_projection_can_disable_sparse_knn_for_isolation() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.8],
+                [1.0, 0.0, 0.8],
+                [0.0, 1.0, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    source_vertices = mesh.vertices.copy()
+    source_vertices[:, 2] = 0.0
+
+    baked = bake_pbr_texture(
+        mesh,
+        np.asarray([[0, 2, 0, 0]], dtype=np.int32),
+        np.asarray([[0.0, 1.0, 0.25, 0.75, 0.9, 1.0]], dtype=np.float32),
+        texture_size=1,
+        origin=(-0.5, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=4,
+        source_vertices=source_vertices,
+        source_faces=mesh.faces.copy(),
+        source_projection_fallback_mode="disabled",
+    )
+
+    assert baked.stats["source_projection_nearest_fallback_enabled"] is False
+    assert baked.stats["source_projection_nearest_fallback_mode"] == "disabled"
+    assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 0
+    assert baked.stats["source_projection_nearest_fallback_texel_count"] == 0
+    assert baked.stats["source_projection_nearest_fallback_missing_texel_count"] > 0
+    assert baked.stats["sampling_mode"] == "trilinear-without-sparse-knn-fallback"
+    assert baked.stats["nearest_fallback_scope"] == "disabled-source-projection-trilinear-only"
+    assert baked.stats["trilinear_invalid_texel_count"] > 0
+    assert baked.coverage_status[0, 0] == 2
+    np.testing.assert_array_equal(baked.base_color_rgba[0, 0], np.array([0, 0, 0, 0], dtype=np.uint8))
+
+
+def test_bake_pbr_texture_can_disable_source_projection_for_isolation() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.8],
+                [1.0, 0.0, 0.8],
+                [0.0, 1.0, 0.8],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    source_vertices = mesh.vertices.copy()
+    source_vertices[:, 2] = 0.0
+
+    baked = bake_pbr_texture(
+        mesh,
+        np.asarray([[0, 0, 0, 0]], dtype=np.int32),
+        np.asarray([[1.0, 0.0, 0.0, 0.0, 1.0, 1.0]], dtype=np.float32),
+        texture_size=2,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        source_vertices=source_vertices,
+        source_faces=mesh.faces.copy(),
+        source_projection=False,
+    )
+
+    assert baked.stats["source_projection_used"] is False
+    assert baked.stats["source_projection_detail"] == "none"
+    assert baked.stats["source_projection_nearest_fallback_enabled"] is False
+    assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 0
+    assert baked.stats["sampling_mode"] == "nearest"
+    assert baked.stats["nearest_fallback_scope"] == "metal-kernel-missing-voxel"
+
+
+def test_bake_pbr_texture_rejects_invalid_source_projection_fallback_mode() -> None:
+    mesh = _uv_mesh()
+    coordinates, attributes = _texture_fields()
+
+    with pytest.raises(ValueError, match="source_projection_fallback_mode"):
+        bake_pbr_texture(
+            mesh,
+            coordinates,
+            attributes,
+            texture_size=4,
+            origin=(0.0, 0.0, 0.0),
+            voxel_size=1.0,
+            decode_resolution=2,
+            source_projection_fallback_mode="far-nearest",
+        )
+
+
+def test_bake_pbr_texture_can_disable_render_padding_for_isolation() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = _uv_mesh()
+    coordinates, attributes = _texture_fields()
+    padded = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=4,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        render_padding=True,
+    )
+    unpadded = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=4,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        render_padding=False,
+    )
+
+    assert padded.stats["render_padding_enabled"] is True
+    assert padded.stats["render_alpha_coverage_ratio"] >= unpadded.stats["render_alpha_coverage_ratio"]
+    assert unpadded.stats["render_padding_enabled"] is False
+    assert unpadded.stats["render_padding_policy"] == "disabled"
+    assert unpadded.stats["render_padding_filled_texel_count"] == 0
+    np.testing.assert_array_equal(padded.coverage_status, unpadded.coverage_status)
+    interior = unpadded.coverage_status != 0
+    np.testing.assert_array_equal(padded.base_color_rgba[interior], unpadded.base_color_rgba[interior])
+
+
+def test_bake_pbr_texture_can_toggle_surface_fill_and_render_padding_independently() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+
+    mesh = NativeUvMesh(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [16.0, 0.0, 0.0],
+                [0.0, 16.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        stats={"backend": "provided"},
+    )
+    coordinates = np.array([[0, 1, 1, 0]], dtype=np.int32)
+    attributes = np.array([[1.0, 0.25, 0.0, 0.0, 0.5, 1.0]], dtype=np.float32)
+
+    no_fill = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=16,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        surface_fill=False,
+        render_padding=False,
+    )
+    fill_only = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=16,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        surface_fill=True,
+        render_padding=False,
+    )
+    fill_and_padding = bake_pbr_texture(
+        mesh,
+        coordinates,
+        attributes,
+        texture_size=16,
+        origin=(0.0, 0.0, 0.0),
+        voxel_size=1.0,
+        decode_resolution=2,
+        surface_fill=True,
+        render_padding=True,
+    )
+
+    assert no_fill.stats["surface_fill_enabled"] is False
+    assert no_fill.stats["surface_fill_traversal_policy"] == "disabled"
+    assert no_fill.stats["surface_filled_texel_count"] == 0
+    assert fill_only.stats["surface_fill_enabled"] is True
+    assert fill_only.stats["surface_filled_texel_count"] > 0
+    assert fill_only.stats["surface_unfilled_texel_count"] < no_fill.stats["surface_unfilled_texel_count"]
+    np.testing.assert_array_equal(no_fill.coverage_status == 1, fill_only.coverage_status == 1)
+    np.testing.assert_array_equal(no_fill.coverage_status == 4, fill_only.coverage_status == 4)
+    seeds = np.isin(no_fill.coverage_status, [1, 4])
+    np.testing.assert_array_equal(no_fill.base_color_rgba[seeds], fill_only.base_color_rgba[seeds])
+
+    assert fill_only.stats["render_padding_enabled"] is False
+    assert fill_and_padding.stats["render_padding_enabled"] is True
+    assert fill_and_padding.stats["render_padding_filled_texel_count"] > 0
+    np.testing.assert_array_equal(fill_only.coverage_status, fill_and_padding.coverage_status)
+    uv_surface = fill_only.coverage_status != 0
+    np.testing.assert_array_equal(fill_only.base_color_rgba[uv_surface], fill_and_padding.base_color_rgba[uv_surface])
 
 
 def test_bake_pbr_texture_metal_uses_binned_path_for_native_chart_uvs() -> None:
@@ -303,7 +668,7 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         stats={"backend": "provided"},
     )
-    coordinates = np.array([[0, 0, 1, 1]], dtype=np.int32)
+    coordinates = np.array([[0, 1, 1, 0]], dtype=np.int32)
     attributes = np.array([[1.0, 0.25, 0.0, 0.0, 0.5, 1.0]], dtype=np.float32)
     if not metal_device_available():
         pytest.skip("Metal device unavailable")
@@ -345,14 +710,17 @@ def test_bake_pbr_texture_diagnostics_separate_missing_surface_and_no_face_texel
         + baked.stats["fallback_filled_texel_count"]
         + baked.stats["surface_filled_texel_count"]
     )
-    assert np.all(baked.base_color_rgba[baked.coverage_status == 0][:, 3] == 0)
+    assert np.any(baked.base_color_rgba[baked.coverage_status == 0][:, 3] > 0)
     gutter_texels = baked.base_color_rgba[
         (baked.coverage_status == 0) & np.any(baked.base_color_rgba[:, :, :3] != 0, axis=2)
     ]
-    assert gutter_texels.shape[0] == baked.stats["gutter_filled_texel_count"]
-    assert np.all(gutter_texels[:, 3] == 0)
+    assert gutter_texels.shape[0] >= baked.stats["gutter_filled_texel_count"]
+    assert np.all(gutter_texels[:, 3] > 0)
     assert baked.stats["no_face_texel_count"] + baked.stats["uv_surface_texel_count"] == 256
     assert baked.stats["visible_base_color_texel_count"] < baked.stats["nonzero_rgb_texel_count"]
+    assert baked.stats["render_visible_base_color_texel_count"] >= baked.stats["nonzero_rgb_texel_count"]
+    assert baked.stats["render_alpha_coverage_ratio"] > baked.stats["final_visible_coverage_ratio"]
+    assert baked.stats["render_padding_filled_texel_count"] > 0
     assert baked.stats["uv_surface_exact_coverage_ratio"] < 1.0
     assert baked.stats["uv_surface_final_visible_coverage_ratio"] > baked.stats["uv_surface_exact_coverage_ratio"]
     assert baked.stats["fallback_radius"] == 12

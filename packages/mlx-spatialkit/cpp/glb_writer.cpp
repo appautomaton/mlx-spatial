@@ -62,6 +62,28 @@ struct EdgeKeyHash {
   }
 };
 
+struct PositionKey {
+  int64_t x;
+  int64_t y;
+  int64_t z;
+
+  bool operator==(const PositionKey &other) const {
+    return x == other.x && y == other.y && z == other.z;
+  }
+};
+
+struct PositionKeyHash {
+  size_t operator()(const PositionKey &position) const {
+    const auto x = static_cast<uint64_t>(position.x);
+    const auto y = static_cast<uint64_t>(position.y);
+    const auto z = static_cast<uint64_t>(position.z);
+    size_t seed = static_cast<size_t>(x * 11400714819323198485ull);
+    seed ^= static_cast<size_t>(y + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
+    seed ^= static_cast<size_t>(z + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
+    return seed;
+  }
+};
+
 void append_u16_le(std::vector<uint8_t> &out, uint16_t value) {
   out.push_back(static_cast<uint8_t>(value & 0xff));
   out.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
@@ -420,6 +442,15 @@ EdgeKey edge_key(int64_t left, int64_t right) {
   return left < right ? EdgeKey{left, right} : EdgeKey{right, left};
 }
 
+PositionKey position_key(const std::array<float, 3> &position) {
+  constexpr double scale = 1000000.0;
+  return {
+      static_cast<int64_t>(std::llround(static_cast<double>(position[0]) * scale)),
+      static_cast<int64_t>(std::llround(static_cast<double>(position[1]) * scale)),
+      static_cast<int64_t>(std::llround(static_cast<double>(position[2]) * scale)),
+  };
+}
+
 std::vector<std::array<float, 3>> compute_vertex_normals(const mesh_common::MeshData &mesh) {
   std::vector<std::array<float, 3>> normals(mesh.vertices.size(), std::array<float, 3>{0.0f, 0.0f, 0.0f});
   for (const auto &face : mesh.faces) {
@@ -440,14 +471,23 @@ std::vector<std::array<float, 3>> compute_vertex_normals(const mesh_common::Mesh
       accum[2] += normal[2];
     }
   }
+  std::unordered_map<PositionKey, std::array<float, 3>, PositionKeyHash> position_normals;
+  position_normals.reserve(mesh.vertices.size());
+  for (size_t vertex_index = 0; vertex_index < mesh.vertices.size(); ++vertex_index) {
+    auto &accum = position_normals[position_key(mesh.vertices[vertex_index])];
+    accum[0] += normals[vertex_index][0];
+    accum[1] += normals[vertex_index][1];
+    accum[2] += normals[vertex_index][2];
+  }
   for (auto &normal : normals) {
-    const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
-    if (std::isfinite(length) && length > 1e-12f) {
-      normal[0] /= length;
-      normal[1] /= length;
-      normal[2] /= length;
+    normal = normalize3(normal, {0.0f, 0.0f, 1.0f});
+  }
+  for (size_t vertex_index = 0; vertex_index < normals.size(); ++vertex_index) {
+    const auto found = position_normals.find(position_key(mesh.vertices[vertex_index]));
+    if (found != position_normals.end()) {
+      normals[vertex_index] = normalize3(found->second, normals[vertex_index]);
     } else {
-      normal = {0.0f, 0.0f, 1.0f};
+      normals[vertex_index] = normalize3(normals[vertex_index], {0.0f, 0.0f, 1.0f});
     }
   }
   return normals;

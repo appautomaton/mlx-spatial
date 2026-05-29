@@ -18,6 +18,7 @@ nanobind::dict simplify_mesh(
     int64_t target_faces,
     int64_t min_component_faces,
     const std::string &backend,
-    int64_t small_boundary_loop_fill_max_edges);
+    int64_t small_boundary_loop_fill_max_edges,
+    double small_boundary_loop_fill_max_perimeter);
 
 }  // namespace mlx_spatialkit

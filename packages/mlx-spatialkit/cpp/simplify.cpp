@@ -93,10 +93,30 @@ struct SmallLoopFillResult {
   int64_t loops_rejected_duplicate = 0;
   int64_t loops_rejected_nonmanifold = 0;
   int64_t loops_budget_limited = 0;
+  int64_t loops_edge_count_sum = 0;
+  int64_t loops_edge_count_max = 0;
+  double loops_perimeter_sum = 0.0;
+  double loops_perimeter_max = 0.0;
+  int64_t loops_rejected_perimeter_edge_count_sum = 0;
+  int64_t loops_rejected_perimeter_edge_count_max = 0;
+  double loops_rejected_perimeter_sum = 0.0;
+  double loops_rejected_perimeter_min = std::numeric_limits<double>::infinity();
+  double loops_rejected_perimeter_max = 0.0;
   int64_t branched_cycle_candidates = 0;
   int64_t branched_cycles_filled = 0;
   int64_t branched_cycles_rejected = 0;
   int64_t branched_cycles_budget_limited = 0;
+  int64_t faces_added = 0;
+};
+
+struct ReferenceLoopFillResult {
+  mesh_common::MeshData mesh;
+  int64_t boundary_edges_before = 0;
+  int64_t clean_boundary_loops = 0;
+  int64_t filled_loops = 0;
+  int64_t skipped_large_loops = 0;
+  int64_t skipped_complex_components = 0;
+  int64_t vertices_added = 0;
   int64_t faces_added = 0;
 };
 
@@ -120,8 +140,9 @@ constexpr const char *kSmallBoundaryLoopFillAlgorithm = "cumesh-perimeter-centro
 constexpr const char *kSmallBoundaryLoopFillFallbackAlgorithm = "disabled";
 constexpr double kSmallBoundaryLoopFillMaxPerimeter = 3.0e-2;
 constexpr int64_t kSmallBoundaryLoopFillFallbackMaxEdges = 0;
-constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 0;
-constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 1;
+constexpr int64_t kSmallBoundaryBranchedCycleFillMaxEdges = 8;
+constexpr int64_t kSmallBoundaryLoopRepairMaxPasses = 3;
+constexpr int64_t kPreSimplifyCleanBoundaryLoopFillMaxEdges = 64;
 constexpr size_t kSmallBoundaryAlternativeTriangulationMaxVariants = 256;
 
 enum class PatchRejectReason {
@@ -434,6 +455,199 @@ std::vector<int64_t> ordered_closed_loop(
     return {};
   }
   return ordered;
+}
+
+struct DirectedBoundaryEdge {
+  int64_t start = 0;
+  int64_t end = 0;
+};
+
+struct DirectedEdgeKey {
+  int64_t start = 0;
+  int64_t end = 0;
+
+  bool operator==(const DirectedEdgeKey &other) const {
+    return start == other.start && end == other.end;
+  }
+};
+
+struct DirectedEdgeKeyHash {
+  std::size_t operator()(const DirectedEdgeKey &edge) const {
+    return static_cast<std::size_t>(edge.start * 1000003LL) ^ static_cast<std::size_t>(edge.end);
+  }
+};
+
+std::vector<DirectedBoundaryEdge> reference_boundary_edges(const mesh_common::MeshData &mesh) {
+  const std::unordered_map<mesh_common::EdgeKey, int64_t, mesh_common::EdgeKeyHash> counts =
+      mesh_common::edge_counts(mesh.faces);
+  std::vector<DirectedBoundaryEdge> boundary_edges;
+  boundary_edges.reserve(counts.size());
+  for (const auto &face : mesh.faces) {
+    const std::array<DirectedBoundaryEdge, 3> directed_edges{
+        DirectedBoundaryEdge{face[0], face[1]},
+        DirectedBoundaryEdge{face[1], face[2]},
+        DirectedBoundaryEdge{face[2], face[0]},
+    };
+    for (const DirectedBoundaryEdge &edge : directed_edges) {
+      const mesh_common::EdgeKey key = mesh_common::edge_key(edge.start, edge.end);
+      const auto found = counts.find(key);
+      if (found != counts.end() && found->second == 1) {
+        boundary_edges.push_back(edge);
+      }
+    }
+  }
+  return boundary_edges;
+}
+
+std::unordered_map<int64_t, std::vector<int64_t>> boundary_adjacency(
+    const std::vector<DirectedBoundaryEdge> &boundary_edges) {
+  std::unordered_map<int64_t, std::vector<int64_t>> adjacency;
+  adjacency.reserve(boundary_edges.size() * 2);
+  for (const DirectedBoundaryEdge &edge : boundary_edges) {
+    adjacency[edge.start].push_back(edge.end);
+    adjacency[edge.end].push_back(edge.start);
+  }
+  for (auto &[_, neighbors] : adjacency) {
+    (void)_;
+    std::sort(neighbors.begin(), neighbors.end());
+  }
+  return adjacency;
+}
+
+int64_t count_complex_boundary_components(
+    const std::unordered_map<int64_t, std::vector<int64_t>> &adjacency,
+    const std::vector<DirectedBoundaryEdge> &boundary_edges) {
+  std::unordered_set<mesh_common::EdgeKey, mesh_common::EdgeKeyHash> visited_edges;
+  visited_edges.reserve(boundary_edges.size());
+  int64_t complex_components = 0;
+  std::vector<int64_t> stack;
+  for (const DirectedBoundaryEdge &raw_edge : boundary_edges) {
+    const mesh_common::EdgeKey first_edge = mesh_common::edge_key(raw_edge.start, raw_edge.end);
+    if (visited_edges.contains(first_edge)) {
+      continue;
+    }
+    std::unordered_set<int64_t> component_vertices;
+    std::unordered_set<mesh_common::EdgeKey, mesh_common::EdgeKeyHash> component_edges;
+    stack.clear();
+    stack.push_back(raw_edge.start);
+    while (!stack.empty()) {
+      const int64_t vertex = stack.back();
+      stack.pop_back();
+      if (!component_vertices.insert(vertex).second) {
+        continue;
+      }
+      const auto found = adjacency.find(vertex);
+      if (found == adjacency.end()) {
+        continue;
+      }
+      for (int64_t neighbor : found->second) {
+        const mesh_common::EdgeKey edge = mesh_common::edge_key(vertex, neighbor);
+        component_edges.insert(edge);
+        if (!visited_edges.contains(edge)) {
+          visited_edges.insert(edge);
+          stack.push_back(neighbor);
+        }
+      }
+    }
+    const bool complex =
+        std::any_of(component_vertices.begin(), component_vertices.end(), [&](int64_t vertex) {
+          const auto found = adjacency.find(vertex);
+          return found == adjacency.end() || found->second.size() != 2;
+        }) ||
+        component_edges.size() != component_vertices.size();
+    if (complex) {
+      complex_components += 1;
+    }
+  }
+  return complex_components;
+}
+
+std::vector<std::vector<int64_t>> order_reference_clean_boundary_loops(
+    const std::unordered_map<int64_t, std::vector<int64_t>> &adjacency,
+    const std::vector<DirectedBoundaryEdge> &boundary_edges) {
+  std::vector<std::vector<int64_t>> loops;
+  std::unordered_set<mesh_common::EdgeKey, mesh_common::EdgeKeyHash> visited_edges;
+  visited_edges.reserve(boundary_edges.size());
+  for (const DirectedBoundaryEdge &raw_edge : boundary_edges) {
+    const mesh_common::EdgeKey first_edge = mesh_common::edge_key(raw_edge.start, raw_edge.end);
+    if (visited_edges.contains(first_edge)) {
+      continue;
+    }
+
+    const int64_t start = raw_edge.start;
+    int64_t previous = -1;
+    int64_t current = start;
+    std::vector<int64_t> loop;
+    std::unordered_set<int64_t> loop_seen;
+    std::unordered_set<mesh_common::EdgeKey, mesh_common::EdgeKeyHash> component_edges;
+    bool clean = true;
+    while (true) {
+      const auto found = adjacency.find(current);
+      const bool current_seen = loop_seen.contains(current);
+      if (found == adjacency.end() || found->second.size() != 2 || current_seen) {
+        clean = current == start && loop.size() >= 3;
+        break;
+      }
+      loop.push_back(current);
+      loop_seen.insert(current);
+      int64_t next = -1;
+      for (int64_t candidate : found->second) {
+        if (candidate != previous) {
+          next = candidate;
+          break;
+        }
+      }
+      if (next < 0) {
+        clean = false;
+        break;
+      }
+      component_edges.insert(mesh_common::edge_key(current, next));
+      previous = current;
+      current = next;
+      if (current == start) {
+        clean = loop.size() >= 3;
+        break;
+      }
+    }
+    for (const mesh_common::EdgeKey &edge : component_edges) {
+      visited_edges.insert(edge);
+    }
+    if (clean &&
+        std::all_of(loop.begin(), loop.end(), [&](int64_t vertex) {
+          const auto found = adjacency.find(vertex);
+          return found != adjacency.end() && found->second.size() == 2;
+        })) {
+      loops.push_back(std::move(loop));
+    }
+  }
+  return loops;
+}
+
+std::vector<std::array<int64_t, 3>> reference_centroid_fan_patch(
+    const std::vector<int64_t> &loop,
+    int64_t center_vertex_id,
+    const std::unordered_set<DirectedEdgeKey, DirectedEdgeKeyHash> &directed_boundary) {
+  int64_t forward_votes = 0;
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const int64_t start = loop[index];
+    const int64_t end = loop[(index + 1) % loop.size()];
+    if (directed_boundary.contains(DirectedEdgeKey{start, end})) {
+      forward_votes += 1;
+    }
+  }
+  const bool reverse_boundary = forward_votes >= static_cast<int64_t>(loop.size()) - forward_votes;
+  std::vector<std::array<int64_t, 3>> patch_faces;
+  patch_faces.reserve(loop.size());
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const int64_t start = loop[index];
+    const int64_t end = loop[(index + 1) % loop.size()];
+    if (reverse_boundary) {
+      patch_faces.push_back({center_vertex_id, end, start});
+    } else {
+      patch_faces.push_back({center_vertex_id, start, end});
+    }
+  }
+  return patch_faces;
 }
 
 double orient2d(const Point2 &a, const Point2 &b, const Point2 &c) {
@@ -788,6 +1002,71 @@ std::array<float, 3> loop_boundary_midpoint_mean(const mesh_common::MeshData &me
   };
 }
 
+ReferenceLoopFillResult fill_reference_clean_boundary_loops(
+    const mesh_common::MeshData &input,
+    int64_t max_loop_edges,
+    double max_perimeter) {
+  ReferenceLoopFillResult result;
+  result.mesh = input;
+  if (input.faces.empty()) {
+    return result;
+  }
+  const std::vector<DirectedBoundaryEdge> boundary_edges = reference_boundary_edges(input);
+  result.boundary_edges_before = static_cast<int64_t>(boundary_edges.size());
+  if (boundary_edges.empty()) {
+    return result;
+  }
+
+  const std::unordered_map<int64_t, std::vector<int64_t>> adjacency = boundary_adjacency(boundary_edges);
+  result.skipped_complex_components = count_complex_boundary_components(adjacency, boundary_edges);
+  const std::vector<std::vector<int64_t>> loops =
+      order_reference_clean_boundary_loops(adjacency, boundary_edges);
+  result.clean_boundary_loops = static_cast<int64_t>(loops.size());
+
+  std::unordered_set<DirectedEdgeKey, DirectedEdgeKeyHash> directed_boundary;
+  directed_boundary.reserve(boundary_edges.size());
+  for (const DirectedBoundaryEdge &edge : boundary_edges) {
+    directed_boundary.insert(DirectedEdgeKey{edge.start, edge.end});
+  }
+
+  std::vector<std::array<float, 3>> new_vertices;
+  std::vector<std::array<int64_t, 3>> new_faces;
+  new_vertices.reserve(loops.size());
+  new_faces.reserve(loops.size() * 4);
+  for (const std::vector<int64_t> &loop : loops) {
+    if (static_cast<int64_t>(loop.size()) > max_loop_edges) {
+      result.skipped_large_loops += 1;
+      continue;
+    }
+    const double perimeter = loop_perimeter(input, loop);
+    if (!std::isfinite(perimeter) || perimeter > max_perimeter) {
+      result.skipped_large_loops += 1;
+      continue;
+    }
+    const int64_t center_vertex_id = static_cast<int64_t>(input.vertices.size() + new_vertices.size());
+    const std::array<float, 3> center = loop_boundary_midpoint_mean(input, loop);
+    if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
+      result.skipped_large_loops += 1;
+      continue;
+    }
+    std::vector<std::array<int64_t, 3>> patch_faces =
+        reference_centroid_fan_patch(loop, center_vertex_id, directed_boundary);
+    new_vertices.push_back(center);
+    new_faces.insert(new_faces.end(), patch_faces.begin(), patch_faces.end());
+  }
+
+  if (!new_vertices.empty()) {
+    result.mesh.vertices.reserve(input.vertices.size() + new_vertices.size());
+    result.mesh.faces.reserve(input.faces.size() + new_faces.size());
+    result.mesh.vertices.insert(result.mesh.vertices.end(), new_vertices.begin(), new_vertices.end());
+    result.mesh.faces.insert(result.mesh.faces.end(), new_faces.begin(), new_faces.end());
+  }
+  result.filled_loops = static_cast<int64_t>(new_vertices.size());
+  result.vertices_added = static_cast<int64_t>(new_vertices.size());
+  result.faces_added = static_cast<int64_t>(new_faces.size());
+  return result;
+}
+
 std::vector<std::array<int64_t, 3>> cumesh_centroid_fan_loop_patch(
     const std::vector<int64_t> &loop,
     int64_t center_vertex_id) {
@@ -983,6 +1262,7 @@ int64_t effective_repair_cap(int64_t public_cap, int64_t policy_cap) {
 SmallLoopFillResult fill_small_boundary_loops_single_pass(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
+    double max_perimeter,
     int64_t face_budget) {
   SmallLoopFillResult result;
   result.mesh = input;
@@ -1020,15 +1300,25 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
   auto apply_loop_patch = [&](const std::vector<int64_t> &loop) {
     result.loops_considered += 1;
     const int64_t loop_edges = static_cast<int64_t>(loop.size());
+    result.loops_edge_count_sum += loop_edges;
+    result.loops_edge_count_max = std::max(result.loops_edge_count_max, loop_edges);
     const double perimeter = loop_perimeter(result.mesh, loop);
     if (!std::isfinite(perimeter) || perimeter <= 0.0) {
       result.loops_rejected += 1;
       result.loops_rejected_degenerate += 1;
       return;
     }
-    if (perimeter >= kSmallBoundaryLoopFillMaxPerimeter) {
+    result.loops_perimeter_sum += perimeter;
+    result.loops_perimeter_max = std::max(result.loops_perimeter_max, perimeter);
+    if (perimeter >= max_perimeter) {
       result.loops_rejected += 1;
       result.loops_rejected_perimeter += 1;
+      result.loops_rejected_perimeter_edge_count_sum += loop_edges;
+      result.loops_rejected_perimeter_edge_count_max =
+          std::max(result.loops_rejected_perimeter_edge_count_max, loop_edges);
+      result.loops_rejected_perimeter_sum += perimeter;
+      result.loops_rejected_perimeter_min = std::min(result.loops_rejected_perimeter_min, perimeter);
+      result.loops_rejected_perimeter_max = std::max(result.loops_rejected_perimeter_max, perimeter);
       return;
     }
     if (loop_edges > max_loop_edges) {
@@ -1135,6 +1425,25 @@ SmallLoopFillResult fill_small_boundary_loops_single_pass(
       apply_loop_patch(loop);
       continue;
     }
+    const std::vector<std::vector<int64_t>> cycles =
+        branched_component_cycles(adjacency, component_vertices, max_loop_edges);
+    result.branched_cycle_candidates += static_cast<int64_t>(cycles.size());
+    for (const std::vector<int64_t> &loop : cycles) {
+      const int64_t before_filled = result.loops_filled;
+      const int64_t before_budget_limited = result.loops_budget_limited;
+      const int64_t before_rejected = result.loops_rejected;
+      apply_loop_patch(loop);
+      if (result.loops_filled > before_filled) {
+        result.branched_cycles_filled += 1;
+      } else if (result.loops_budget_limited > before_budget_limited) {
+        result.branched_cycles_budget_limited += 1;
+      } else if (result.loops_rejected > before_rejected) {
+        result.branched_cycles_rejected += 1;
+      }
+      if (result.faces_added >= result.face_budget) {
+        break;
+      }
+    }
   }
   return result;
 }
@@ -1158,6 +1467,19 @@ void accumulate_fill_pass(SmallLoopFillResult &total, SmallLoopFillResult &&pass
   total.loops_rejected_duplicate += pass.loops_rejected_duplicate;
   total.loops_rejected_nonmanifold += pass.loops_rejected_nonmanifold;
   total.loops_budget_limited += pass.loops_budget_limited;
+  total.loops_edge_count_sum += pass.loops_edge_count_sum;
+  total.loops_edge_count_max = std::max(total.loops_edge_count_max, pass.loops_edge_count_max);
+  total.loops_perimeter_sum += pass.loops_perimeter_sum;
+  total.loops_perimeter_max = std::max(total.loops_perimeter_max, pass.loops_perimeter_max);
+  total.loops_rejected_perimeter_edge_count_sum += pass.loops_rejected_perimeter_edge_count_sum;
+  total.loops_rejected_perimeter_edge_count_max = std::max(
+      total.loops_rejected_perimeter_edge_count_max,
+      pass.loops_rejected_perimeter_edge_count_max);
+  total.loops_rejected_perimeter_sum += pass.loops_rejected_perimeter_sum;
+  total.loops_rejected_perimeter_min =
+      std::min(total.loops_rejected_perimeter_min, pass.loops_rejected_perimeter_min);
+  total.loops_rejected_perimeter_max =
+      std::max(total.loops_rejected_perimeter_max, pass.loops_rejected_perimeter_max);
   total.branched_cycle_candidates += pass.branched_cycle_candidates;
   total.branched_cycles_filled += pass.branched_cycles_filled;
   total.branched_cycles_rejected += pass.branched_cycles_rejected;
@@ -1169,6 +1491,7 @@ void accumulate_fill_pass(SmallLoopFillResult &total, SmallLoopFillResult &&pass
 SmallLoopFillResult fill_small_boundary_loops(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
+    double max_perimeter,
     int64_t face_budget) {
   SmallLoopFillResult total;
   total.mesh = input;
@@ -1181,7 +1504,8 @@ SmallLoopFillResult fill_small_boundary_loops(
     if (remaining_budget <= 0) {
       break;
     }
-    SmallLoopFillResult pass = fill_small_boundary_loops_single_pass(total.mesh, max_loop_edges, remaining_budget);
+    SmallLoopFillResult pass =
+        fill_small_boundary_loops_single_pass(total.mesh, max_loop_edges, max_perimeter, remaining_budget);
     const int64_t pass_faces_added = pass.faces_added;
     accumulate_fill_pass(total, std::move(pass));
     if (pass_faces_added <= 0) {
@@ -1275,7 +1599,10 @@ void add_small_loop_fill_stats(
     nb::dict &stats,
     bool enabled,
     int64_t max_loop_edges,
+    double max_perimeter,
     const SmallLoopFillResult &fill) {
+  const int64_t effective_branched_cycle_cap =
+      enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryBranchedCycleFillMaxEdges) : 0;
   stats["small_boundary_loop_fill_enabled"] = enabled;
   stats["small_boundary_loop_fill_algorithm"] = kSmallBoundaryLoopFillAlgorithm;
   stats["small_boundary_loop_fill_fallback_algorithm"] = kSmallBoundaryLoopFillFallbackAlgorithm;
@@ -1284,11 +1611,11 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loop_fill_fallback_max_edges"] = kSmallBoundaryLoopFillFallbackMaxEdges;
   stats["small_boundary_loop_fill_fallback_effective_max_edges"] =
       enabled ? effective_repair_cap(max_loop_edges, kSmallBoundaryLoopFillFallbackMaxEdges) : 0;
-  stats["small_boundary_loop_fill_max_perimeter"] = kSmallBoundaryLoopFillMaxPerimeter;
-  stats["small_boundary_branched_cycle_fill_enabled"] = false;
+  stats["small_boundary_loop_fill_max_perimeter"] = max_perimeter;
+  stats["small_boundary_branched_cycle_fill_enabled"] = effective_branched_cycle_cap > 0;
   stats["small_boundary_branched_cycle_fill_policy_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
   stats["small_boundary_branched_cycle_fill_max_edges"] = kSmallBoundaryBranchedCycleFillMaxEdges;
-  stats["small_boundary_branched_cycle_fill_effective_max_edges"] = 0;
+  stats["small_boundary_branched_cycle_fill_effective_max_edges"] = effective_branched_cycle_cap;
   stats["small_boundary_loop_repair_max_passes"] = kSmallBoundaryLoopRepairMaxPasses;
   stats["small_boundary_loop_repair_pass_count"] = fill.repair_pass_count;
   stats["small_boundary_loop_fill_max_edges"] = max_loop_edges;
@@ -1312,11 +1639,51 @@ void add_small_loop_fill_stats(
   stats["small_boundary_loops_rejected_duplicate"] = fill.loops_rejected_duplicate;
   stats["small_boundary_loops_rejected_nonmanifold"] = fill.loops_rejected_nonmanifold;
   stats["small_boundary_loops_budget_limited"] = fill.loops_budget_limited;
+  stats["small_boundary_loops_edge_count_avg"] = fill.loops_considered > 0
+      ? static_cast<double>(fill.loops_edge_count_sum) / static_cast<double>(fill.loops_considered)
+      : 0.0;
+  stats["small_boundary_loops_edge_count_max"] = fill.loops_edge_count_max;
+  stats["small_boundary_loops_perimeter_avg"] = fill.loops_considered > 0
+      ? fill.loops_perimeter_sum / static_cast<double>(fill.loops_considered)
+      : 0.0;
+  stats["small_boundary_loops_perimeter_max"] = fill.loops_perimeter_max;
+  stats["small_boundary_loops_rejected_perimeter_edge_count_avg"] = fill.loops_rejected_perimeter > 0
+      ? static_cast<double>(fill.loops_rejected_perimeter_edge_count_sum) /
+            static_cast<double>(fill.loops_rejected_perimeter)
+      : 0.0;
+  stats["small_boundary_loops_rejected_perimeter_edge_count_max"] =
+      fill.loops_rejected_perimeter_edge_count_max;
+  stats["small_boundary_loops_rejected_perimeter_avg"] = fill.loops_rejected_perimeter > 0
+      ? fill.loops_rejected_perimeter_sum / static_cast<double>(fill.loops_rejected_perimeter)
+      : 0.0;
+  stats["small_boundary_loops_rejected_perimeter_min"] = fill.loops_rejected_perimeter > 0
+      ? fill.loops_rejected_perimeter_min
+      : 0.0;
+  stats["small_boundary_loops_rejected_perimeter_max"] =
+      fill.loops_rejected_perimeter_max;
   stats["small_boundary_branched_cycle_candidates"] = fill.branched_cycle_candidates;
   stats["small_boundary_branched_cycles_filled"] = fill.branched_cycles_filled;
   stats["small_boundary_branched_cycles_rejected"] = fill.branched_cycles_rejected;
   stats["small_boundary_branched_cycles_budget_limited"] = fill.branched_cycles_budget_limited;
   stats["small_boundary_loop_faces_added"] = fill.faces_added;
+}
+
+void add_pre_simplify_loop_fill_stats(
+    nb::dict &stats,
+    bool enabled,
+    double max_perimeter,
+    const ReferenceLoopFillResult &fill) {
+  stats["pre_simplify_hole_fill_enabled"] = enabled;
+  stats["pre_simplify_hole_fill_algorithm"] = "reference-clean-boundary-centroid-fan";
+  stats["pre_simplify_hole_fill_max_edges"] = kPreSimplifyCleanBoundaryLoopFillMaxEdges;
+  stats["pre_simplify_hole_fill_max_perimeter"] = max_perimeter;
+  stats["pre_simplify_hole_fill_boundary_edges_before"] = fill.boundary_edges_before;
+  stats["pre_simplify_hole_fill_clean_boundary_loops"] = fill.clean_boundary_loops;
+  stats["pre_simplify_hole_fill_filled_loops"] = fill.filled_loops;
+  stats["pre_simplify_hole_fill_skipped_large_loops"] = fill.skipped_large_loops;
+  stats["pre_simplify_hole_fill_skipped_complex_components"] = fill.skipped_complex_components;
+  stats["pre_simplify_hole_fill_vertices_added"] = fill.vertices_added;
+  stats["pre_simplify_hole_fill_faces_added"] = fill.faces_added;
 }
 
 }  // namespace
@@ -1327,7 +1694,8 @@ nb::dict simplify_mesh(
     int64_t target_faces,
     int64_t min_component_faces,
     const std::string &backend,
-    int64_t small_boundary_loop_fill_max_edges) {
+    int64_t small_boundary_loop_fill_max_edges,
+    double small_boundary_loop_fill_max_perimeter) {
   if (target_faces <= 0) {
     throw nb::value_error("target_faces must be positive");
   }
@@ -1336,6 +1704,9 @@ nb::dict simplify_mesh(
   }
   if (small_boundary_loop_fill_max_edges < 0) {
     throw nb::value_error("small_boundary_loop_fill_max_edges must be non-negative");
+  }
+  if (!std::isfinite(small_boundary_loop_fill_max_perimeter) || small_boundary_loop_fill_max_perimeter <= 0.0) {
+    throw nb::value_error("small_boundary_loop_fill_max_perimeter must be positive");
   }
   const BackendSelection selection = resolve_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
@@ -1350,17 +1721,31 @@ nb::dict simplify_mesh(
       fill = fill_small_boundary_loops(
           compact,
           small_boundary_loop_fill_max_edges,
+          small_boundary_loop_fill_max_perimeter,
           target_faces - static_cast<int64_t>(compact.faces.size()));
       compact = fill.mesh;
     }
     nb::dict result = mesh_common::mesh_result(compact);
     nb::dict stats;
     const bool target_reached = static_cast<int64_t>(compact.faces.size()) <= target_faces;
+    ReferenceLoopFillResult pre_simplify_fill;
     add_backend_stats(stats, selection, static_cast<int64_t>(compact.faces.size()), target_reached);
-    add_small_loop_fill_stats(stats, small_loop_fill_enabled, small_boundary_loop_fill_max_edges, fill);
+    add_pre_simplify_loop_fill_stats(
+        stats,
+        false,
+        small_boundary_loop_fill_max_perimeter,
+        pre_simplify_fill);
+    add_small_loop_fill_stats(
+        stats,
+        small_loop_fill_enabled,
+        small_boundary_loop_fill_max_edges,
+        small_boundary_loop_fill_max_perimeter,
+        fill);
     stats["target_faces"] = target_faces;
     stats["source_faces"] = static_cast<int64_t>(input.faces.size());
     stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
+    stats["pre_simplify_faces"] = static_cast<int64_t>(compact.faces.size());
+    stats["pre_simplify_vertices"] = static_cast<int64_t>(compact.vertices.size());
     stats["final_faces"] = static_cast<int64_t>(compact.faces.size());
     stats["final_vertices"] = static_cast<int64_t>(compact.vertices.size());
     stats["cluster_count"] = static_cast<int64_t>(compact.vertices.size());
@@ -1384,8 +1769,19 @@ nb::dict simplify_mesh(
     return result;
   }
 
+  ReferenceLoopFillResult pre_simplify_fill;
+  const bool pre_simplify_fill_enabled = selection.topology_aware && small_boundary_loop_fill_max_edges > 0;
+  const mesh_common::MeshData *simplification_input = &input;
+  if (pre_simplify_fill_enabled) {
+    pre_simplify_fill = fill_reference_clean_boundary_loops(
+        input,
+        kPreSimplifyCleanBoundaryLoopFillMaxEdges,
+        small_boundary_loop_fill_max_perimeter);
+    simplification_input = &pre_simplify_fill.mesh;
+  }
+
   int64_t grid_resolution = initial_grid_resolution(target_faces);
-  ClusterResult best = cluster_mesh(input, grid_resolution, selection.topology_aware);
+  ClusterResult best = cluster_mesh(*simplification_input, grid_resolution, selection.topology_aware);
   for (int attempt = 0; attempt < 4; ++attempt) {
     const int64_t final_faces = static_cast<int64_t>(best.mesh.faces.size());
     if (final_faces <= target_faces && final_faces >= std::max<int64_t>(1, target_faces * 6 / 10)) {
@@ -1398,7 +1794,7 @@ nb::dict simplify_mesh(
       double adjusted = static_cast<double>(grid_resolution) * scale * (final_faces > target_faces ? 0.95 : 1.05);
       grid_resolution = std::max<int64_t>(2, static_cast<int64_t>(std::ceil(adjusted)));
     }
-    ClusterResult candidate = cluster_mesh(input, grid_resolution, selection.topology_aware);
+    ClusterResult candidate = cluster_mesh(*simplification_input, grid_resolution, selection.topology_aware);
     if (candidate.mesh.faces.empty()) {
       continue;
     }
@@ -1419,6 +1815,7 @@ nb::dict simplify_mesh(
     fill = fill_small_boundary_loops(
         simplified,
         small_boundary_loop_fill_max_edges,
+        small_boundary_loop_fill_max_perimeter,
         target_faces - static_cast<int64_t>(simplified.faces.size()));
     simplified = fill.mesh;
   }
@@ -1426,10 +1823,22 @@ nb::dict simplify_mesh(
   nb::dict stats;
   const bool target_reached = static_cast<int64_t>(simplified.faces.size()) <= target_faces;
   add_backend_stats(stats, selection, static_cast<int64_t>(simplified.faces.size()), target_reached);
-  add_small_loop_fill_stats(stats, small_loop_fill_enabled, small_boundary_loop_fill_max_edges, fill);
+  add_pre_simplify_loop_fill_stats(
+      stats,
+      pre_simplify_fill_enabled,
+      small_boundary_loop_fill_max_perimeter,
+      pre_simplify_fill);
+  add_small_loop_fill_stats(
+      stats,
+      small_loop_fill_enabled,
+      small_boundary_loop_fill_max_edges,
+      small_boundary_loop_fill_max_perimeter,
+      fill);
   stats["target_faces"] = target_faces;
   stats["source_faces"] = static_cast<int64_t>(input.faces.size());
   stats["source_vertices"] = static_cast<int64_t>(input.vertices.size());
+  stats["pre_simplify_faces"] = static_cast<int64_t>(simplification_input->faces.size());
+  stats["pre_simplify_vertices"] = static_cast<int64_t>(simplification_input->vertices.size());
   stats["final_faces"] = static_cast<int64_t>(simplified.faces.size());
   stats["final_vertices"] = static_cast<int64_t>(simplified.vertices.size());
   stats["cluster_count"] = best.cluster_count;
@@ -1441,7 +1850,7 @@ nb::dict simplify_mesh(
   stats["target_reached"] = target_reached;
   stats["simplified"] = static_cast<int64_t>(input.faces.size()) > target_faces;
   stats["min_component_faces"] = min_component_faces;
-  stats["candidate_faces_considered"] = static_cast<int64_t>(input.faces.size());
+  stats["candidate_faces_considered"] = static_cast<int64_t>(simplification_input->faces.size());
   stats["accepted_faces"] = static_cast<int64_t>(simplified.faces.size());
   stats["representative_vertices_selected"] = best.representative_vertices_selected;
   stats["representative_selection_strategy"] = best.representative_selection_strategy;

@@ -18,6 +18,14 @@ class GlbPayload:
 
 
 @dataclass(frozen=True)
+class PngPixels:
+    width: int
+    height: int
+    channels: int
+    rows: list[bytes]
+
+
+@dataclass(frozen=True)
 class PngCoverage:
     width: int
     height: int
@@ -129,15 +137,35 @@ def compare_textured_glbs(
     reference = inspect_glb(reference_path)
     candidate_base = _image_by_name(candidate, "baseColorTexture")
     reference_base = _image_by_name(reference, "baseColorTexture")
+    candidate_mr = _image_by_name(candidate, "metallicRoughnessTexture")
+    reference_mr = _image_by_name(reference, "metallicRoughnessTexture")
     face_ratio = _ratio(candidate["total_faces"], reference["total_faces"])
     vertex_ratio = _ratio(candidate["total_vertices"], reference["total_vertices"])
     alpha_ratio = _coverage_ratio(candidate_base, reference_base, "alpha_coverage_ratio")
     rgb_ratio = _coverage_ratio(candidate_base, reference_base, "visible_rgb_coverage_ratio")
     raw_rgb_ratio = _coverage_ratio(candidate_base, reference_base, "rgb_coverage_ratio")
+    candidate_base_stats = candidate_base.get("stats", {})
+    reference_base_stats = reference_base.get("stats", {})
+    candidate_mr_stats = candidate_mr.get("stats", {})
+    reference_mr_stats = reference_mr.get("stats", {})
+    candidate_dark_ratio = candidate_base_stats.get("visible_dark_rgb_ratio")
+    reference_dark_ratio = reference_base_stats.get("visible_dark_rgb_ratio")
+    candidate_gray_ratio = candidate_base_stats.get("visible_grayish_rgb_ratio")
+    reference_gray_ratio = reference_base_stats.get("visible_grayish_rgb_ratio")
+    roughness_mean_ratio = _ratio(
+        candidate_mr_stats.get("channel_1_mean"),
+        reference_mr_stats.get("channel_1_mean"),
+    )
+    candidate_roughness_low_ratio = candidate_mr_stats.get("channel_1_low_51_ratio")
+    reference_roughness_low_ratio = reference_mr_stats.get("channel_1_low_51_ratio")
     texture_resolution_match = (
         candidate_base.get("coverage", {}).get("width") == reference_base.get("coverage", {}).get("width")
         and candidate_base.get("coverage", {}).get("height") == reference_base.get("coverage", {}).get("height")
     )
+    dark_ratio_max = _relative_ratio_ceiling(reference_dark_ratio, absolute=0.15, delta=0.15)
+    gray_ratio_max = _relative_ratio_ceiling(reference_gray_ratio, absolute=0.35, delta=0.25)
+    roughness_low_max = _relative_ratio_ceiling(reference_roughness_low_ratio, absolute=0.05, delta=0.20)
+    roughness_reference_mean = reference_mr_stats.get("channel_1_mean")
     checks = {
         "glb_parseable": {"passed": True, "required": True, "actual": True},
         "textured_mesh": {
@@ -159,15 +187,53 @@ def compare_textured_glbs(
             "required": "same_base_color_dimensions",
         },
         "base_color_alpha_coverage_ratio": {
-            "passed": alpha_ratio is not None and alpha_ratio >= 0.50,
+            "passed": alpha_ratio is not None and alpha_ratio >= 0.95,
             "actual": alpha_ratio,
-            "required_min": 0.50,
+            "required_min": 0.95,
         },
         "base_color_rgb_coverage_ratio": {
-            "passed": rgb_ratio is not None and rgb_ratio >= 0.50,
+            "passed": rgb_ratio is not None and rgb_ratio >= 0.95,
             "actual": rgb_ratio,
             "metric": "visible_rgb_coverage_ratio",
-            "required_min": 0.50,
+            "required_min": 0.95,
+        },
+        "base_color_visible_dark_ratio": {
+            "passed": candidate_dark_ratio is not None
+            and dark_ratio_max is not None
+            and candidate_dark_ratio <= dark_ratio_max,
+            "actual": candidate_dark_ratio,
+            "reference": reference_dark_ratio,
+            "required_max": dark_ratio_max,
+        },
+        "base_color_visible_grayish_ratio": {
+            "passed": candidate_gray_ratio is not None
+            and gray_ratio_max is not None
+            and candidate_gray_ratio <= gray_ratio_max,
+            "actual": candidate_gray_ratio,
+            "reference": reference_gray_ratio,
+            "required_max": gray_ratio_max,
+        },
+        "roughness_mean_ratio": {
+            "passed": _passes_ratio_when_reference_present(roughness_mean_ratio, roughness_reference_mean, 0.75),
+            "actual": roughness_mean_ratio,
+            "candidate_mean": candidate_mr_stats.get("channel_1_mean"),
+            "reference_mean": roughness_reference_mean,
+            "required_min": 0.75,
+            "channel": "metallicRoughnessTexture.G",
+        },
+        "roughness_low_ratio": {
+            "passed": (
+                _reference_absent(roughness_reference_mean)
+                or (
+                    candidate_roughness_low_ratio is not None
+                    and roughness_low_max is not None
+                    and candidate_roughness_low_ratio <= roughness_low_max
+                )
+            ),
+            "actual": candidate_roughness_low_ratio,
+            "reference": reference_roughness_low_ratio,
+            "required_max": roughness_low_max,
+            "channel": "metallicRoughnessTexture.G",
         },
     }
     report: dict[str, Any] = {
@@ -175,14 +241,35 @@ def compare_textured_glbs(
         "reference": reference,
         "summary": {
             "all_passed": all(bool(check["passed"]) for check in checks.values()),
+            "comparison_kind": "coarse_glb_structure_texture_heuristic",
+            "spatial_proof_ready": False,
             "face_count_ratio": face_ratio,
             "vertex_count_ratio": vertex_ratio,
             "base_color_alpha_coverage_ratio": alpha_ratio,
             "base_color_rgb_coverage_ratio": rgb_ratio,
             "base_color_raw_rgb_coverage_ratio": raw_rgb_ratio,
+            "base_color_visible_dark_ratio": candidate_dark_ratio,
+            "base_color_reference_visible_dark_ratio": reference_dark_ratio,
+            "base_color_visible_grayish_ratio": candidate_gray_ratio,
+            "base_color_reference_visible_grayish_ratio": reference_gray_ratio,
+            "roughness_mean_ratio": roughness_mean_ratio,
+            "roughness_candidate_mean": candidate_mr_stats.get("channel_1_mean"),
+            "roughness_reference_mean": roughness_reference_mean,
+            "roughness_low_ratio": candidate_roughness_low_ratio,
+            "roughness_reference_low_ratio": reference_roughness_low_ratio,
             "texture_resolution_match": texture_resolution_match,
         },
         "checks": checks,
+        "comparison_scope": {
+            "kind": "coarse_glb_structure_texture_heuristic",
+            "spatial_proof": False,
+            "viewer_render_proof": False,
+            "texture_registration_proof": False,
+            "reason": (
+                "Checks compare GLB structure and embedded texture statistics only; they are not "
+                "spatially registered UV, rendered-view, or per-surface proof."
+            ),
+        },
         "deferred_parity_boundaries": [
             "not_xatlas_chart_parity",
             "not_1m_face_export_setting_parity",
@@ -265,6 +352,34 @@ def glb_named_image_payload(path: str | Path, image_name: str) -> bytes:
 def png_coverage(png: bytes) -> PngCoverage:
     """Measure nonzero alpha/RGB coverage for 8-bit RGB or RGBA PNGs."""
 
+    pixels = _decode_png(png)
+    alpha_nonzero = 0
+    rgb_nonzero = 0
+    visible_rgb_nonzero = 0
+    for row in pixels.rows:
+        for pixel in range(0, len(row), pixels.channels):
+            r = row[pixel]
+            g = row[pixel + 1]
+            b = row[pixel + 2]
+            a = row[pixel + 3] if pixels.channels == 4 else 255
+            if a:
+                alpha_nonzero += 1
+            if r or g or b:
+                rgb_nonzero += 1
+                if a:
+                    visible_rgb_nonzero += 1
+    return PngCoverage(
+        width=pixels.width,
+        height=pixels.height,
+        channels=pixels.channels,
+        pixel_count=pixels.width * pixels.height,
+        alpha_nonzero_count=alpha_nonzero,
+        rgb_nonzero_count=rgb_nonzero,
+        visible_rgb_nonzero_count=visible_rgb_nonzero,
+    )
+
+
+def _decode_png(png: bytes) -> PngPixels:
     if png[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("PNG signature is invalid")
     pos = 8
@@ -298,30 +413,53 @@ def png_coverage(png: bytes) -> PngCoverage:
         raise ValueError("PNG IHDR is missing")
     channels = 4 if color_type == 6 else 3
     rows = _decode_png_rows(zlib.decompress(bytes(idat)), width, height, channels)
-    alpha_nonzero = 0
-    rgb_nonzero = 0
-    visible_rgb_nonzero = 0
-    for row in rows:
-        for pixel in range(0, len(row), channels):
-            r = row[pixel]
-            g = row[pixel + 1]
-            b = row[pixel + 2]
-            a = row[pixel + 3] if channels == 4 else 255
-            if a:
-                alpha_nonzero += 1
-            if r or g or b:
-                rgb_nonzero += 1
-                if a:
-                    visible_rgb_nonzero += 1
-    return PngCoverage(
+    return PngPixels(
         width=width,
         height=height,
         channels=channels,
-        pixel_count=width * height,
-        alpha_nonzero_count=alpha_nonzero,
-        rgb_nonzero_count=rgb_nonzero,
-        visible_rgb_nonzero_count=visible_rgb_nonzero,
+        rows=rows,
     )
+
+
+def _png_stats(png: bytes) -> dict[str, Any]:
+    pixels = _decode_png(png)
+    sums = [0.0] * pixels.channels
+    low_51 = [0] * pixels.channels
+    visible_rgb_sum = [0.0, 0.0, 0.0]
+    visible_count = 0
+    visible_dark = 0
+    visible_grayish = 0
+    pixel_count = pixels.width * pixels.height
+    for row in pixels.rows:
+        for pixel in range(0, len(row), pixels.channels):
+            values = [row[pixel + channel] for channel in range(pixels.channels)]
+            for channel, value in enumerate(values):
+                sums[channel] += float(value)
+                if value < 51:
+                    low_51[channel] += 1
+            alpha = values[3] if pixels.channels == 4 else 255
+            if alpha:
+                rgb = values[:3]
+                visible_count += 1
+                for channel in range(3):
+                    visible_rgb_sum[channel] += float(rgb[channel])
+                if sum(rgb) / 3.0 < 16.0:
+                    visible_dark += 1
+                if max(rgb) - min(rgb) <= 16:
+                    visible_grayish += 1
+    result: dict[str, Any] = {
+        "visible_texel_count": visible_count,
+        "visible_dark_rgb_ratio": _ratio(visible_dark, visible_count) if visible_count else None,
+        "visible_grayish_rgb_ratio": _ratio(visible_grayish, visible_count) if visible_count else None,
+    }
+    if visible_count:
+        result["visible_rgb_mean"] = [value / float(visible_count) for value in visible_rgb_sum]
+    else:
+        result["visible_rgb_mean"] = None
+    for channel, total in enumerate(sums):
+        result[f"channel_{channel}_mean"] = total / float(pixel_count)
+        result[f"channel_{channel}_low_51_ratio"] = low_51[channel] / float(pixel_count)
+    return result
 
 
 def _decode_png_rows(raw: bytes, width: int, height: int, channels: int) -> list[bytes]:
@@ -488,6 +626,26 @@ def _coverage_ratio(candidate_image: dict[str, Any], reference_image: dict[str, 
     return _ratio(candidate, reference)
 
 
+def _reference_absent(reference_value: Any) -> bool:
+    return reference_value in (None, 0, 0.0)
+
+
+def _passes_ratio_when_reference_present(
+    actual_ratio: float | None,
+    reference_value: Any,
+    required_min: float,
+) -> bool:
+    if _reference_absent(reference_value):
+        return True
+    return actual_ratio is not None and actual_ratio >= required_min
+
+
+def _relative_ratio_ceiling(reference_ratio: Any, *, absolute: float, delta: float) -> float | None:
+    if reference_ratio is None:
+        return None
+    return max(absolute, float(reference_ratio) + delta)
+
+
 def _image_size(image: dict[str, Any]) -> dict[str, int | None]:
     coverage = image.get("coverage", {})
     return {
@@ -507,7 +665,9 @@ def _image_summaries(document: dict[str, Any], bin_blob: bytes) -> list[dict[str
             "buffer_view": image.get("bufferView"),
         }
         if image.get("mimeType") == "image/png" and isinstance(image.get("bufferView"), int):
-            coverage = png_coverage(glb_image_payload(payload, index))
+            image_payload = glb_image_payload(payload, index)
+            coverage = png_coverage(image_payload)
             summary["coverage"] = coverage.as_dict()
+            summary["stats"] = _png_stats(image_payload)
         images.append(summary)
     return images

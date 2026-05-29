@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "mesh_common.hpp"
+#include "triangle_bvh.hpp"
 
 namespace nb = nanobind;
 
@@ -28,6 +29,9 @@ namespace {
 
 constexpr int64_t kMaxTextureDimension = 8192;
 constexpr uint64_t kMaxUvBinFaceReferences = 64ull * 1024ull * 1024ull;
+constexpr int64_t kSourceProjectionFallbackNeighbors = 8;
+constexpr double kSourceProjectionFallbackMaxDistanceVoxels = 12.0;
+constexpr double kSourceProjectionFallbackWeightEpsilonVoxels = 0.1;
 
 struct BakeConfig {
   uint32_t texture_size;
@@ -67,28 +71,6 @@ struct UvBins {
   uint32_t non_empty_bins = 0;
 };
 
-struct BvhTriangle {
-  int64_t face_index = 0;
-  std::array<float, 3> min_bounds{};
-  std::array<float, 3> max_bounds{};
-  std::array<float, 3> centroid{};
-};
-
-struct BvhNode {
-  std::array<float, 3> min_bounds{};
-  std::array<float, 3> max_bounds{};
-  int32_t left = -1;
-  int32_t right = -1;
-  int32_t start = 0;
-  int32_t count = 0;
-};
-
-struct ClosestPointResult {
-  std::array<float, 3> point{};
-  std::array<float, 3> barycentric{};
-  int64_t face_index = -1;
-  double distance2 = std::numeric_limits<double>::infinity();
-};
 
 struct ReferenceSampleStats {
   bool enabled = false;
@@ -101,6 +83,8 @@ struct ReferenceSampleStats {
   int64_t trilinear_missing_corner_texels = 0;
   int64_t trilinear_out_of_grid_corner_texels = 0;
   int64_t trilinear_invalid_texels = 0;
+  int64_t nearest_fallback_sampled_texels = 0;
+  int64_t nearest_fallback_missing_texels = 0;
   double max_projection_distance = 0.0;
 };
 
@@ -191,121 +175,6 @@ std::vector<int32_t> flatten_faces_i32(const mesh_common::MeshData &mesh) {
   return values;
 }
 
-std::array<float, 3> min3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
-  return {
-      std::min(left[0], right[0]),
-      std::min(left[1], right[1]),
-      std::min(left[2], right[2]),
-  };
-}
-
-std::array<float, 3> max3(const std::array<float, 3> &left, const std::array<float, 3> &right) {
-  return {
-      std::max(left[0], right[0]),
-      std::max(left[1], right[1]),
-      std::max(left[2], right[2]),
-  };
-}
-
-double distance2_aabb(
-    const std::array<float, 3> &point,
-    const std::array<float, 3> &min_bounds,
-    const std::array<float, 3> &max_bounds) {
-  double distance = 0.0;
-  for (int axis = 0; axis < 3; ++axis) {
-    const double value = point[static_cast<size_t>(axis)];
-    const double lo = min_bounds[static_cast<size_t>(axis)];
-    const double hi = max_bounds[static_cast<size_t>(axis)];
-    if (value < lo) {
-      const double delta = lo - value;
-      distance += delta * delta;
-    } else if (value > hi) {
-      const double delta = value - hi;
-      distance += delta * delta;
-    }
-  }
-  return distance;
-}
-
-ClosestPointResult closest_point_on_triangle(
-    const std::array<float, 3> &point,
-    const std::array<float, 3> &a,
-    const std::array<float, 3> &b,
-    const std::array<float, 3> &c,
-    int64_t face_index) {
-  auto sub = [](const std::array<float, 3> &left, const std::array<float, 3> &right) {
-    return std::array<double, 3>{
-        static_cast<double>(left[0]) - static_cast<double>(right[0]),
-        static_cast<double>(left[1]) - static_cast<double>(right[1]),
-        static_cast<double>(left[2]) - static_cast<double>(right[2]),
-    };
-  };
-  auto dot = [](const std::array<double, 3> &left, const std::array<double, 3> &right) {
-    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
-  };
-  auto make_result = [&](double wa, double wb, double wc) {
-    std::array<float, 3> projected{
-        static_cast<float>(wa * a[0] + wb * b[0] + wc * c[0]),
-        static_cast<float>(wa * a[1] + wb * b[1] + wc * c[1]),
-        static_cast<float>(wa * a[2] + wb * b[2] + wc * c[2]),
-    };
-    const double dx = static_cast<double>(point[0]) - projected[0];
-    const double dy = static_cast<double>(point[1]) - projected[1];
-    const double dz = static_cast<double>(point[2]) - projected[2];
-    return ClosestPointResult{
-        projected,
-        {static_cast<float>(wa), static_cast<float>(wb), static_cast<float>(wc)},
-        face_index,
-        dx * dx + dy * dy + dz * dz,
-    };
-  };
-
-  const std::array<double, 3> ab = sub(b, a);
-  const std::array<double, 3> ac = sub(c, a);
-  const std::array<double, 3> ap = sub(point, a);
-  const double d1 = dot(ab, ap);
-  const double d2 = dot(ac, ap);
-  if (d1 <= 0.0 && d2 <= 0.0) {
-    return make_result(1.0, 0.0, 0.0);
-  }
-
-  const std::array<double, 3> bp = sub(point, b);
-  const double d3 = dot(ab, bp);
-  const double d4 = dot(ac, bp);
-  if (d3 >= 0.0 && d4 <= d3) {
-    return make_result(0.0, 1.0, 0.0);
-  }
-
-  const double vc = d1 * d4 - d3 * d2;
-  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
-    const double v = d1 / (d1 - d3);
-    return make_result(1.0 - v, v, 0.0);
-  }
-
-  const std::array<double, 3> cp = sub(point, c);
-  const double d5 = dot(ab, cp);
-  const double d6 = dot(ac, cp);
-  if (d6 >= 0.0 && d5 <= d6) {
-    return make_result(0.0, 0.0, 1.0);
-  }
-
-  const double vb = d5 * d2 - d1 * d6;
-  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
-    const double w = d2 / (d2 - d6);
-    return make_result(1.0 - w, 0.0, w);
-  }
-
-  const double va = d3 * d6 - d5 * d4;
-  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
-    const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-    return make_result(0.0, 1.0 - w, w);
-  }
-
-  const double denom = 1.0 / (va + vb + vc);
-  const double v = vb * denom;
-  const double w = vc * denom;
-  return make_result(1.0 - v - w, v, w);
-}
 
 std::vector<float> load_uvs_flat(nb::object uvs_object, int64_t vertex_count) {
   mesh_common::validate_matrix(uvs_object, "texture bake UVs", 2, "float32");
@@ -333,158 +202,6 @@ std::vector<float> load_uvs_flat(nb::object uvs_object, int64_t vertex_count) {
   return values;
 }
 
-class TriangleBvh {
- public:
-  explicit TriangleBvh(const mesh_common::MeshData &mesh) : mesh_(mesh) {
-    triangles_.reserve(mesh_.faces.size());
-    for (size_t index = 0; index < mesh_.faces.size(); ++index) {
-      const auto &face = mesh_.faces[index];
-      const auto &a = mesh_.vertices[static_cast<size_t>(face[0])];
-      const auto &b = mesh_.vertices[static_cast<size_t>(face[1])];
-      const auto &c = mesh_.vertices[static_cast<size_t>(face[2])];
-      BvhTriangle triangle;
-      triangle.face_index = static_cast<int64_t>(index);
-      triangle.min_bounds = min3(min3(a, b), c);
-      triangle.max_bounds = max3(max3(a, b), c);
-      triangle.centroid = {
-          (a[0] + b[0] + c[0]) / 3.0f,
-          (a[1] + b[1] + c[1]) / 3.0f,
-          (a[2] + b[2] + c[2]) / 3.0f,
-      };
-      triangles_.push_back(triangle);
-    }
-    if (!triangles_.empty()) {
-      build_node(0, static_cast<int32_t>(triangles_.size()));
-    }
-  }
-
-  int64_t node_count() const {
-    return static_cast<int64_t>(nodes_.size());
-  }
-
-  ClosestPointResult closest_point(const std::array<float, 3> &point) const {
-    ClosestPointResult best;
-    if (nodes_.empty()) {
-      return best;
-    }
-    std::vector<int32_t> stack;
-    stack.reserve(64);
-    stack.push_back(0);
-    while (!stack.empty()) {
-      const int32_t node_index = stack.back();
-      stack.pop_back();
-      const BvhNode &node = nodes_[static_cast<size_t>(node_index)];
-      if (distance2_aabb(point, node.min_bounds, node.max_bounds) > best.distance2) {
-        continue;
-      }
-      if (node.left < 0 && node.right < 0) {
-        for (int32_t offset = 0; offset < node.count; ++offset) {
-          const BvhTriangle &triangle = triangles_[static_cast<size_t>(node.start + offset)];
-          const auto &face = mesh_.faces[static_cast<size_t>(triangle.face_index)];
-          const ClosestPointResult candidate = closest_point_on_triangle(
-              point,
-              mesh_.vertices[static_cast<size_t>(face[0])],
-              mesh_.vertices[static_cast<size_t>(face[1])],
-              mesh_.vertices[static_cast<size_t>(face[2])],
-              triangle.face_index);
-          if (candidate.distance2 < best.distance2) {
-            best = candidate;
-          }
-        }
-        continue;
-      }
-      const int32_t left = node.left;
-      const int32_t right = node.right;
-      if (left >= 0 && right >= 0) {
-        const BvhNode &left_node = nodes_[static_cast<size_t>(left)];
-        const BvhNode &right_node = nodes_[static_cast<size_t>(right)];
-        const double left_distance = distance2_aabb(point, left_node.min_bounds, left_node.max_bounds);
-        const double right_distance = distance2_aabb(point, right_node.min_bounds, right_node.max_bounds);
-        if (left_distance < right_distance) {
-          if (right_distance <= best.distance2) {
-            stack.push_back(right);
-          }
-          if (left_distance <= best.distance2) {
-            stack.push_back(left);
-          }
-        } else {
-          if (left_distance <= best.distance2) {
-            stack.push_back(left);
-          }
-          if (right_distance <= best.distance2) {
-            stack.push_back(right);
-          }
-        }
-      } else if (left >= 0) {
-        stack.push_back(left);
-      } else if (right >= 0) {
-        stack.push_back(right);
-      }
-    }
-    return best;
-  }
-
- private:
-  int32_t build_node(int32_t start, int32_t end) {
-    BvhNode node;
-    node.start = start;
-    node.count = end - start;
-    node.min_bounds = {
-        std::numeric_limits<float>::infinity(),
-        std::numeric_limits<float>::infinity(),
-        std::numeric_limits<float>::infinity(),
-    };
-    node.max_bounds = {
-        -std::numeric_limits<float>::infinity(),
-        -std::numeric_limits<float>::infinity(),
-        -std::numeric_limits<float>::infinity(),
-    };
-    std::array<float, 3> centroid_min = node.min_bounds;
-    std::array<float, 3> centroid_max = node.max_bounds;
-    for (int32_t index = start; index < end; ++index) {
-      const BvhTriangle &triangle = triangles_[static_cast<size_t>(index)];
-      node.min_bounds = min3(node.min_bounds, triangle.min_bounds);
-      node.max_bounds = max3(node.max_bounds, triangle.max_bounds);
-      centroid_min = min3(centroid_min, triangle.centroid);
-      centroid_max = max3(centroid_max, triangle.centroid);
-    }
-    const int32_t node_index = static_cast<int32_t>(nodes_.size());
-    nodes_.push_back(node);
-    if (node.count <= 8) {
-      return node_index;
-    }
-
-    int axis = 0;
-    float best_extent = centroid_max[0] - centroid_min[0];
-    for (int candidate_axis = 1; candidate_axis < 3; ++candidate_axis) {
-      const float extent = centroid_max[static_cast<size_t>(candidate_axis)] - centroid_min[static_cast<size_t>(candidate_axis)];
-      if (extent > best_extent) {
-        axis = candidate_axis;
-        best_extent = extent;
-      }
-    }
-    if (best_extent <= 1e-12f) {
-      return node_index;
-    }
-    const int32_t mid = start + node.count / 2;
-    std::nth_element(
-        triangles_.begin() + start,
-        triangles_.begin() + mid,
-        triangles_.begin() + end,
-        [axis](const BvhTriangle &left, const BvhTriangle &right) {
-          return left.centroid[static_cast<size_t>(axis)] < right.centroid[static_cast<size_t>(axis)];
-        });
-    nodes_[static_cast<size_t>(node_index)].left = build_node(start, mid);
-    nodes_[static_cast<size_t>(node_index)].right = build_node(mid, end);
-    nodes_[static_cast<size_t>(node_index)].start = 0;
-    nodes_[static_cast<size_t>(node_index)].count = 0;
-    return node_index;
-  }
-
-  const mesh_common::MeshData &mesh_;
-  std::vector<BvhTriangle> triangles_;
-  std::vector<BvhNode> nodes_;
-};
 
 int64_t resolve_uv_bin_side(int64_t texture_size, int64_t face_count) {
   const double face_side = std::ceil(std::sqrt(static_cast<double>(std::max<int64_t>(1, face_count)) / 4.0));
@@ -606,18 +323,18 @@ std::vector<VoxelRecord> load_voxels(
   const Py_buffer &coord_view = coord_buffer.get();
   const Py_buffer &attr_view = attr_buffer.get();
 
-  int32_t max_z = 0;
-  int32_t max_y = 0;
   int32_t max_x = 0;
+  int32_t max_y = 0;
+  int32_t max_z = 0;
   std::vector<std::array<int32_t, 3>> spatial;
   spatial.reserve(static_cast<size_t>(rows));
   std::vector<std::array<float, 6>> attrs;
   attrs.reserve(static_cast<size_t>(rows));
   for (int64_t row = 0; row < rows; ++row) {
     const int32_t batch = mesh_common::read_matrix_value<int32_t>(coord_view, row, 0);
-    const int32_t z = mesh_common::read_matrix_value<int32_t>(coord_view, row, 1);
+    const int32_t x = mesh_common::read_matrix_value<int32_t>(coord_view, row, 1);
     const int32_t y = mesh_common::read_matrix_value<int32_t>(coord_view, row, 2);
-    const int32_t x = mesh_common::read_matrix_value<int32_t>(coord_view, row, 3);
+    const int32_t z = mesh_common::read_matrix_value<int32_t>(coord_view, row, 3);
     if (batch != 0) {
       throw nb::value_error("texture baking currently supports only batch index 0");
     }
@@ -627,10 +344,10 @@ std::vector<VoxelRecord> load_voxels(
     if (decode_resolution > 0 && (z >= decode_resolution || y >= decode_resolution || x >= decode_resolution)) {
       throw nb::value_error("texture spatial coordinates must be < decode_resolution");
     }
-    max_z = std::max(max_z, z);
-    max_y = std::max(max_y, y);
     max_x = std::max(max_x, x);
-    spatial.push_back({z, y, x});
+    max_y = std::max(max_y, y);
+    max_z = std::max(max_z, z);
+    spatial.push_back({x, y, z});
     std::array<float, 6> attr{};
     for (int channel = 0; channel < 6; ++channel) {
       attr[static_cast<size_t>(channel)] = mesh_common::read_matrix_value<float>(attr_view, row, channel);
@@ -660,9 +377,9 @@ std::vector<VoxelRecord> load_voxels(
   records.reserve(static_cast<size_t>(rows));
   for (size_t row = 0; row < spatial.size(); ++row) {
     const auto coord = spatial[row];
-    const uint64_t key = static_cast<uint64_t>(coord[0]) * stride_z
+    const uint64_t key = static_cast<uint64_t>(coord[2]) * stride_z
         + static_cast<uint64_t>(coord[1]) * stride_y
-        + static_cast<uint64_t>(coord[2]);
+        + static_cast<uint64_t>(coord[0]);
     records.push_back(VoxelRecord{key, attrs[row]});
   }
   std::sort(records.begin(), records.end(), [](const VoxelRecord &left, const VoxelRecord &right) {
@@ -771,7 +488,250 @@ bool trilinear_sample_attributes(
       }
     }
   }
-  return present_weight > eps;
+  if (present_weight <= eps) {
+    return false;
+  }
+  const float normalizer = static_cast<float>(1.0 / present_weight);
+  for (float &value : *sampled) {
+    value *= normalizer;
+  }
+  return true;
+}
+
+struct SparseNeighbor {
+  int64_t record_index = -1;
+  double distance2 = std::numeric_limits<double>::infinity();
+};
+
+struct SparseVoxelPoint {
+  int32_t z = 0;
+  int32_t y = 0;
+  int32_t x = 0;
+  int64_t record_index = -1;
+  uint64_t cell_key = 0;
+};
+
+struct SparseVoxelIndex {
+  int32_t cell_size = 1;
+  int32_t cell_z = 1;
+  int32_t cell_y = 1;
+  int32_t cell_x = 1;
+  std::vector<SparseVoxelPoint> points;
+  std::vector<uint64_t> cell_keys;
+  std::vector<size_t> cell_offsets;
+};
+
+int32_t ceil_div_i32(int32_t value, int32_t divisor) {
+  return (value + divisor - 1) / divisor;
+}
+
+uint64_t sparse_cell_key(int32_t cell_z, int32_t cell_y, int32_t cell_x, const SparseVoxelIndex &index) {
+  return static_cast<uint64_t>(cell_z) * static_cast<uint64_t>(index.cell_y) * static_cast<uint64_t>(index.cell_x)
+      + static_cast<uint64_t>(cell_y) * static_cast<uint64_t>(index.cell_x)
+      + static_cast<uint64_t>(cell_x);
+}
+
+SparseVoxelIndex build_sparse_voxel_index(
+    const std::vector<VoxelRecord> &records,
+    int32_t grid_z,
+    int32_t grid_y,
+    int32_t grid_x,
+    int64_t fallback_radius) {
+  SparseVoxelIndex index;
+  index.cell_size = static_cast<int32_t>(std::clamp<int64_t>(fallback_radius, 8, 24));
+  index.cell_z = std::max<int32_t>(1, ceil_div_i32(grid_z, index.cell_size));
+  index.cell_y = std::max<int32_t>(1, ceil_div_i32(grid_y, index.cell_size));
+  index.cell_x = std::max<int32_t>(1, ceil_div_i32(grid_x, index.cell_size));
+  index.points.reserve(records.size());
+  const uint64_t stride_y = static_cast<uint64_t>(grid_x);
+  const uint64_t stride_z = checked_mul(static_cast<uint64_t>(grid_y), stride_y, "texture grid stride");
+  for (size_t record_index = 0; record_index < records.size(); ++record_index) {
+    const uint64_t key = records[record_index].key;
+    const int32_t z = static_cast<int32_t>(key / stride_z);
+    const uint64_t rem_z = key - static_cast<uint64_t>(z) * stride_z;
+    const int32_t y = static_cast<int32_t>(rem_z / stride_y);
+    const int32_t x = static_cast<int32_t>(rem_z - static_cast<uint64_t>(y) * stride_y);
+    const int32_t cell_z = std::clamp<int32_t>(z / index.cell_size, 0, index.cell_z - 1);
+    const int32_t cell_y = std::clamp<int32_t>(y / index.cell_size, 0, index.cell_y - 1);
+    const int32_t cell_x = std::clamp<int32_t>(x / index.cell_size, 0, index.cell_x - 1);
+    index.points.push_back(SparseVoxelPoint{
+        z,
+        y,
+        x,
+        static_cast<int64_t>(record_index),
+        sparse_cell_key(cell_z, cell_y, cell_x, index),
+    });
+  }
+  std::sort(index.points.begin(), index.points.end(), [](const SparseVoxelPoint &left, const SparseVoxelPoint &right) {
+    if (left.cell_key == right.cell_key) {
+      return left.record_index < right.record_index;
+    }
+    return left.cell_key < right.cell_key;
+  });
+  index.cell_offsets.push_back(0);
+  for (size_t point_index = 0; point_index < index.points.size(); ++point_index) {
+    if (point_index == 0 || index.points[point_index].cell_key != index.points[point_index - 1].cell_key) {
+      index.cell_keys.push_back(index.points[point_index].cell_key);
+      if (point_index != 0) {
+        index.cell_offsets.push_back(point_index);
+      }
+    }
+  }
+  index.cell_offsets.push_back(index.points.size());
+  return index;
+}
+
+void add_sparse_neighbor(
+    std::vector<SparseNeighbor> &neighbors,
+    int64_t record_index,
+    double distance2,
+    int64_t k_neighbors) {
+  for (const SparseNeighbor &neighbor : neighbors) {
+    if (neighbor.record_index == record_index) {
+      return;
+    }
+  }
+  if (static_cast<int64_t>(neighbors.size()) < k_neighbors) {
+    neighbors.push_back(SparseNeighbor{record_index, distance2});
+    return;
+  }
+
+  size_t worst_index = 0;
+  for (size_t index = 1; index < neighbors.size(); ++index) {
+    if (neighbors[index].distance2 > neighbors[worst_index].distance2 ||
+        (neighbors[index].distance2 == neighbors[worst_index].distance2 &&
+         neighbors[index].record_index > neighbors[worst_index].record_index)) {
+      worst_index = index;
+    }
+  }
+  const SparseNeighbor &worst = neighbors[worst_index];
+  if (distance2 < worst.distance2 || (distance2 == worst.distance2 && record_index < worst.record_index)) {
+    neighbors[worst_index] = SparseNeighbor{record_index, distance2};
+  }
+}
+
+bool sparse_knn_sample_attributes(
+    const std::vector<VoxelRecord> &records,
+    const SparseVoxelIndex &index,
+    const std::array<float, 3> &position,
+    const std::array<float, 3> &origin,
+    float voxel_size,
+    int32_t grid_z,
+    int32_t grid_y,
+    int32_t grid_x,
+    int64_t fallback_radius,
+    int64_t k_neighbors,
+    double max_distance_voxels,
+    double weight_epsilon_voxels,
+    std::array<float, 6> *sampled) {
+  sampled->fill(0.0f);
+  if (voxel_size <= 0.0f || records.empty() || index.points.empty() || fallback_radius < 0 || k_neighbors <= 0 ||
+      max_distance_voxels <= 0.0 || weight_epsilon_voxels <= 0.0) {
+    return false;
+  }
+
+  // Sparse texture attributes are located at voxel centers. This fallback mirrors
+  // the existing Mac-native spatial-hash sampler used when dense pairwise lookup
+  // is too expensive.
+  const double qx = (static_cast<double>(position[0]) - static_cast<double>(origin[0])) /
+          static_cast<double>(voxel_size) -
+      0.5;
+  const double qy = (static_cast<double>(position[1]) - static_cast<double>(origin[1])) /
+          static_cast<double>(voxel_size) -
+      0.5;
+  const double qz = (static_cast<double>(position[2]) - static_cast<double>(origin[2])) /
+          static_cast<double>(voxel_size) -
+      0.5;
+  if (!std::isfinite(qx) || !std::isfinite(qy) || !std::isfinite(qz)) {
+    return false;
+  }
+
+  const int64_t center_x = static_cast<int64_t>(std::floor(qx + 0.5));
+  const int64_t center_y = static_cast<int64_t>(std::floor(qy + 0.5));
+  const int64_t center_z = static_cast<int64_t>(std::floor(qz + 0.5));
+  const double fractional_x = qx - static_cast<double>(center_x);
+  const double fractional_y = qy - static_cast<double>(center_y);
+  const double fractional_z = qz - static_cast<double>(center_z);
+  std::vector<SparseNeighbor> neighbors;
+  neighbors.reserve(static_cast<size_t>(std::min<int64_t>(k_neighbors, 16)));
+
+  const int64_t min_x = std::clamp<int64_t>(center_x - fallback_radius, 0, grid_x - 1);
+  const int64_t max_x = std::clamp<int64_t>(center_x + fallback_radius, 0, grid_x - 1);
+  const int64_t min_y = std::clamp<int64_t>(center_y - fallback_radius, 0, grid_y - 1);
+  const int64_t max_y = std::clamp<int64_t>(center_y + fallback_radius, 0, grid_y - 1);
+  const int64_t min_z = std::clamp<int64_t>(center_z - fallback_radius, 0, grid_z - 1);
+  const int64_t max_z = std::clamp<int64_t>(center_z + fallback_radius, 0, grid_z - 1);
+  const int64_t min_cell_x = min_x / index.cell_size;
+  const int64_t max_cell_x = max_x / index.cell_size;
+  const int64_t min_cell_y = min_y / index.cell_size;
+  const int64_t max_cell_y = max_y / index.cell_size;
+  const int64_t min_cell_z = min_z / index.cell_size;
+  const int64_t max_cell_z = max_z / index.cell_size;
+
+  for (int64_t cell_z = min_cell_z; cell_z <= max_cell_z; ++cell_z) {
+    for (int64_t cell_y = min_cell_y; cell_y <= max_cell_y; ++cell_y) {
+      for (int64_t cell_x = min_cell_x; cell_x <= max_cell_x; ++cell_x) {
+        const uint64_t key = sparse_cell_key(
+            static_cast<int32_t>(cell_z),
+            static_cast<int32_t>(cell_y),
+            static_cast<int32_t>(cell_x),
+            index);
+        const auto found = std::lower_bound(index.cell_keys.begin(), index.cell_keys.end(), key);
+        if (found == index.cell_keys.end() || *found != key) {
+          continue;
+        }
+        const size_t bucket = static_cast<size_t>(std::distance(index.cell_keys.begin(), found));
+        const size_t begin = index.cell_offsets[bucket];
+        const size_t end = index.cell_offsets[bucket + 1];
+        for (size_t point_index = begin; point_index < end; ++point_index) {
+          const SparseVoxelPoint &point = index.points[point_index];
+          if (point.x < min_x || point.x > max_x || point.y < min_y || point.y > max_y || point.z < min_z ||
+              point.z > max_z) {
+            continue;
+          }
+          const double delta_x = qx - static_cast<double>(point.x);
+          const double delta_y = qy - static_cast<double>(point.y);
+          const double delta_z = qz - static_cast<double>(point.z);
+          const double distance2 = delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
+          if (distance2 > max_distance_voxels * max_distance_voxels) {
+            continue;
+          }
+          add_sparse_neighbor(neighbors, point.record_index, distance2, k_neighbors);
+        }
+      }
+    }
+  }
+
+  if (neighbors.empty()) {
+    return false;
+  }
+  std::sort(neighbors.begin(), neighbors.end(), [](const SparseNeighbor &left, const SparseNeighbor &right) {
+    if (left.distance2 == right.distance2) {
+      return left.record_index < right.record_index;
+    }
+    return left.distance2 < right.distance2;
+  });
+  if (static_cast<int64_t>(neighbors.size()) > k_neighbors) {
+    neighbors.resize(static_cast<size_t>(k_neighbors));
+  }
+
+  double weight_sum = 0.0;
+  for (const SparseNeighbor &neighbor : neighbors) {
+    const double weight = 1.0 / (std::sqrt(neighbor.distance2) + weight_epsilon_voxels);
+    const VoxelRecord &record = records[static_cast<size_t>(neighbor.record_index)];
+    for (size_t channel = 0; channel < sampled->size(); ++channel) {
+      (*sampled)[channel] += static_cast<float>(weight * static_cast<double>(record.attributes[channel]));
+    }
+    weight_sum += weight;
+  }
+  if (weight_sum <= 1e-12) {
+    return false;
+  }
+  const float normalizer = static_cast<float>(1.0 / weight_sum);
+  for (float &value : *sampled) {
+    value *= normalizer;
+  }
+  return true;
 }
 
 void write_pbr_texel_cpu(
@@ -812,6 +772,10 @@ ReferenceSampleStats apply_reference_projection_and_trilinear_sampling(
     int32_t grid_z,
     int32_t grid_y,
     int32_t grid_x,
+    int64_t fallback_radius,
+    bool fallback_enabled,
+    int64_t fallback_neighbors,
+    double fallback_max_distance_voxels,
     std::vector<uint8_t> &base_color,
     std::vector<uint8_t> &metallic_roughness,
     std::vector<uint8_t> &coverage) {
@@ -821,6 +785,7 @@ ReferenceSampleStats apply_reference_projection_and_trilinear_sampling(
   stats.source_faces = static_cast<int64_t>(source_mesh.faces.size());
   TriangleBvh bvh(source_mesh);
   stats.bvh_nodes = bvh.node_count();
+  const SparseVoxelIndex sparse_index = build_sparse_voxel_index(records, grid_z, grid_y, grid_x, fallback_radius);
   const size_t texel_count = coverage.size();
   for (size_t texel = 0; texel < texel_count; ++texel) {
     if (coverage[texel] == 0) {
@@ -862,6 +827,28 @@ ReferenceSampleStats apply_reference_projection_and_trilinear_sampling(
       stats.trilinear_out_of_grid_corner_texels += 1;
     }
     if (!valid) {
+      const bool fallback_valid = fallback_enabled && !out_of_grid_corner &&
+          sparse_knn_sample_attributes(
+              records,
+              sparse_index,
+              projected.point,
+              origin,
+              voxel_size,
+              grid_z,
+              grid_y,
+              grid_x,
+              fallback_radius,
+              fallback_neighbors,
+              fallback_max_distance_voxels,
+              kSourceProjectionFallbackWeightEpsilonVoxels,
+              &sampled);
+      if (fallback_valid) {
+        coverage[texel] = 4;
+        write_pbr_texel_cpu(sampled, texel, base_color, metallic_roughness);
+        stats.nearest_fallback_sampled_texels += 1;
+        continue;
+      }
+      stats.nearest_fallback_missing_texels += 1;
       coverage[texel] = out_of_grid_corner ? 3 : 2;
       clear_pbr_texel_cpu(texel, base_color, metallic_roughness);
       stats.trilinear_invalid_texels += 1;
@@ -914,9 +901,10 @@ int64_t dilate_missing_surface_texels(
         if (coverage[texel] != 2 && coverage[texel] != 3) {
           continue;
         }
-        bool found = false;
-        size_t source = 0;
-        for (int dy = -1; dy <= 1 && !found; ++dy) {
+        std::array<int64_t, 4> base_sum{0, 0, 0, 0};
+        std::array<int64_t, 3> mr_sum{0, 0, 0};
+        int64_t neighbor_count = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
           const int64_t sy = static_cast<int64_t>(y) + dy;
           if (sy < 0 || sy >= texture_size) {
             continue;
@@ -931,26 +919,31 @@ int64_t dilate_missing_surface_texels(
             }
             const size_t neighbor = static_cast<size_t>(sy) * side + static_cast<size_t>(sx);
             if (coverage[neighbor] == 1 || coverage[neighbor] == 4) {
-              source = neighbor;
-              found = true;
-              break;
+              const size_t src_base = neighbor * 4;
+              base_sum[0] += base_color[src_base + 0];
+              base_sum[1] += base_color[src_base + 1];
+              base_sum[2] += base_color[src_base + 2];
+              base_sum[3] += base_color[src_base + 3];
+              const size_t src_mr = neighbor * 3;
+              mr_sum[0] += metallic_roughness[src_mr + 0];
+              mr_sum[1] += metallic_roughness[src_mr + 1];
+              mr_sum[2] += metallic_roughness[src_mr + 2];
+              neighbor_count += 1;
             }
           }
         }
-        if (!found) {
+        if (neighbor_count == 0) {
           continue;
         }
         const size_t dst_base = texel * 4;
-        const size_t src_base = source * 4;
-        next_base[dst_base + 0] = base_color[src_base + 0];
-        next_base[dst_base + 1] = base_color[src_base + 1];
-        next_base[dst_base + 2] = base_color[src_base + 2];
-        next_base[dst_base + 3] = base_color[src_base + 3];
+        next_base[dst_base + 0] = static_cast<uint8_t>((base_sum[0] + neighbor_count / 2) / neighbor_count);
+        next_base[dst_base + 1] = static_cast<uint8_t>((base_sum[1] + neighbor_count / 2) / neighbor_count);
+        next_base[dst_base + 2] = static_cast<uint8_t>((base_sum[2] + neighbor_count / 2) / neighbor_count);
+        next_base[dst_base + 3] = static_cast<uint8_t>((base_sum[3] + neighbor_count / 2) / neighbor_count);
         const size_t dst_mr = texel * 3;
-        const size_t src_mr = source * 3;
-        next_mr[dst_mr + 0] = metallic_roughness[src_mr + 0];
-        next_mr[dst_mr + 1] = metallic_roughness[src_mr + 1];
-        next_mr[dst_mr + 2] = metallic_roughness[src_mr + 2];
+        next_mr[dst_mr + 0] = static_cast<uint8_t>((mr_sum[0] + neighbor_count / 2) / neighbor_count);
+        next_mr[dst_mr + 1] = static_cast<uint8_t>((mr_sum[1] + neighbor_count / 2) / neighbor_count);
+        next_mr[dst_mr + 2] = static_cast<uint8_t>((mr_sum[2] + neighbor_count / 2) / neighbor_count);
         next_coverage[texel] = 4;
         pass_filled += 1;
       }
@@ -1106,7 +1099,7 @@ int64_t fill_no_face_gutter_texels(
         next_base[dst_base + 0] = base_color[src_base + 0];
         next_base[dst_base + 1] = base_color[src_base + 1];
         next_base[dst_base + 2] = base_color[src_base + 2];
-        next_base[dst_base + 3] = base_color[dst_base + 3];
+        next_base[dst_base + 3] = base_color[src_base + 3];
         const size_t dst_mr = texel * 3;
         const size_t src_mr = source * 3;
         next_mr[dst_mr + 0] = metallic_roughness[src_mr + 0];
@@ -1124,6 +1117,81 @@ int64_t fill_no_face_gutter_texels(
     *passes_run = pass + 1;
   }
   return total_filled;
+}
+
+int64_t fill_render_padding_texels(
+    std::vector<uint8_t> &base_color,
+    std::vector<uint8_t> &metallic_roughness,
+    int64_t texture_size,
+    int64_t *seed_count) {
+  const size_t side = checked_size(static_cast<uint64_t>(texture_size), "texture render-padding side");
+  const size_t pixel_count = checked_size(
+      checked_mul(static_cast<uint64_t>(texture_size), static_cast<uint64_t>(texture_size), "texture render-padding pixels"),
+      "texture render-padding pixels");
+  constexpr uint32_t unvisited = std::numeric_limits<uint32_t>::max();
+  std::vector<uint32_t> nearest_source(pixel_count, unvisited);
+  std::vector<uint32_t> queue;
+  queue.reserve(pixel_count);
+  *seed_count = 0;
+
+  for (size_t texel = 0; texel < pixel_count; ++texel) {
+    const size_t base = texel * 4;
+    if (base_color[base + 3] == 0) {
+      continue;
+    }
+    const uint32_t texel_index = checked_u32(static_cast<uint64_t>(texel), "texture render-padding queue index");
+    nearest_source[texel] = texel_index;
+    queue.push_back(texel_index);
+  }
+  *seed_count = static_cast<int64_t>(queue.size());
+  if (queue.empty()) {
+    return 0;
+  }
+
+  int64_t filled = 0;
+  size_t head = 0;
+  while (head < queue.size()) {
+    const size_t source = static_cast<size_t>(queue[head++]);
+    const size_t source_x = source % side;
+    const size_t source_y = source / side;
+    for (int dy = -1; dy <= 1; ++dy) {
+      const int64_t y = static_cast<int64_t>(source_y) + dy;
+      if (y < 0 || y >= texture_size) {
+        continue;
+      }
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        const int64_t x = static_cast<int64_t>(source_x) + dx;
+        if (x < 0 || x >= texture_size) {
+          continue;
+        }
+        const size_t target = static_cast<size_t>(y) * side + static_cast<size_t>(x);
+        if (nearest_source[target] != unvisited) {
+          continue;
+        }
+        const uint32_t fill_source = nearest_source[source];
+        nearest_source[target] = fill_source;
+        const size_t target_base = target * 4;
+        if (base_color[target_base + 3] == 0) {
+          const size_t source_base = static_cast<size_t>(fill_source) * 4;
+          base_color[target_base + 0] = base_color[source_base + 0];
+          base_color[target_base + 1] = base_color[source_base + 1];
+          base_color[target_base + 2] = base_color[source_base + 2];
+          base_color[target_base + 3] = base_color[source_base + 3];
+          const size_t target_mr = target * 3;
+          const size_t source_mr = static_cast<size_t>(fill_source) * 3;
+          metallic_roughness[target_mr + 0] = metallic_roughness[source_mr + 0];
+          metallic_roughness[target_mr + 1] = metallic_roughness[source_mr + 1];
+          metallic_roughness[target_mr + 2] = metallic_roughness[source_mr + 2];
+          filled += 1;
+        }
+        queue.push_back(checked_u32(static_cast<uint64_t>(target), "texture render-padding queue index"));
+      }
+    }
+  }
+  return filled;
 }
 
 int64_t resolve_dilation_max_passes(int64_t texture_size, int64_t atlas_cols, int64_t atlas_rows) {
@@ -1187,7 +1255,12 @@ nb::dict bake_pbr_texture_metal(
     double tile_padding,
     int64_t max_texture_pixels,
     nb::object source_vertices,
-    nb::object source_faces) {
+    nb::object source_faces,
+    std::string source_projection_fallback_mode,
+    int64_t source_projection_fallback_neighbors,
+    double source_projection_fallback_max_distance_voxels,
+    bool render_padding,
+    bool surface_fill) {
   if (texture_size <= 0) {
     throw nb::value_error("texture_size must be positive");
   }
@@ -1216,12 +1289,24 @@ nb::dict bake_pbr_texture_metal(
   if (tile_padding < 0.0 || tile_padding >= 0.45) {
     throw nb::value_error("tile_padding must be in [0, 0.45)");
   }
+  if (source_projection_fallback_mode != "knn" && source_projection_fallback_mode != "disabled") {
+    throw nb::value_error("source_projection_fallback_mode must be 'knn' or 'disabled'");
+  }
+  if (source_projection_fallback_neighbors <= 0) {
+    throw nb::value_error("source_projection_fallback_neighbors must be positive");
+  }
+  if (!std::isfinite(source_projection_fallback_max_distance_voxels) ||
+      source_projection_fallback_max_distance_voxels <= 0.0) {
+    throw nb::value_error("source_projection_fallback_max_distance_voxels must be positive");
+  }
 
   mesh_common::MeshData mesh = mesh_common::load_mesh(vertices_object, faces_object);
   if (mesh.faces.empty()) {
     throw nb::value_error("texture bake requires at least one face");
   }
   const bool source_projection_enabled = has_source_projection_inputs(source_vertices, source_faces);
+  const bool source_projection_fallback_enabled =
+      source_projection_enabled && source_projection_fallback_mode == "knn";
   mesh_common::MeshData source_mesh;
   if (source_projection_enabled) {
     source_mesh = mesh_common::load_mesh(source_vertices, source_faces);
@@ -1408,6 +1493,10 @@ nb::dict bake_pbr_texture_metal(
           grid_z,
           grid_y,
           grid_x,
+          fallback_radius,
+          source_projection_fallback_enabled,
+          source_projection_fallback_neighbors,
+          source_projection_fallback_max_distance_voxels,
           base_color,
           metallic_roughness,
           coverage);
@@ -1430,13 +1519,16 @@ nb::dict bake_pbr_texture_metal(
         &dilation_passes);
     int64_t surface_fill_seed_texels = 0;
     int64_t surface_fill_cross_gap_prevented = 0;
-    const int64_t surface_filled = fill_remaining_surface_texels(
-        base_color,
-        metallic_roughness,
-        coverage,
-        texture_size,
-        &surface_fill_seed_texels,
-        &surface_fill_cross_gap_prevented);
+    int64_t surface_filled = 0;
+    if (surface_fill) {
+      surface_filled = fill_remaining_surface_texels(
+          base_color,
+          metallic_roughness,
+          coverage,
+          texture_size,
+          &surface_fill_seed_texels,
+          &surface_fill_cross_gap_prevented);
+    }
     constexpr int64_t gutter_fill_max_passes = 4;
     int64_t gutter_fill_passes = 0;
     const int64_t gutter_filled = fill_no_face_gutter_texels(
@@ -1446,6 +1538,15 @@ nb::dict bake_pbr_texture_metal(
         texture_size,
         gutter_fill_max_passes,
         &gutter_fill_passes);
+    int64_t render_padding_seed_texels = 0;
+    int64_t render_padding_filled = 0;
+    if (render_padding) {
+      render_padding_filled = fill_render_padding_texels(
+          base_color,
+          metallic_roughness,
+          texture_size,
+          &render_padding_seed_texels);
+    }
 
     int64_t no_face = 0;
     int64_t sampled = 0;
@@ -1469,11 +1570,16 @@ nb::dict bake_pbr_texture_metal(
       }
     }
     int64_t visible_base_color = 0;
+    int64_t render_visible_base_color = 0;
     int64_t nonzero_rgb = 0;
     for (uint64_t pixel = 0; pixel < pixel_count; ++pixel) {
       const size_t offset = static_cast<size_t>(pixel) * 4;
       if (base_color[offset + 3] != 0) {
-        visible_base_color += 1;
+        render_visible_base_color += 1;
+        const uint8_t status = coverage[static_cast<size_t>(pixel)];
+        if (status == 1 || status == 4 || status == 5) {
+          visible_base_color += 1;
+        }
       }
       if (base_color[offset + 0] != 0 || base_color[offset + 1] != 0 || base_color[offset + 2] != 0) {
         nonzero_rgb += 1;
@@ -1490,13 +1596,15 @@ nb::dict bake_pbr_texture_metal(
     stats["texture_size"] = texture_size;
     stats["texture_pixel_count"] = static_cast<int64_t>(pixel_count);
     stats["voxel_count"] = static_cast<int64_t>(records.size());
+    stats["texture_coordinate_order"] = "batch-x-y-z";
     stats["no_face_texel_count"] = no_face;
     stats["uv_surface_texel_count"] = surface;
     stats["exact_sampled_texel_count"] = sampled;
     stats["sampled_texel_count"] = sampled;
     stats["fallback_filled_texel_count"] = fallback_filled;
-    stats["surface_fill_enabled"] = true;
-    stats["surface_fill_traversal_policy"] = "uv-surface-only-no-face-gap-blocked";
+    stats["surface_fill_enabled"] = surface_fill;
+    stats["surface_fill_traversal_policy"] =
+        surface_fill ? "uv-surface-only-no-face-gap-blocked" : "disabled";
     stats["surface_fill_seed_texel_count"] = surface_fill_seed_texels;
     stats["surface_fill_cross_gap_prevented_count"] = surface_fill_cross_gap_prevented;
     stats["surface_filled_texel_count"] = surface_filled_count;
@@ -1508,13 +1616,20 @@ nb::dict bake_pbr_texture_metal(
     stats["gutter_fill_max_passes"] = gutter_fill_max_passes;
     stats["gutter_fill_pass_count"] = gutter_fill_passes;
     stats["gutter_filled_texel_count"] = gutter_filled;
+    stats["render_padding_enabled"] = render_padding;
+    stats["render_padding_policy"] =
+        render_padding ? "opaque-glb-nearest-inpaint-after-diagnostics" : "disabled";
+    stats["render_padding_seed_texel_count"] = render_padding_seed_texels;
+    stats["render_padding_filled_texel_count"] = render_padding_filled;
     stats["exact_missing_texel_count"] = exact_missing;
     stats["missing_texel_count"] = missing;
     stats["out_of_grid_texel_count"] = out_of_grid;
     stats["visible_base_color_texel_count"] = visible_base_color;
+    stats["render_visible_base_color_texel_count"] = render_visible_base_color;
     stats["nonzero_rgb_texel_count"] = nonzero_rgb;
     stats["raw_coverage_ratio"] = static_cast<double>(sampled) / pixel_denominator;
     stats["final_visible_coverage_ratio"] = static_cast<double>(visible_base_color) / pixel_denominator;
+    stats["render_alpha_coverage_ratio"] = static_cast<double>(render_visible_base_color) / pixel_denominator;
     stats["uv_surface_exact_coverage_ratio"] = static_cast<double>(sampled) / surface_denominator;
     stats["uv_surface_final_visible_coverage_ratio"] = static_cast<double>(visible_base_color) / surface_denominator;
     stats["coverage_ratio"] = static_cast<double>(visible_base_color) / pixel_denominator;
@@ -1547,13 +1662,33 @@ nb::dict bake_pbr_texture_metal(
     stats["source_projection_returns_face_id"] = source_projection_enabled;
     stats["source_projection_returns_barycentric"] = source_projection_enabled;
     stats["source_projection_max_distance"] = reference_sample_stats.max_projection_distance;
-    stats["sampling_mode"] = source_projection_enabled ? "trilinear" : "nearest";
-    stats["nearest_fallback_enabled"] = !source_projection_enabled;
+    stats["sampling_mode"] = source_projection_enabled
+        ? (source_projection_fallback_enabled ? "trilinear-with-sparse-knn-fallback"
+                                              : "trilinear-without-sparse-knn-fallback")
+        : "nearest";
+    stats["nearest_fallback_enabled"] = source_projection_enabled ? source_projection_fallback_enabled : true;
+    stats["nearest_fallback_scope"] = source_projection_enabled
+        ? (source_projection_fallback_enabled ? "source-projection-sparse-knn"
+                                              : "disabled-source-projection-trilinear-only")
+        : "metal-kernel-missing-voxel";
+    stats["source_projection_nearest_fallback_enabled"] = source_projection_fallback_enabled;
+    stats["source_projection_nearest_fallback_mode"] =
+        source_projection_enabled ? source_projection_fallback_mode : "none";
+    stats["source_projection_nearest_fallback_k_neighbors"] =
+        source_projection_fallback_enabled ? source_projection_fallback_neighbors : 0;
+    stats["source_projection_nearest_fallback_max_distance_voxels"] =
+        source_projection_fallback_enabled ? source_projection_fallback_max_distance_voxels : 0.0;
+    stats["source_projection_nearest_fallback_weight_epsilon_voxels"] =
+        source_projection_fallback_enabled ? kSourceProjectionFallbackWeightEpsilonVoxels : 0.0;
+    stats["source_projection_nearest_fallback_texel_count"] =
+        reference_sample_stats.nearest_fallback_sampled_texels;
+    stats["source_projection_nearest_fallback_missing_texel_count"] =
+        reference_sample_stats.nearest_fallback_missing_texels;
     stats["trilinear_sampled_texel_count"] = reference_sample_stats.trilinear_sampled_texels;
     stats["trilinear_missing_corner_texel_count"] = reference_sample_stats.trilinear_missing_corner_texels;
     stats["trilinear_out_of_grid_corner_texel_count"] = reference_sample_stats.trilinear_out_of_grid_corner_texels;
     stats["trilinear_invalid_texel_count"] = reference_sample_stats.trilinear_invalid_texels;
-    stats["postprocess_mode"] = "native-dilation-and-surface-fill";
+    stats["postprocess_mode"] = surface_fill ? "native-dilation-and-surface-fill" : "native-dilation-only";
 
     nb::dict result;
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);

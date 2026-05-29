@@ -1,7 +1,6 @@
 {
-  "active_change": "2026-05-27-mlx-spatialkit-pixal3d-export-reference-port",
+  "active_change": "2026-05-28-mlx-spatialkit-narrow-band-remesh",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-27-mlx-spatialkit-pixal3d-export-reference-port/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-27-mlx-spatialkit-pixal3d-export-reference-port/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-27-mlx-spatialkit-pixal3d-export-reference-port/PLAN.md"
+  "canonical_spec": ".agent/work/2026-05-28-mlx-spatialkit-narrow-band-remesh/SPEC.md",
+  "canonical_plan": ".agent/work/2026-05-28-mlx-spatialkit-narrow-band-remesh/PLAN.md"
 }

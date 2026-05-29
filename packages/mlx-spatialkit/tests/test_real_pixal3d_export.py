@@ -8,15 +8,19 @@ import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
 from mlx_spatialkit.export import (
+    NativeGlbArtifact,
+    _build_pixal3d_run_manifest,
     _resolve_chart_angle_degrees,
     _export_quality_summary,
     _glb_viewer_compatibility_summary,
+    _load_pixal3d_fixture_manifest,
     _native_chart_uv_candidate_status,
     _production_equivalence_summary,
     _resolve_pixal3d_export_settings,
     _resolve_tile_padding,
     _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
+    _topology_blocker_map,
     _upstream_export_settings_summary,
     _xatlas_chart_parity_summary,
 )
@@ -66,6 +70,140 @@ def _assert_xatlas_parity_measured(diagnostics: dict, uv_stats: dict, texture_st
             assert check["passed"] is True
 
 
+def test_pixal3d_fixture_manifests_bind_decoded_and_reference_lineages() -> None:
+    root = _repo_root() / "inputs" / "mlx-spatialkit"
+    fixtures = (
+        (
+            root / "pixal3d-1024-cascade-decoded-pbr",
+            "pixal3d-1024-cascade:vendors-pixal3d-0-img:1024-cascade",
+            "vendor-demo-source",
+        ),
+        (
+            root / "violin-bow" / "pixal3d-1024-cascade-decoded-pbr",
+            "pixal3d-1024-cascade:violin-bow:raw",
+            "raw",
+        ),
+        (
+            root / "violin-bow-preprocessed-black" / "pixal3d-1024-cascade-decoded-pbr",
+            "pixal3d-1024-cascade:violin-bow:upstream-preprocessed-black",
+            "upstream-preprocessed-black",
+        ),
+    )
+    for decoded_dir, lineage_id, preprocess_variant in fixtures:
+        manifest = _load_pixal3d_fixture_manifest(decoded_dir)
+        assert manifest is not None
+        assert manifest["lineage_id"] == lineage_id
+        assert manifest["roles"]["A"]["lineage_id"] == lineage_id
+        assert manifest["roles"]["C"]["lineage_id"] == lineage_id
+        assert manifest["source_image"]["preprocess_variant"] == preprocess_variant
+
+
+def test_pixal3d_fixture_manifest_fails_closed_on_mismatched_or_ambiguous_lineage(tmp_path: Path) -> None:
+    decoded_dir = tmp_path / "decoded"
+    reference_dir = tmp_path / "reference"
+    decoded_dir.mkdir()
+    reference_dir.mkdir()
+    (decoded_dir / "trace.json").write_text("{}", encoding="utf-8")
+    (reference_dir / "trace.json").write_text("{}", encoding="utf-8")
+    (reference_dir / "model.glb").write_bytes(b"glTF")
+    manifest_dir = tmp_path / "case"
+    manifest_dir.mkdir()
+    manifest = {
+        "manifest_version": 1,
+        "case_id": "case",
+        "lineage_id": "lineage-a",
+        "source_image": {"path": "image.png", "preprocess_variant": "test"},
+        "roles": {
+            "A": {
+                "role": "A",
+                "kind": "decoded_model_output",
+                "lineage_id": "lineage-a",
+                "decoded_dir": "../decoded",
+                "trace_path": "../decoded/trace.json",
+            },
+            "C": {
+                "role": "C",
+                "kind": "reference_control_glb",
+                "lineage_id": "lineage-b",
+                "trace_path": "../reference/trace.json",
+                "model_glb_path": "../reference/model.glb",
+            },
+        },
+    }
+    (manifest_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="lineage mismatch"):
+        _load_pixal3d_fixture_manifest(decoded_dir)
+
+    manifest["roles"]["C"]["lineage_id"] = "lineage-a"
+    (manifest_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    second_dir = tmp_path / "case-copy"
+    second_dir.mkdir()
+    (second_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ambiguous Pixal3D fixture manifests"):
+        _load_pixal3d_fixture_manifest(decoded_dir)
+
+
+def test_pixal3d_run_manifest_records_abc_roles_and_browser_paths(tmp_path: Path) -> None:
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+    shape_path = decoded_dir / "shape_decoder_fields.npz"
+    texture_path = decoded_dir / "texture_decoder_pbr.npz"
+    trace_path = decoded_dir / "trace.json"
+    shape_path.write_bytes(b"shape")
+    texture_path.write_bytes(b"texture")
+    trace_path.write_text("{}", encoding="utf-8")
+    glb_path = tmp_path / "model.glb"
+    glb_path.write_bytes(b"glTF")
+    diagnostics_path = tmp_path / "diagnostics.json"
+    diagnostics = {
+        "settings": {"texture_size": 1024, "uv_backend": "native-chart"},
+        "result": {"artifact_ready": True, "rendered_visual_ready": False},
+        "visual_comparison": {
+            "artifacts": {
+                "report_json": str(tmp_path / "visual_parity" / "visual_parity.json"),
+                "browser_render_report_json": str(tmp_path / "browser_render" / "browser_render_report.json"),
+            }
+        },
+    }
+    fixture_manifest = {
+        "manifest_path": str(tmp_path / "manifest.json"),
+        "manifest_version": 1,
+        "case_id": "case",
+        "lineage_id": "lineage-a",
+        "source_image": {"path": "image.png", "preprocess_variant": "test"},
+        "roles": {
+            "A": {"lineage_id": "lineage-a"},
+            "C": {"lineage_id": "lineage-a"},
+        },
+    }
+    glb = NativeGlbArtifact(path=glb_path, format="glb", bytes_written=4, metadata={})
+
+    manifest = _build_pixal3d_run_manifest(
+        decoded_dir=decoded_dir,
+        shape_path=shape_path,
+        texture_path=texture_path,
+        glb=glb,
+        diagnostics_path=diagnostics_path,
+        diagnostics=diagnostics,
+        fixture_manifest=fixture_manifest,
+        reference={
+            "lineage_id": "lineage-a",
+            "model_glb_path": str(tmp_path / "reference.glb"),
+            "trace_path": str(tmp_path / "reference-trace.json"),
+        },
+    )
+
+    assert manifest["lineage_id"] == "lineage-a"
+    assert manifest["roles"]["A"]["trace_path"] == str(trace_path)
+    assert manifest["roles"]["B"]["model_glb_path"] == str(glb_path)
+    assert manifest["roles"]["B"]["diagnostics_path"] == str(diagnostics_path)
+    assert manifest["roles"]["B"]["visual_parity_report_path"].endswith("visual_parity.json")
+    assert manifest["roles"]["B"]["browser_render_report_path"].endswith("browser_render_report.json")
+    assert manifest["roles"]["C"]["lineage_id"] == "lineage-a"
+
+
 @pytest.mark.heavy
 def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() -> None:
     if not metal_device_available():
@@ -92,6 +230,7 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     diagnostics = json.loads(result.diagnostics_path.read_text())
     assert diagnostics["result"]["ready"] is True
     assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["rendered_visual_ready"] is False
     assert diagnostics["result"]["production_quality_ready"] is False
     assert "preview_simplifier_quality_tier" in diagnostics["result"]["quality_warnings"]
     assert diagnostics["quality"]["simplifier_backend"] == "spatial-cluster"
@@ -119,15 +258,23 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert texture_stats["final_visible_coverage_ratio"] > texture_stats["raw_coverage_ratio"]
     assert texture_stats["final_visible_coverage_ratio"] > 0.10
     assert texture_stats["uv_surface_final_visible_coverage_ratio"] > texture_stats["final_visible_coverage_ratio"]
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] < 0.50
-    assert texture_stats["surface_unfilled_texel_count"] > 0
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["uv_surface_exact_coverage_ratio"] >= 0.99
+    assert texture_stats["surface_filled_texel_count"] == 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["coverage_status_histogram"]["missing_surface"] == 0
+    assert texture_stats["coverage_status_histogram"]["out_of_grid"] == 0
     assert texture_stats["surface_fill_cross_gap_prevented_count"] > 0
     base_color_coverage = png_coverage(glb_image_payload(result.glb.path.read_bytes(), "baseColorTexture"))
     assert base_color_coverage.alpha_coverage_ratio > 0.10
     assert base_color_coverage.rgb_coverage_ratio > 0.10
-    assert base_color_coverage.alpha_coverage_ratio == pytest.approx(
-        texture_stats["final_visible_coverage_ratio"],
+    assert base_color_coverage.alpha_coverage_ratio == pytest.approx(texture_stats["render_alpha_coverage_ratio"])
+    assert base_color_coverage.rgb_coverage_ratio == pytest.approx(
+        texture_stats["render_visible_base_color_texel_count"] / texture_stats["texture_pixel_count"],
         abs=0.005,
+    )
+    assert texture_stats["visible_base_color_texel_count"] / texture_stats["texture_pixel_count"] == pytest.approx(
+        texture_stats["final_visible_coverage_ratio"]
     )
     assert diagnostics["stages"]["write_glb"]["artifact"]["mesh_name"] == "Pixal3D_TexturedMesh"
     write_inspection = diagnostics["stages"]["write_glb"]["inspection"]
@@ -141,8 +288,57 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics() ->
     assert comparison["reference_bake_backend"] == "xatlas-kdtree"
     assert comparison["final_face_count_ratio"] > 0.0
     assert comparison["final_coverage_ratio_vs_reference"] > 0.10
+    topology = diagnostics["quality"]["topology_blocker_map"]
+    assert topology["status"] == "rendered_visual_blocked"
+    assert "clean_closed_boundary_loops" in topology["visual_blockers"]
+    assert "branched_open_boundary_chains" in topology["visual_blockers"]
     assert "after_write_glb" in diagnostics["memory_samples"]
     _assert_memory_diagnostics(diagnostics, required_stages=("texture_bake", "write_glb"))
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_remesh_closes_topology_and_clears_blocker() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-remesh-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        texture_size=1024,
+        target_faces=50_000,
+        min_component_faces=32,
+        remesh=True,
+    )
+
+    assert result.glb.path.read_bytes()[:4] == b"glTF"
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+
+    # opt-in settings recorded
+    assert diagnostics["settings"]["remesh"] is True
+    assert diagnostics["settings"]["remesh_resolution"] == 1024
+
+    # the remesh stage rebuilds watertight topology (all open boundaries closed)
+    remesh_stage = diagnostics["stages"]["remesh"]
+    assert remesh_stage["stats"]["backend"] == "cpu-narrow-band-dc"
+    assert remesh_stage["stats"]["active_voxels"] > 0
+    remesh_metrics = remesh_stage["metrics"]
+    assert remesh_metrics["boundary_loop_count"] == 0
+    assert remesh_metrics["boundary_open_chain_count"] == 0
+    assert remesh_metrics["boundary_branched_open_chain_count"] == 0
+
+    # the narrow-band remesh production blocker clears; QEM remains the next gap.
+    # (the final post-simplify mesh is not yet fully watertight because the
+    # clustering simplifier re-tears it -- that is the QEM follow-on change.)
+    topology = diagnostics["quality"]["topology_blocker_map"]
+    narrow_band = topology["classes"]["missing_narrow_band_remesh"]
+    assert narrow_band["present"] is False
+    assert narrow_band["backend"] == "native-narrow-band-dc"
+    assert "missing_narrow_band_dc_remesh" not in topology["production_backend_blockers"]
+    assert "missing_qem_edge_collapse_simplification" in topology["production_backend_blockers"]
 
 
 @pytest.mark.heavy
@@ -225,13 +421,14 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert texture_stats["uv_bin_guard_passed"] is True
     assert texture_stats["sampled_texel_count"] > 0
     assert texture_stats["surface_fill_enabled"] is True
-    assert texture_stats["surface_filled_texel_count"] > 0
-    assert texture_stats["surface_unfilled_texel_count"] > 0
+    assert texture_stats["surface_filled_texel_count"] == 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
     assert texture_stats["surface_fill_cross_gap_prevented_count"] > 0
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] >= 0.50
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] < 1.0
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["uv_surface_exact_coverage_ratio"] >= 0.99
     assert texture_stats["raw_coverage_ratio"] < texture_stats["final_visible_coverage_ratio"]
-    assert texture_stats["uv_surface_exact_coverage_ratio"] < texture_stats["uv_surface_final_visible_coverage_ratio"]
+    assert texture_stats["coverage_status_histogram"]["missing_surface"] == 0
+    assert texture_stats["coverage_status_histogram"]["out_of_grid"] == 0
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_backend"] == "native-chart"
     assert diagnostics["stages"]["write_glb"]["artifact"]["uv_stats_backend"] == "native-chart-atlas"
     candidate = diagnostics["quality"]["native_chart_uv_candidate"]
@@ -259,6 +456,104 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture() -> None:
     assert candidate["xatlas_chart_parity"] is False
     assert "not_xatlas_chart_parity" in diagnostics["visual_comparison"]["deferred_parity_boundaries"]
     _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb"))
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_native_chart_violin_preprocessed_black_fixture() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = (
+        _repo_root()
+        / "inputs"
+        / "mlx-spatialkit"
+        / "violin-bow-preprocessed-black"
+        / "pixal3d-1024-cascade-decoded-pbr"
+    )
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D violin decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-violin-black-native-chart-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        texture_size=1024,
+        target_faces=50_000,
+        min_component_faces=32,
+        uv_backend="native-chart",
+        chart_angle_degrees=45.0,
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+
+    assert result.glb.path == output_dir / "model.glb"
+    assert result.glb.path.read_bytes()[:4] == b"glTF"
+    assert result.glb.bytes_written > 1_000_000
+    assert diagnostics["fixture_manifest"]["lineage_id"] == (
+        "pixal3d-1024-cascade:violin-bow:upstream-preprocessed-black"
+    )
+    assert diagnostics["fixture_manifest"]["source_image"]["preprocess_variant"] == "upstream-preprocessed-black"
+    artifact_manifest_path = Path(diagnostics["artifact_manifest"]["path"])
+    assert artifact_manifest_path.is_file()
+    artifact_manifest = json.loads(artifact_manifest_path.read_text())
+    assert artifact_manifest["lineage_id"] == diagnostics["fixture_manifest"]["lineage_id"]
+    assert tuple(artifact_manifest["roles"]) == ("A", "B", "C")
+    assert artifact_manifest["roles"]["A"]["decoded_dir"] == str(fixture)
+    assert artifact_manifest["roles"]["B"]["model_glb_path"] == str(result.glb.path)
+    assert Path(artifact_manifest["roles"]["C"]["model_glb_path"]).is_file()
+
+    assert diagnostics["settings"]["uv_backend"] == "native-chart"
+    assert diagnostics["settings"]["chart_angle_degrees"] == 45.0
+    assert diagnostics["result"]["artifact_ready"] is True
+    assert diagnostics["result"]["production_quality_ready"] is False
+    assert diagnostics["result"]["production_equivalence_ready"] is False
+    assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
+
+    uv_stats = diagnostics["stages"]["uv"]["stats"]
+    assert uv_stats["backend"] == "native-chart-atlas"
+    assert uv_stats["chart_count"] > 0
+    assert uv_stats["chart_rect_fill_ratio"] > 0.50
+    assert uv_stats["atlas_rect_coverage_ratio"] > 0.90
+    assert uv_stats["output_faces"] <= 50_000
+
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    assert texture_stats["backend"] == "metal-uv-binned-nearest"
+    assert texture_stats["uv_bin_guard_passed"] is True
+    assert texture_stats["sampled_texel_count"] > 0
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["uv_surface_exact_coverage_ratio"] >= 0.99
+    assert texture_stats["surface_filled_texel_count"] == 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["coverage_status_histogram"]["missing_surface"] == 0
+    assert texture_stats["coverage_status_histogram"]["out_of_grid"] == 0
+
+    candidate = diagnostics["quality"]["native_chart_uv_candidate"]
+    assert candidate["status"] == "quality_ready"
+    assert candidate["artifact_ready"] is True
+    assert candidate["quality_ready"] is True
+    assert candidate["quality_blockers"] == []
+    assert candidate["global_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"])
+    assert candidate["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert candidate["xatlas_chart_parity"] is False
+
+    topology = diagnostics["quality"]["topology_blocker_map"]
+    assert topology["status"] == "rendered_visual_blocked"
+    assert "clean_closed_boundary_loops" in topology["visual_blockers"]
+    assert "branched_open_boundary_chains" in topology["visual_blockers"]
+    assert "missing_qem_edge_collapse_simplification" in topology["production_backend_blockers"]
+    assert "missing_narrow_band_dc_remesh" in topology["production_backend_blockers"]
+
+    visual = diagnostics["visual_comparison"]
+    assert visual["summary"]["all_passed"] is True
+    assert visual["summary"]["texture_resolution_match"] is True
+    assert visual["rendered_visual_ready"] is False
+    assert visual["rendered_visual_blockers"] == ["boundary_open_chains"]
+    assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
+    visual_artifacts = visual["artifacts"]
+    assert Path(visual_artifacts["report_json"]).is_file()
+    assert Path(visual_artifacts["preview_html"]).is_file()
+    assert Path(visual_artifacts["candidate_base_color_png"]).is_file()
+    assert Path(visual_artifacts["reference_base_color_png"]).is_file()
+    _assert_memory_diagnostics(diagnostics, required_stages=("uv", "texture_bake", "write_glb", "visual_compare"))
 
 
 @pytest.mark.heavy
@@ -297,7 +592,7 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
         "reference_stage_contract_not_ready",
         "upstream_export_settings_not_ready",
         "xatlas_chart_parity_not_ready",
-        "visual_comparison_not_all_passed",
+        "rendered_visual_not_ready",
         "deferred_parity_boundaries_present",
     ]
     assert diagnostics["result"]["quality_warnings"] == [
@@ -349,17 +644,22 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds() -> None
     assert thresholds["final_coverage_ratio"]["actual"] == pytest.approx(
         texture_stats["final_visible_coverage_ratio"]
     )
-    assert thresholds["final_coverage_ratio"]["passed"] is False
-    assert thresholds["final_coverage_ratio"]["actual"] < thresholds["final_coverage_ratio"]["required_min"]
+    assert thresholds["final_coverage_ratio"]["passed"] is True
+    assert thresholds["final_coverage_ratio"]["actual"] >= thresholds["final_coverage_ratio"]["required_min"]
     assert thresholds["raw_coverage_ratio"]["passed"] is True
     assert diagnostics["reference_comparison"]["reference_bake_backend"] == "xatlas-kdtree"
     visual = diagnostics["visual_comparison"]
-    assert visual["summary"]["all_passed"] is False
+    assert visual["summary"]["all_passed"] is True
+    assert visual["rendered_visual_ready"] is False
+    assert visual["rendered_visual_blockers"] == ["boundary_open_chains"]
     assert 0.80 <= visual["summary"]["face_count_ratio"] <= 1.25
     assert visual["summary"]["texture_resolution_match"] is True
-    assert visual["summary"]["base_color_alpha_coverage_ratio"] < 0.50
-    assert visual["summary"]["base_color_rgb_coverage_ratio"] < 0.50
+    assert visual["summary"]["base_color_alpha_coverage_ratio"] >= 0.95
+    assert visual["summary"]["base_color_rgb_coverage_ratio"] >= 0.95
     assert visual["checks"]["texture_resolution_match"]["passed"] is True
+    assert visual["rendered_visual_checks"]["texture_reference_scalar_gate"]["passed"] is True
+    assert visual["rendered_visual_checks"]["surface_unfilled_texels"]["passed"] is True
+    assert visual["rendered_visual_checks"]["boundary_open_chains"]["passed"] is False
     assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
     assert "not_1m_face_export_setting_parity" in visual["deferred_parity_boundaries"]
     assert "not_4096_texture_parity" not in visual["deferred_parity_boundaries"]
@@ -419,6 +719,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
         "reference_stage_contract_not_ready",
         "upstream_export_settings_not_ready",
         "xatlas_chart_parity_not_ready",
+        "rendered_visual_not_ready",
         "deferred_parity_boundaries_present",
     ]
     assert diagnostics["result"]["quality_warnings"] == [
@@ -433,7 +734,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert equivalence["scalar_production_quality_ready"] is False
     assert equivalence["upstream_export_settings_ready"] is False
     assert equivalence["xatlas_chart_parity_ready"] is False
-    assert equivalence["visual_comparison_ready"] is True
+    assert equivalence["visual_comparison_ready"] is False
 
     simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
     assert simplify_stats["small_boundary_loop_fill_enabled"] is True
@@ -445,12 +746,12 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     assert simplify_stats["small_boundary_loop_fill_fallback_max_edges"] == 0
     assert simplify_stats["small_boundary_loop_fill_fallback_policy_max_edges"] == 0
     assert simplify_stats["small_boundary_loop_fill_fallback_effective_max_edges"] == 0
-    assert simplify_stats["small_boundary_loop_repair_max_passes"] == 1
-    assert simplify_stats["small_boundary_loop_repair_pass_count"] == 1
-    assert simplify_stats["small_boundary_branched_cycle_fill_enabled"] is False
-    assert simplify_stats["small_boundary_branched_cycle_fill_max_edges"] == 0
-    assert simplify_stats["small_boundary_branched_cycle_fill_policy_max_edges"] == 0
-    assert simplify_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 0
+    assert simplify_stats["small_boundary_loop_repair_max_passes"] == 3
+    assert 1 <= simplify_stats["small_boundary_loop_repair_pass_count"] <= 3
+    assert simplify_stats["small_boundary_branched_cycle_fill_enabled"] is True
+    assert simplify_stats["small_boundary_branched_cycle_fill_max_edges"] == 8
+    assert simplify_stats["small_boundary_branched_cycle_fill_policy_max_edges"] == 8
+    assert simplify_stats["small_boundary_branched_cycle_fill_effective_max_edges"] == 8
     assert simplify_stats["small_boundary_loops_considered"] > 0
     assert simplify_stats["small_boundary_loops_filled_by_ear_clipping"] == 0
     assert simplify_stats["small_boundary_loops_alternative_triangulation_attempted"] == 0
@@ -467,9 +768,9 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
         + simplify_stats["small_boundary_loops_rejected_nonmanifold"]
     )
     assert simplify_stats["small_boundary_loop_faces_added"] >= 0
-    assert simplify_stats["small_boundary_branched_cycle_candidates"] == 0
-    assert simplify_stats["small_boundary_branched_cycles_filled"] == 0
-    assert simplify_stats["small_boundary_branched_cycles_rejected"] == 0
+    assert simplify_stats["small_boundary_branched_cycle_candidates"] >= 0
+    assert simplify_stats["small_boundary_branched_cycles_filled"] >= 0
+    assert simplify_stats["small_boundary_branched_cycles_rejected"] >= 0
     assert simplify_stats["small_boundary_loops_budget_limited"] == 0
     assert simplify_stats["small_boundary_branched_cycles_budget_limited"] == 0
     assert simplify_stats["final_faces"] <= simplify_stats["target_faces"]
@@ -493,19 +794,23 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
     assert texture_stats["backend"] == "metal-uv-binned-nearest"
     assert texture_stats["uv_bin_guard_passed"] is True
+    assert texture_stats["texture_coordinate_order"] == "batch-x-y-z"
     assert texture_stats["surface_fill_enabled"] is True
     assert texture_stats["surface_fill_traversal_policy"] == "uv-surface-only-no-face-gap-blocked"
     assert texture_stats["surface_fill_cross_gap_prevented_count"] > 0
-    assert texture_stats["surface_filled_texel_count"] > 0
-    assert texture_stats["surface_unfilled_texel_count"] >= 0
+    assert texture_stats["surface_filled_texel_count"] == 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
     assert texture_stats["gutter_fill_enabled"] is True
     assert texture_stats["gutter_fill_max_passes"] == 4
     assert 0 < texture_stats["gutter_fill_pass_count"] <= texture_stats["gutter_fill_max_passes"]
     assert texture_stats["gutter_filled_texel_count"] > 0
-    assert texture_stats["raw_coverage_ratio"] < texture_stats["final_visible_coverage_ratio"]
+    assert texture_stats["trilinear_invalid_texel_count"] == 0
+    assert texture_stats["source_projection_nearest_fallback_texel_count"] <= 8
+    assert texture_stats["raw_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"], abs=1e-5)
     assert texture_stats["uv_surface_exact_coverage_ratio"] < texture_stats["uv_surface_final_visible_coverage_ratio"]
     assert texture_stats["final_visible_coverage_ratio"] >= 0.50
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_exact_coverage_ratio"] >= 0.99
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] >= 0.99
 
     export_metrics = diagnostics["stages"]["export_metrics"]["metrics"]
     assert export_metrics["face_count"] == diagnostics["stages"]["simplify_mesh"]["simplified_faces"]
@@ -554,10 +859,17 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
     ] > 0.65
 
     visual = diagnostics["visual_comparison"]
+    assert diagnostics["result"]["rendered_visual_ready"] is False
+    assert visual["rendered_visual_ready"] is False
     assert visual["summary"]["all_passed"] is True
+    assert visual["rendered_visual_checks"]["texture_reference_scalar_gate"]["passed"] is True
+    assert visual["rendered_visual_checks"]["surface_unfilled_texels"]["passed"] is True
+    assert visual["rendered_visual_checks"]["boundary_open_chains"]["passed"] is False
+    assert visual["rendered_visual_blockers"] == ["boundary_open_chains"]
     assert 0.80 <= visual["summary"]["face_count_ratio"] <= 1.25
     assert visual["summary"]["texture_resolution_match"] is True
     assert visual["summary"]["base_color_alpha_coverage_ratio"] >= 0.50
+    assert visual["summary"]["roughness_mean_ratio"] >= 0.75
     assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
     assert "not_1m_face_export_setting_parity" in visual["deferred_parity_boundaries"]
     assert "not_4096_texture_parity" not in visual["deferred_parity_boundaries"]
@@ -576,7 +888,7 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
 
 
 @pytest.mark.heavy
-def test_export_pixal3d_glb_reference_target_4096_texture_reports_blocked_coverage_gate() -> None:
+def test_export_pixal3d_glb_reference_target_4096_texture_reports_texture_resolution_gate() -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
     fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
@@ -608,9 +920,10 @@ def test_export_pixal3d_glb_reference_target_4096_texture_reports_blocked_covera
     assert texture_stats["texture_size"] == 4096
     assert texture_stats["dilation_max_passes"] > 8
     assert texture_stats["dilation_pass_count"] <= texture_stats["dilation_max_passes"]
-    assert texture_stats["final_visible_coverage_ratio"] < 0.50
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] < 0.50
-    assert thresholds["final_coverage_ratio"]["passed"] is False
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert thresholds["final_coverage_ratio"]["passed"] is True
     assert thresholds["final_coverage_ratio"]["actual"] == pytest.approx(
         texture_stats["final_visible_coverage_ratio"]
     )
@@ -663,9 +976,9 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     assert upstream["all_passed"] is False
     assert diagnostics["quality"]["glb_viewer_compatibility"]["all_passed"] is True
     assert upstream["checks"]["backend_tier"]["passed"] is False
-    assert upstream["checks"]["final_coverage_ratio"]["passed"] is False
+    assert upstream["checks"]["final_coverage_ratio"]["passed"] is True
     for name, check in upstream["checks"].items():
-        if name in {"backend_tier", "final_coverage_ratio"}:
+        if name == "backend_tier":
             continue
         assert check["passed"] is True
     assert upstream["reference"]["decimation_target"] == 1_000_000
@@ -681,7 +994,9 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate() -> None:
     assert texture_stats["dilation_max_passes"] >= 26
     assert texture_stats["surface_fill_traversal_policy"] == "uv-surface-only-no-face-gap-blocked"
     assert texture_stats["surface_fill_cross_gap_prevented_count"] > 0
-    assert texture_stats["final_visible_coverage_ratio"] < 0.50
+    assert texture_stats["surface_unfilled_texel_count"] == 0
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
     visual = diagnostics["visual_comparison"]
     assert "not_xatlas_chart_parity" in visual["deferred_parity_boundaries"]
     assert "not_1m_face_export_setting_parity" in visual["deferred_parity_boundaries"]
@@ -741,14 +1056,13 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
         "preview_simplifier_quality_tier",
         "production_thresholds_failed",
         "reference_stage_contract_incomplete",
-        "native_chart_uv_candidate_quality_blocked",
     ]
 
     assert upstream["all_passed"] is False
     assert upstream["checks"]["backend_tier"]["passed"] is False
-    assert upstream["checks"]["final_coverage_ratio"]["passed"] is False
+    assert upstream["checks"]["final_coverage_ratio"]["passed"] is True
     for name, check in upstream["checks"].items():
-        if name in {"backend_tier", "final_coverage_ratio"}:
+        if name == "backend_tier":
             continue
         assert check["passed"] is True
     assert upstream["reference"]["decimation_target"] == 1_000_000
@@ -760,7 +1074,7 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert thresholds["face_count_ratio"]["passed"] is False
     assert thresholds["face_count_ratio"]["spatialkit_final_faces"] == simplify_stats["final_faces"]
     assert thresholds["face_count_ratio"]["reference_final_faces"] == 212_542
-    assert thresholds["final_coverage_ratio"]["passed"] is False
+    assert thresholds["final_coverage_ratio"]["passed"] is True
 
     assert simplify_stats["backend"] == "topology-aware"
     assert simplify_stats["target_faces"] == 1_000_000
@@ -783,23 +1097,22 @@ def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate
     assert texture_stats["uv_bin_face_reference_count"] > 0
     assert texture_stats["uv_bin_max_candidate_faces"] > 0
     assert texture_stats["surface_fill_enabled"] is True
-    assert texture_stats["surface_filled_texel_count"] > 0
-    assert texture_stats["surface_unfilled_texel_count"] > 0
+    assert texture_stats["surface_filled_texel_count"] == 0
+    assert texture_stats["surface_unfilled_texel_count"] == 0
     assert texture_stats["surface_fill_cross_gap_prevented_count"] > 0
-    assert texture_stats["final_visible_coverage_ratio"] < 0.50
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] >= 0.50
-    assert texture_stats["uv_surface_final_visible_coverage_ratio"] < 1.0
+    assert texture_stats["final_visible_coverage_ratio"] >= 0.50
+    assert texture_stats["uv_surface_final_visible_coverage_ratio"] == pytest.approx(1.0)
 
-    assert candidate["status"] == "quality_blocked"
+    assert candidate["status"] == "quality_ready"
     assert candidate["artifact_ready"] is True
-    assert candidate["quality_ready"] is False
+    assert candidate["quality_ready"] is True
     assert candidate["global_coverage_ratio"] == pytest.approx(texture_stats["final_visible_coverage_ratio"])
     assert candidate["uv_surface_occupancy_ratio"] >= 0.50
     assert candidate["uv_surface_final_visible_coverage_ratio"] == pytest.approx(
         texture_stats["uv_surface_final_visible_coverage_ratio"]
     )
     assert candidate["surface_unfilled_texel_count"] == texture_stats["surface_unfilled_texel_count"]
-    assert candidate["quality_blockers"] == ["global_coverage_floor"]
+    assert candidate["quality_blockers"] == []
     assert candidate["xatlas_chart_parity"] is False
     _assert_xatlas_parity_measured(diagnostics, uv_stats, texture_stats)
 
@@ -834,6 +1147,9 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="small_boundary_loop_fill_max_edges"):
         export_pixal3d_glb(decoded_dir, tmp_path / "out", small_boundary_loop_fill_max_edges=-1)
+
+    with pytest.raises(ValueError, match="source_projection_fallback_mode"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", source_projection_fallback_mode="far-nearest")
 
 
 def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
@@ -928,6 +1244,7 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert blocked["artifact_ready"] is False
     assert blocked["production_quality_ready"] is False
     assert blocked["export_blocking_reasons"] == ("nonmanifold_edges_present",)
+    assert blocked["topology_blocker_map"]["status"] == "artifact_blocked"
     assert "export_blocking_reasons_present" in blocked["warnings"]
 
     blocked_candidate = _export_quality_summary(
@@ -974,6 +1291,7 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     )
     requested_status = requested_candidate["native_geometry_candidate"]
     assert requested_candidate["production_quality_ready"] is False
+    assert requested_candidate["topology_blocker_map"]["status"] == "topology_clear"
     assert requested_status["status"] == "blocked"
     assert requested_status["requested_backend"] == "topology-aware"
     assert requested_status["backend_selection_status"] == "fallback_preview_unimplemented"
@@ -1028,6 +1346,66 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
     assert thresholds["checks"]["final_coverage_ratio"]["actual"] == pytest.approx(0.75)
 
 
+def test_topology_blocker_map_classifies_visual_and_backend_gaps_from_diagnostics() -> None:
+    topology = _topology_blocker_map(
+        {
+            "backend": "topology-aware",
+            "quality_tier": "production_candidate_blocked",
+            "production_blockers": [
+                "missing_qem_edge_collapse_simplification",
+                "missing_narrow_band_dc_remesh",
+            ],
+            "qem_simplification_backend": "not_implemented",
+            "qem_equivalence_status": "qem_scored_not_edge_collapse",
+            "remesh_backend": "not_implemented",
+            "remesh_equivalence_status": "blocked_missing_narrow_band_dc",
+        },
+        {
+            "export_blocking_reasons": [],
+            "nonmanifold_edges": 0,
+            "boundary_loop_count": 3,
+            "boundary_small_loop_edge_count": 18,
+            "boundary_simple_open_chain_count": 1,
+            "boundary_branched_open_chain_count": 2,
+            "boundary_open_chain_edge_count": 40,
+            "boundary_open_chain_branch_vertex_count": 5,
+        },
+    )
+
+    assert topology["status"] == "rendered_visual_blocked"
+    assert topology["diagnostic_source"] == "stages.export_metrics.metrics plus stages.simplify_mesh.stats"
+    assert topology["artifact_blockers"] == ()
+    assert topology["visual_blockers"] == (
+        "clean_closed_boundary_loops",
+        "simple_open_boundary_chains",
+        "branched_open_boundary_chains",
+    )
+    assert topology["production_backend_blockers"] == (
+        "missing_qem_edge_collapse_simplification",
+        "missing_narrow_band_dc_remesh",
+    )
+    classes = topology["classes"]
+    assert classes["clean_closed_boundary_loops"]["count"] == 3
+    assert classes["simple_open_chains"]["count"] == 1
+    assert classes["branched_open_chains"]["count"] == 2
+    assert classes["nonmanifold_edges"]["export_blocking"] is False
+    assert classes["heuristic_qem"]["production_blocking"] is True
+    assert classes["missing_narrow_band_remesh"]["production_blocking"] is True
+
+    nonmanifold = _topology_blocker_map(
+        {"quality_tier": "production"},
+        {
+            "export_blocking_reasons": ["nonmanifold_edges_present"],
+            "nonmanifold_edges": 4,
+            "boundary_loop_count": 0,
+            "boundary_simple_open_chain_count": 0,
+            "boundary_branched_open_chain_count": 0,
+        },
+    )
+    assert nonmanifold["status"] == "artifact_blocked"
+    assert nonmanifold["classes"]["nonmanifold_edges"]["export_blocking"] is True
+
+
 def test_upstream_export_settings_summary_separates_setting_readiness_from_reference_parity() -> None:
     passing = _upstream_export_settings_summary(
         1_000_000,
@@ -1060,6 +1438,7 @@ def test_production_equivalence_summary_keeps_parity_boundaries_strict() -> None
         "xatlas_chart_parity": {"parity_ready": False},
     }
     visual = {
+        "rendered_visual_ready": True,
         "summary": {"all_passed": True},
         "deferred_parity_boundaries": ["not_xatlas_chart_parity", "not_1m_face_export_setting_parity"],
     }
@@ -1101,7 +1480,7 @@ def test_production_equivalence_summary_keeps_parity_boundaries_strict() -> None
     assert missing_visual["remaining_parity_boundaries"] == ("not_xatlas_chart_parity",)
     assert "visual_comparison_missing" in missing_visual["blockers"]
 
-    ready = _production_equivalence_summary(
+    scalar_only_visual = _production_equivalence_summary(
         {
             "artifact_ready": True,
             "production_quality_ready": True,
@@ -1110,6 +1489,20 @@ def test_production_equivalence_summary_keeps_parity_boundaries_strict() -> None
             "xatlas_chart_parity": {"parity_ready": True},
         },
         {"summary": {"all_passed": True}, "deferred_parity_boundaries": []},
+    )
+    assert scalar_only_visual["ready"] is False
+    assert scalar_only_visual["visual_comparison_ready"] is False
+    assert "rendered_visual_not_ready" in scalar_only_visual["blockers"]
+
+    ready = _production_equivalence_summary(
+        {
+            "artifact_ready": True,
+            "production_quality_ready": True,
+            "reference_stage_contract": {"passed": True},
+            "upstream_export_settings": {"all_passed": True},
+            "xatlas_chart_parity": {"parity_ready": True},
+        },
+        {"rendered_visual_ready": True, "summary": {"all_passed": True}, "deferred_parity_boundaries": []},
     )
     assert ready["ready"] is True
     assert ready["remaining_parity_boundaries"] == ()

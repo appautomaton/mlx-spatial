@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import struct
+import zlib
 
 import numpy as np
 import pytest
@@ -63,6 +64,57 @@ def _glb_document_and_bin(payload: bytes) -> tuple[dict, bytes]:
     bin_start = json_end + 8
     assert bin_start + bin_length == len(payload)
     return document, payload[bin_start:]
+
+
+def _accessor_vec3(document: dict, bin_blob: bytes, accessor_index: int) -> np.ndarray:
+    accessor = document["accessors"][accessor_index]
+    view = document["bufferViews"][accessor["bufferView"]]
+    start = int(view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
+    count = int(accessor["count"])
+    values = struct.unpack_from("<" + "f" * count * 3, bin_blob, start)
+    return np.asarray(values, dtype=np.float32).reshape(count, 3)
+
+
+def _png_pixels(png: bytes) -> np.ndarray:
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    pos = 8
+    width = 0
+    height = 0
+    channels = 0
+    idat = bytearray()
+    while pos < len(png):
+        length = struct.unpack(">I", png[pos : pos + 4])[0]
+        pos += 4
+        chunk_type = png[pos : pos + 4]
+        pos += 4
+        payload = png[pos : pos + length]
+        pos += length + 4
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(
+                ">IIBBBBB", payload
+            )
+            assert bit_depth == 8
+            assert color_type in (2, 6)
+            assert compression == 0
+            assert filter_method == 0
+            assert interlace == 0
+            channels = 4 if color_type == 6 else 3
+        elif chunk_type == b"IDAT":
+            idat.extend(payload)
+        elif chunk_type == b"IEND":
+            break
+    assert width > 0 and height > 0 and channels > 0
+    raw = zlib.decompress(bytes(idat))
+    row_bytes = width * channels
+    rows = []
+    offset = 0
+    for _ in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        assert filter_type == 0
+        rows.append(raw[offset : offset + row_bytes])
+        offset += row_bytes
+    return np.frombuffer(b"".join(rows), dtype=np.uint8).reshape(height, width, channels)
 
 
 def test_make_face_atlas_uvs_duplicates_vertices_and_returns_stats() -> None:
@@ -427,6 +479,76 @@ def test_textured_glb_payload_contains_mesh_material_textures_and_metadata() -> 
     assert coverage.alpha_nonzero_count == 4
     assert coverage.rgb_nonzero_count == 4
     assert coverage.alpha_coverage_ratio == 1.0
+
+
+def test_textured_glb_payload_preserves_material_channels_separately_from_normals() -> None:
+    vertices, faces = _fixture_mesh()
+    mesh = make_face_atlas_uvs(vertices, faces)
+    base_color, metallic_roughness = _textures()
+
+    payload = textured_glb_payload(
+        mesh,
+        base_color_rgba=base_color,
+        metallic_roughness=metallic_roughness,
+        mesh_name="MaterialNormalFixture",
+        material_name="UnequalPBR",
+    )
+    document, bin_blob = _glb_document_and_bin(payload)
+
+    material = document["materials"][0]
+    assert material["doubleSided"] is True
+    assert material["alphaMode"] == "OPAQUE"
+    pbr = material["pbrMetallicRoughness"]
+    assert pbr["baseColorTexture"] == {"index": 0}
+    assert pbr["metallicRoughnessTexture"] == {"index": 1}
+    assert pbr["metallicFactor"] == 1
+    assert pbr["roughnessFactor"] == 1
+    np.testing.assert_array_equal(
+        _png_pixels(glb_image_payload(payload, "metallicRoughnessTexture")),
+        metallic_roughness,
+    )
+
+    primitive = document["meshes"][0]["primitives"][0]
+    normals = _accessor_vec3(document, bin_blob, primitive["attributes"]["NORMAL"])
+    assert normals.shape == (6, 3)
+    np.testing.assert_allclose(np.linalg.norm(normals, axis=1), np.ones(6), atol=1e-6)
+
+
+def test_textured_glb_payload_smooths_normals_across_duplicate_position_seams() -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int64)
+    uvs = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.5, 0.5],
+            [1.0, 0.5],
+            [0.5, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    mesh = NativeUvMesh(vertices=vertices, faces=faces, uvs=uvs, stats={})
+    base_color, metallic_roughness = _textures()
+
+    document, bin_blob = _glb_document_and_bin(
+        textured_glb_payload(mesh, base_color_rgba=base_color, metallic_roughness=metallic_roughness)
+    )
+
+    primitive = document["meshes"][0]["primitives"][0]
+    normals = _accessor_vec3(document, bin_blob, primitive["attributes"]["NORMAL"])
+    np.testing.assert_allclose(normals[0], normals[3], atol=1e-6)
+    np.testing.assert_allclose(normals[1], normals[5], atol=1e-6)
 
 
 def test_textured_glb_payload_splits_large_mesh_into_uint16_primitives() -> None:
