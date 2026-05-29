@@ -5,7 +5,9 @@ Model family:
     TencentARC Pixal3D main-branch image-to-3D generation.
 
 Input:
-    A single object-centric RGB/RGBA image.
+    A single object-centric image. RGBA foreground alpha is used directly with
+    the Pixal3D vendor crop/black-composite path; RGB or fully opaque images
+    require a Pixal3D-compatible RMBG/background-remover API hook.
     For a local sample from the vendored reference repo, use:
         vendors/Pixal3D/assets/images/0_img.png
 

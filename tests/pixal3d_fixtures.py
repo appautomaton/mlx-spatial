@@ -31,13 +31,13 @@ def write_fake_pixal3d_root(root: Path, *, sparse_steps: int = 12, shape_steps: 
     return root
 
 
-def write_fake_pixal3d_dinov3_root(root: Path) -> Path:
+def write_fake_pixal3d_dinov3_root(root: Path, *, image_size: int = 512) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "config.json").write_text(
         json.dumps(
             {
                 "model_type": "mlx_spatial_fake_dinov3",
-                "image_size": 64,
+                "image_size": image_size,
                 "patch_size": 16,
                 "hidden_size": 1024,
                 "num_hidden_layers": 1,

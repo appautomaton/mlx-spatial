@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 import mlx.core as mx
 import numpy as np
-from PIL import Image, UnidentifiedImageError
 
 from .model_assets import DINOv3_VITL16_ASSETS
 from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot
@@ -32,9 +31,11 @@ from .pixal3d_export import (
     write_pixal3d_texture_slat_npz,
     write_pixal3d_textured_glb,
 )
+from .pixal3d_preprocess import Pixal3DBackgroundRemover, preprocess_pixal3d_image
 from .pixal3d_projection import (
     PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS,
     PIXAL3D_DINOV3_EMBED_DIM,
+    PIXAL3D_DINOV3_PATCH_SIZE,
     build_pixal3d_projection_conditioning,
     pixal3d_projection_grid_points,
     pixal3d_projection_stage_config,
@@ -168,9 +169,11 @@ class Pixal3DInferencePipeline:
         moge_root: str | Path | None = PIXAL3D_DEFAULT_MOGE_ROOT,
         moge_memory_profile: str = PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
         projection_hidden_states: mx.array | None = None,
+        projection_hidden_states_1024: mx.array | None = None,
         shape_lr_naf_feature_map: mx.array | None = None,
         shape_hr_naf_feature_map: mx.array | None = None,
         texture_naf_feature_map: mx.array | None = None,
+        background_remover: Pixal3DBackgroundRemover | None = None,
     ) -> Pixal3DGenerationResult:
         """Validate Pixal3D inputs and return the current execution boundary."""
 
@@ -212,6 +215,13 @@ class Pixal3DInferencePipeline:
                 "shape_decoder_token_limit": int(shape_decoder_token_limit),
                 "texture_decoder_token_limit": int(texture_decoder_token_limit),
                 "hr_selection_max_num_tokens": int(max_num_tokens),
+            },
+            "input_preprocessing_options": {
+                "max_side": 1024,
+                "alpha_foreground_threshold": 0.8 * 255,
+                "foreground_crop_scale": 1.1,
+                "bg_color": (0, 0, 0),
+                "background_remover_supplied": background_remover is not None,
             },
         }
         started = time.perf_counter()
@@ -424,14 +434,36 @@ class Pixal3DInferencePipeline:
                 metadata=metadata,
             )
 
+        preprocess_result = preprocess_pixal3d_image(image_path, background_remover=background_remover)
+        if preprocess_result.blocker is not None or preprocess_result.image is None:
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
+            blocker = preprocess_result.blocker
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                blocker.stage if blocker is not None else "input-preprocessing",
+                blocker.operation if blocker is not None else "preprocess Pixal3D input image",
+                blocker.reason if blocker is not None else "Pixal3D preprocessing did not return an RGB image",
+                blocker.metadata if blocker is not None else {"image_path": str(image_path)},
+                metadata=metadata,
+            )
+        completed.append("input-preprocessing")
+        timings["input-preprocessing"] = time.perf_counter() - started
+        preprocessed_rgb = preprocess_result.image.image
+        metadata["input_preprocessing"] = preprocess_result.image.metadata()
+
         if manual_fov is None:
             resolved_moge_root = Path(moge_root) if moge_root is not None else Path(PIXAL3D_DEFAULT_MOGE_ROOT)
             try:
-                with Image.open(image_path) as pil_image:
-                    image_rgb_pil = pil_image.convert("RGB")
-                    image_rgb = np.array(image_rgb_pil, dtype=np.uint8)
-                    image_width = int(image_rgb_pil.width)
-            except (OSError, UnidentifiedImageError, ValueError) as error:
+                image_rgb = np.array(preprocessed_rgb, dtype=np.uint8)
+                image_width = int(preprocessed_rgb.width)
+            except ValueError as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
                 metadata["timings_sec"] = timings
                 return self._blocked(
@@ -444,7 +476,7 @@ class Pixal3DInferencePipeline:
                     output_path,
                     "camera-setup",
                     "prepare Pixal3D MoGe RGB input",
-                    f"failed to decode input image for MoGe auto-camera: {error}",
+                    f"failed to prepare preprocessed input image for MoGe auto-camera: {error}",
                     {"image_path": str(image_path), "moge_root": str(resolved_moge_root)},
                     metadata=metadata,
                 )
@@ -529,7 +561,7 @@ class Pixal3DInferencePipeline:
                 "upstream_pixal3d_model": "Ruicheng/moge-2-vitl",
                 "exact_upstream_v2_parity": False,
             }
-            del moge_result, image_rgb, image_rgb_pil
+            del moge_result, image_rgb
             _release_pixal3d_mlx_stage_memory(metadata, "after_moge_camera")
         else:
             try:
@@ -554,47 +586,76 @@ class Pixal3DInferencePipeline:
         timings["camera-setup"] = time.perf_counter() - started
         metadata["camera"] = camera
 
-        if projection_hidden_states is None:
-            resolved_dino_root = Path(dino_root) if dino_root is not None else Path(PIXAL3D_DEFAULT_DINO_ROOT)
-            metadata["dino_root"] = resolved_dino_root
-            dino_inspection = inspect_dinov3_assets(resolved_dino_root)
+        resolved_dino_root = Path(dino_root) if dino_root is not None else Path(PIXAL3D_DEFAULT_DINO_ROOT)
+        metadata["dino_root"] = resolved_dino_root
+        metadata["dino_conditioning_by_size"] = {}
+        dino_hidden_states_by_size: dict[int, mx.array] = {}
+        dino_sources_by_size: dict[int, str] = {}
+
+        def register_dino_hidden_states(
+            image_size: int,
+            hidden_states: mx.array,
+            *,
+            source: str,
+            detail: str | None = None,
+        ) -> None:
+            dino_hidden_states_by_size[int(image_size)] = hidden_states
+            dino_sources_by_size[int(image_size)] = source
+            summary = {
+                "root": str(resolved_dino_root) if source == "mlx-dinov3" else None,
+                "source": source,
+                "shape": tuple(int(dim) for dim in hidden_states.shape),
+                "dtype": str(hidden_states.dtype).removeprefix("mlx.core."),
+                "image_size": int(image_size),
+                "patch_size": PIXAL3D_DINOV3_PATCH_SIZE,
+                "patch_grid": _pixal3d_hidden_state_patch_grid(hidden_states),
+                "detail": detail,
+            }
+            metadata["dino_conditioning_by_size"][str(int(image_size))] = summary
+            if int(image_size) == 512:
+                metadata["dino_conditioning"] = summary
+
+        if projection_hidden_states is not None:
+            register_dino_hidden_states(
+                512,
+                projection_hidden_states,
+                source="caller-supplied projection_hidden_states",
+            )
+        if projection_hidden_states_1024 is not None:
+            register_dino_hidden_states(
+                1024,
+                projection_hidden_states_1024,
+                source="caller-supplied projection_hidden_states_1024",
+            )
+
+        dino_inspection = None
+
+        def ensure_dino_hidden_states(image_size: int, *, stage_label: str) -> Pixal3DInferenceBlocker | None:
+            nonlocal dino_inspection
+            image_size = int(image_size)
+            if image_size in dino_hidden_states_by_size:
+                return None
+            if dino_inspection is None:
+                dino_inspection = inspect_dinov3_assets(resolved_dino_root)
             if dino_inspection.blocker is not None:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "image-conditioning",
-                    dino_inspection.blocker.operation,
-                    _dino_blocker_reason(dino_inspection.blocker.reason, resolved_dino_root),
-                    _dino_blocker_metadata(dino_inspection.blocker, resolved_dino_root),
-                    metadata=metadata,
+                return Pixal3DInferenceBlocker(
+                    stage="image-conditioning",
+                    operation=dino_inspection.blocker.operation,
+                    reason=_dino_blocker_reason(dino_inspection.blocker.reason, resolved_dino_root),
+                    metadata={
+                        **_dino_blocker_metadata(dino_inspection.blocker, resolved_dino_root),
+                        "stage_label": stage_label,
+                        "image_size": image_size,
+                    },
                 )
-            ss_stage = pixal3d_projection_stage_config("ss")
             try:
-                with Image.open(image_path) as pil_image:
-                    image_tensor = prepare_dinov3_image_tensor(pil_image, image_size=ss_stage.image_size)
-            except (OSError, UnidentifiedImageError, ValueError) as error:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "image-conditioning",
-                    "prepare Pixal3D DINOv3 image tensor",
-                    f"failed to decode or normalize input image for DINOv3: {error}",
-                    {"image_path": str(image_path), "image_size": ss_stage.image_size},
-                    metadata=metadata,
+                image_tensor = prepare_dinov3_image_tensor(preprocessed_rgb, image_size=image_size)
+            except ValueError as error:
+                return Pixal3DInferenceBlocker(
+                    stage="image-conditioning",
+                    operation="prepare Pixal3D DINOv3 image tensor",
+                    reason=f"failed to normalize preprocessed input image for DINOv3: {error}",
+                    metadata={"image_path": str(image_path), "image_size": image_size, "stage_label": stage_label},
                 )
             dino_result = assess_dinov3_mlx_conditioning(
                 resolved_dino_root,
@@ -602,57 +663,57 @@ class Pixal3DInferencePipeline:
                 image_tensor=image_tensor,
             )
             if dino_result.blocker is not None:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "image-conditioning",
-                    dino_result.blocker.operation,
-                    _dino_blocker_reason(dino_result.blocker.reason, resolved_dino_root),
-                    _dino_blocker_metadata(dino_result.blocker, resolved_dino_root),
-                    metadata=metadata,
+                return Pixal3DInferenceBlocker(
+                    stage="image-conditioning",
+                    operation=dino_result.blocker.operation,
+                    reason=_dino_blocker_reason(dino_result.blocker.reason, resolved_dino_root),
+                    metadata={
+                        **_dino_blocker_metadata(dino_result.blocker, resolved_dino_root),
+                        "stage_label": stage_label,
+                        "image_size": image_size,
+                    },
                 )
             if dino_result.hidden_states is None:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "image-conditioning",
-                    "run Pixal3D DINOv3 hidden-state extraction",
-                    "DINOv3 conditioning completed without returning hidden states",
-                    {"dino_root": str(resolved_dino_root)},
-                    metadata=metadata,
+                return Pixal3DInferenceBlocker(
+                    stage="image-conditioning",
+                    operation="run Pixal3D DINOv3 hidden-state extraction",
+                    reason="DINOv3 conditioning completed without returning hidden states",
+                    metadata={"dino_root": str(resolved_dino_root), "stage_label": stage_label, "image_size": image_size},
                 )
-            projection_hidden_states = dino_result.hidden_states
-            completed.append("image-conditioning")
-            timings["image-conditioning"] = time.perf_counter() - started
-            metadata["dino_conditioning"] = {
-                "root": str(resolved_dino_root),
-                "shape": dino_result.shape,
-                "dtype": dino_result.dtype,
-                "detail": dino_result.detail,
-                "image_size": ss_stage.image_size,
-            }
-            del dino_result, dino_inspection, image_tensor, ss_stage
-            _release_pixal3d_mlx_stage_memory(metadata, "after_dino_conditioning")
-        else:
-            metadata["dino_conditioning"] = {
-                "source": "caller-supplied projection_hidden_states",
-                "shape": tuple(int(dim) for dim in projection_hidden_states.shape),
-                "dtype": str(projection_hidden_states.dtype).removeprefix("mlx.core."),
-            }
+            register_dino_hidden_states(
+                image_size,
+                dino_result.hidden_states,
+                source="mlx-dinov3",
+                detail=dino_result.detail,
+            )
+            stage_name = "image-conditioning" if image_size == 512 else f"image-conditioning:{image_size}"
+            if stage_name not in completed:
+                completed.append(stage_name)
+            timings[stage_name] = time.perf_counter() - started
+            del dino_result, image_tensor
+            _release_pixal3d_mlx_stage_memory(metadata, f"after_dino_conditioning_{image_size}")
+            return None
+
+        ss_stage = pixal3d_projection_stage_config("ss")
+        dino_blocker = ensure_dino_hidden_states(ss_stage.image_size, stage_label="ss")
+        if dino_blocker is not None:
+            metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+            metadata["timings_sec"] = timings
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                dino_blocker.stage,
+                dino_blocker.operation,
+                dino_blocker.reason,
+                dino_blocker.metadata,
+                metadata=metadata,
+            )
+        projection_hidden_states_512 = dino_hidden_states_by_size[ss_stage.image_size]
 
         naf_tensors: dict[str, mx.array] | None = None
         naf_image_cache: dict[int, mx.array] = {}
@@ -663,6 +724,7 @@ class Pixal3DInferencePipeline:
             coordinates: mx.array,
             lr_projected_features: mx.array | None,
             stage_label: str,
+            hidden_states: mx.array,
         ) -> tuple[mx.array | None, dict[str, object], Pixal3DInferenceBlocker | None]:
             nonlocal naf_tensors
             naf_root_path = Path(naf_root) if naf_root is not None else Path(PIXAL3D_DEFAULT_NAF_ROOT)
@@ -681,10 +743,12 @@ class Pixal3DInferencePipeline:
                 if naf_tensors is None:
                     naf_tensors = load_naf_tensors(naf_root_path)
                 if stage.image_size not in naf_image_cache:
-                    with Image.open(image_path) as pil_image:
-                        naf_image_cache[stage.image_size] = prepare_naf_image_tensor(pil_image, image_size=stage.image_size)
+                    naf_image_cache[stage.image_size] = prepare_naf_image_tensor(
+                        preprocessed_rgb,
+                        image_size=stage.image_size,
+                    )
                 image_tensor = naf_image_cache[stage.image_size]
-                patch_features = _pixal3d_patch_feature_map_bchw(projection_hidden_states)
+                patch_features = _pixal3d_patch_feature_map_bchw(hidden_states)
                 projected_points = _pixal3d_project_sparse_coordinates(
                     coordinates,
                     stage=stage,
@@ -722,6 +786,8 @@ class Pixal3DInferencePipeline:
                         "lr_projected_shape": tuple(int(dim) for dim in selected_lr.shape),
                         "hr_projected_shape": tuple(int(dim) for dim in naf_projection.features.shape),
                         "selected_projected_shape": tuple(int(dim) for dim in selected.shape),
+                        "dino_source_image_size": int(stage.image_size),
+                        "dino_patch_grid": _pixal3d_hidden_state_patch_grid(hidden_states),
                         "full_map_avoidance": True,
                     },
                     None,
@@ -748,18 +814,21 @@ class Pixal3DInferencePipeline:
                             "expected_weights": str(naf_root_path / "naf_release.safetensors"),
                             "conversion_command": " ".join(naf_conversion_command(naf_root_path)),
                             "coordinate_chunk_size": naf_coordinate_chunk_size,
+                            "dino_source_image_size": int(stage.image_size),
+                            "dino_patch_grid": _pixal3d_hidden_state_patch_grid(hidden_states),
                         },
                     ),
                 )
 
         ss_conditioning = build_pixal3d_projection_conditioning(
-            projection_hidden_states,
+            projection_hidden_states_512,
             "ss",
             camera_angle_x=camera.camera_angle_x,
             distance=camera.distance,
             mesh_scale=camera.mesh_scale,
         )
         metadata["ss_projection"] = {
+            **ss_conditioning.metadata,
             "ready": ss_conditioning.ready,
             "global_shape": tuple(int(dim) for dim in ss_conditioning.global_tokens.shape)
             if ss_conditioning.global_tokens is not None
@@ -768,6 +837,8 @@ class Pixal3DInferencePipeline:
             if ss_conditioning.projected_features is not None
             else None,
             "blocker": ss_conditioning.blocker,
+            "dino_source": dino_sources_by_size.get(512),
+            "dino_reused_from_stage": None,
         }
         if ss_conditioning.blocker is not None:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
@@ -935,7 +1006,7 @@ class Pixal3DInferencePipeline:
             _release_pixal3d_mlx_stage_memory(metadata, "after_sparse_structure")
 
             shape_conditioning = build_pixal3d_projection_conditioning(
-                projection_hidden_states,
+                projection_hidden_states_512,
                 "shape_512",
                 camera_angle_x=camera.camera_angle_x,
                 distance=camera.distance,
@@ -943,6 +1014,7 @@ class Pixal3DInferencePipeline:
                 naf_feature_map=shape_lr_naf_feature_map,
             )
             metadata["shape_lr_projection"] = {
+                **shape_conditioning.metadata,
                 "ready": shape_conditioning.ready,
                 "global_shape": tuple(int(dim) for dim in shape_conditioning.global_tokens.shape)
                 if shape_conditioning.global_tokens is not None
@@ -954,6 +1026,8 @@ class Pixal3DInferencePipeline:
                 if shape_conditioning.projected_lr_features is not None
                 else None,
                 "blocker": shape_conditioning.blocker,
+                "dino_source": dino_sources_by_size.get(512),
+                "dino_reused_from_stage": "ss",
             }
             shape_projected = None
             if shape_conditioning.blocker is not None:
@@ -963,6 +1037,7 @@ class Pixal3DInferencePipeline:
                         coordinates=decoder_probe.coordinates,
                         lr_projected_features=shape_conditioning.projected_lr_features,
                         stage_label="shape_lr",
+                        hidden_states=projection_hidden_states_512,
                     )
                     metadata["shape_lr_projection"].update(naf_projection_metadata)
                     if naf_blocker is None:
@@ -1219,8 +1294,33 @@ class Pixal3DInferencePipeline:
                 pixal3d_projection_stage_config("shape_1024"),
                 hr_selection.actual_hr_grid_resolution,
             )
+            dino_blocker = ensure_dino_hidden_states(shape_hr_stage.image_size, stage_label="shape_1024")
+            if dino_blocker is not None:
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timings
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "shape-hr-projection-conditioning",
+                    dino_blocker.operation,
+                    dino_blocker.reason,
+                    dino_blocker.metadata,
+                    metadata=metadata,
+                    artifacts=(
+                        projection_artifact.path,
+                        sparse_structure_artifact.path,
+                        shape_slat_artifact.path,
+                        shape_hr_coordinates_artifact.path,
+                    ),
+                )
+            projection_hidden_states_hr = dino_hidden_states_by_size[shape_hr_stage.image_size]
             shape_hr_conditioning = build_pixal3d_projection_conditioning(
-                projection_hidden_states,
+                projection_hidden_states_hr,
                 shape_hr_stage,
                 camera_angle_x=camera.camera_angle_x,
                 distance=camera.distance,
@@ -1228,6 +1328,7 @@ class Pixal3DInferencePipeline:
                 naf_feature_map=shape_hr_naf_feature_map,
             )
             metadata["shape_hr_projection"] = {
+                **shape_hr_conditioning.metadata,
                 "ready": shape_hr_conditioning.ready,
                 "global_shape": tuple(int(dim) for dim in shape_hr_conditioning.global_tokens.shape)
                 if shape_hr_conditioning.global_tokens is not None
@@ -1239,6 +1340,8 @@ class Pixal3DInferencePipeline:
                 if shape_hr_conditioning.projected_lr_features is not None
                 else None,
                 "blocker": shape_hr_conditioning.blocker,
+                "dino_source": dino_sources_by_size.get(shape_hr_stage.image_size),
+                "dino_reused_from_stage": None,
             }
             shape_hr_projected = None
             if shape_hr_conditioning.blocker is not None:
@@ -1248,6 +1351,7 @@ class Pixal3DInferencePipeline:
                         coordinates=hr_selection.coordinates,
                         lr_projected_features=shape_hr_conditioning.projected_lr_features,
                         stage_label="shape_hr",
+                        hidden_states=projection_hidden_states_hr,
                     )
                     metadata["shape_hr_projection"].update(naf_projection_metadata)
                     if naf_blocker is None:
@@ -1432,7 +1536,7 @@ class Pixal3DInferencePipeline:
                 hr_selection.actual_hr_grid_resolution,
             )
             texture_conditioning = build_pixal3d_projection_conditioning(
-                projection_hidden_states,
+                projection_hidden_states_hr,
                 texture_stage,
                 camera_angle_x=camera.camera_angle_x,
                 distance=camera.distance,
@@ -1440,6 +1544,7 @@ class Pixal3DInferencePipeline:
                 naf_feature_map=texture_naf_feature_map,
             )
             metadata["texture_projection"] = {
+                **texture_conditioning.metadata,
                 "ready": texture_conditioning.ready,
                 "global_shape": tuple(int(dim) for dim in texture_conditioning.global_tokens.shape)
                 if texture_conditioning.global_tokens is not None
@@ -1451,6 +1556,8 @@ class Pixal3DInferencePipeline:
                 if texture_conditioning.projected_lr_features is not None
                 else None,
                 "blocker": texture_conditioning.blocker,
+                "dino_source": dino_sources_by_size.get(texture_stage.image_size),
+                "dino_reused_from_stage": "shape_1024",
             }
             texture_projected = None
             if texture_conditioning.blocker is not None:
@@ -1460,6 +1567,7 @@ class Pixal3DInferencePipeline:
                         coordinates=hr_selection.coordinates,
                         lr_projected_features=texture_conditioning.projected_lr_features,
                         stage_label="texture",
+                        hidden_states=projection_hidden_states_hr,
                     )
                     metadata["texture_projection"].update(naf_projection_metadata)
                     if naf_blocker is None:
@@ -1670,7 +1778,7 @@ class Pixal3DInferencePipeline:
                 texture_naf_feature_map,
                 shape_hr_features_for_texture,
             )
-            del projection_hidden_states, naf_tensors, naf_image_cache
+            del dino_hidden_states_by_size, dino_sources_by_size, naf_tensors, naf_image_cache
             _release_pixal3d_mlx_stage_memory(metadata, "after_texture_slat")
 
             try:
@@ -2234,6 +2342,17 @@ def _diagnostic_int(diagnostics: dict[str, Any], path: tuple[str, ...]) -> int |
             return None
         value = value[key]
     return int(value) if value is not None else None
+
+
+def _pixal3d_hidden_state_patch_grid(hidden_states: mx.array) -> tuple[int, int] | None:
+    if hidden_states.ndim != 3:
+        return None
+    token_count = int(hidden_states.shape[1])
+    patch_count = token_count - (1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS)
+    side = int(patch_count**0.5)
+    if patch_count <= 0 or side * side != patch_count:
+        return None
+    return (side, side)
 
 
 def _pixal3d_patch_feature_map_bchw(hidden_states: mx.array) -> mx.array:

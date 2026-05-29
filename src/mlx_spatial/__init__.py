@@ -197,6 +197,17 @@ from .pixal3d_inference import (
     Pixal3DInferencePipeline,
     Pixal3DInferenceTrace,
 )
+from .pixal3d_preprocess import (
+    PIXAL3D_ALPHA_FOREGROUND_THRESHOLD,
+    PIXAL3D_DEFAULT_BACKGROUND_COLOR,
+    PIXAL3D_FOREGROUND_CROP_SCALE,
+    PIXAL3D_PREPROCESS_MAX_SIDE,
+    Pixal3DBackgroundRemover,
+    Pixal3DPreprocessBlocker,
+    Pixal3DPreprocessResult,
+    Pixal3DPreprocessedImage,
+    preprocess_pixal3d_image,
+)
 from .pixal3d_camera import (
     PIXAL3D_CASCADE_LR_RESOLUTION,
     PIXAL3D_HR_RESOLUTION_STEP,
@@ -246,6 +257,7 @@ from .pixal3d_parity import (
 )
 from .pixal3d_projection import (
     PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS,
+    PIXAL3D_DINOV3_PATCH_SIZE,
     PIXAL3D_DINOV3_EMBED_DIM,
     PIXAL3D_PROJECTION_STAGE_CONFIGS,
     Pixal3DProjectedPoints,

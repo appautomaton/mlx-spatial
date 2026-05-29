@@ -55,8 +55,8 @@ def test_pixal3d_cli_generate_writes_trace_for_skeleton_boundary(tmp_path, capsy
 
     assert result == 2
     output = capsys.readouterr().out
-    assert "blocker_stage=image-conditioning" in output
+    assert "blocker_stage=input-preprocessing" in output
     payload = json.loads(trace.read_text(encoding="utf-8"))
-    assert payload["completed_stages"] == ["input-image", "asset-validation", "pipeline-config", "camera-setup"]
-    assert payload["blocker"]["stage"] == "image-conditioning"
+    assert payload["completed_stages"] == ["input-image", "asset-validation", "pipeline-config"]
+    assert payload["blocker"]["stage"] == "input-preprocessing"
     assert payload["metadata"]["stage_plan"]["actual_hr_resolution"] == 1024

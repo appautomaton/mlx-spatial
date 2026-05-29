@@ -68,7 +68,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     download_parser.add_argument("--root", dest="command_root")
 
     generate_parser = subparsers.add_parser("generate", help="run Pixal3D generation or report the current blocker")
-    generate_parser.add_argument("image", help="input RGB/RGBA image")
+    generate_parser.add_argument(
+        "image",
+        help="input image; RGBA foreground alpha is used directly, RGB requires a Pixal3D RMBG background-remover API hook",
+    )
     generate_parser.add_argument("--root", "--weights-root", dest="command_root")
     generate_parser.add_argument("--output", type=Path, help="explicit output GLB path")
     generate_parser.add_argument("--output-dir", type=Path, help="directory for generated artifacts")

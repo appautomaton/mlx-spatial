@@ -22,6 +22,7 @@ def test_pixal3d_projection_stage_configs_match_upstream_shapes():
 
     ss = pixal3d_projection_stage_config("ss")
     shape = pixal3d_projection_stage_config("shape_512")
+    shape_hr = pixal3d_projection_stage_config("shape_1024")
     texture = pixal3d_projection_stage_config("tex_1024")
 
     assert ss.image_size == 512
@@ -30,6 +31,9 @@ def test_pixal3d_projection_stage_configs_match_upstream_shapes():
     assert ss.expected_projected_channels() == 1024
     assert shape.use_naf_upsample is True
     assert shape.expected_projected_channels() == 2048
+    assert shape.expected_patch_grid == (32, 32)
+    assert shape_hr.image_size == 1024
+    assert shape_hr.expected_patch_grid == (64, 64)
     assert texture.image_size == 1024
     assert texture.naf_target_size == 1024
 
@@ -112,7 +116,7 @@ def test_pixal3d_feature_sampling_matches_grid_sample_pixel_centers():
 
 def test_pixal3d_projection_conditioning_builds_sparse_stage_shapes():
     hidden = _hidden_states(batch=1, patch_grid=(2, 2), channels=3)
-    stage = pixal3d_stage_with_grid_resolution(pixal3d_projection_stage_config("ss"), 2)
+    stage = Pixal3DProjectionStageConfig("ss", image_size=32, grid_resolution=2)
 
     conditioning = build_pixal3d_projection_conditioning(
         hidden,
@@ -129,11 +133,13 @@ def test_pixal3d_projection_conditioning_builds_sparse_stage_shapes():
     assert conditioning.global_tokens.shape == (1, 5, 3)
     assert conditioning.projected_features.shape == (1, 2**3, 3)
     assert conditioning.projected_lr_features is conditioning.projected_features
+    assert conditioning.metadata["patch_grid"] == (2, 2)
+    assert conditioning.metadata["image_size"] == 32
 
 
 def test_pixal3d_projection_conditioning_blocks_shape_stage_without_naf_features():
     hidden = _hidden_states(batch=1, patch_grid=(2, 2), channels=3)
-    stage = pixal3d_stage_with_grid_resolution(pixal3d_projection_stage_config("shape_512"), 2)
+    stage = Pixal3DProjectionStageConfig("shape_512", image_size=32, grid_resolution=2, use_naf_upsample=True, naf_target_size=4)
 
     conditioning = build_pixal3d_projection_conditioning(
         hidden,
@@ -151,11 +157,12 @@ def test_pixal3d_projection_conditioning_blocks_shape_stage_without_naf_features
     assert conditioning.blocker.stage == "naf-upsample"
     assert "inference pipeline NAF bridge" in conditioning.blocker.reason
     assert conditioning.blocker.metadata["expected_projected_channels"] == 6
+    assert conditioning.metadata["naf_source"] == "runtime-bridge-required"
 
 
 def test_pixal3d_projection_conditioning_uses_supplied_naf_features():
     hidden = _hidden_states(batch=1, patch_grid=(2, 2), channels=3)
-    stage = pixal3d_stage_with_grid_resolution(pixal3d_projection_stage_config("shape_512"), 2)
+    stage = Pixal3DProjectionStageConfig("shape_512", image_size=32, grid_resolution=2, use_naf_upsample=True, naf_target_size=4)
     naf = mx.array(np.arange(1 * 3 * 4 * 4, dtype=np.float32).reshape(1, 3, 4, 4))
 
     conditioning = build_pixal3d_projection_conditioning(
@@ -173,6 +180,48 @@ def test_pixal3d_projection_conditioning_uses_supplied_naf_features():
     assert conditioning.projected_features.shape == (1, 2**3, 6)
     assert conditioning.projected_lr_features is not None
     assert conditioning.projected_lr_features.shape == (1, 2**3, 3)
+    assert conditioning.metadata["naf_source"] == "supplied"
+    assert conditioning.metadata["patch_grid"] == (2, 2)
+
+
+def test_pixal3d_projection_conditioning_blocks_upstream_1024_stage_with_512_patch_grid():
+    hidden = _hidden_states(batch=1, patch_grid=(32, 32), channels=3)
+    stage = pixal3d_stage_with_grid_resolution(pixal3d_projection_stage_config("shape_1024"), 2)
+
+    conditioning = build_pixal3d_projection_conditioning(
+        hidden,
+        stage,
+        camera_angle_x=0.8,
+        distance=2.0,
+        mesh_scale=1.0,
+        naf_feature_map=mx.zeros((1, 4, 4, 3), dtype=mx.float32),
+    )
+
+    assert not conditioning.ready
+    assert conditioning.blocker is not None
+    assert conditioning.blocker.operation == "stage-patch-grid-validation"
+    assert conditioning.blocker.metadata["expected_patch_grid"] == (64, 64)
+    assert conditioning.blocker.metadata["actual_patch_grid"] == (32, 32)
+
+
+def test_pixal3d_projection_conditioning_accepts_upstream_1024_patch_grid():
+    hidden = _hidden_states(batch=1, patch_grid=(64, 64), channels=3)
+    stage = pixal3d_stage_with_grid_resolution(pixal3d_projection_stage_config("tex_1024"), 2)
+
+    conditioning = build_pixal3d_projection_conditioning(
+        hidden,
+        stage,
+        camera_angle_x=0.8,
+        distance=2.0,
+        mesh_scale=1.0,
+        naf_feature_map=mx.zeros((1, 4, 4, 3), dtype=mx.float32),
+    )
+
+    assert conditioning.ready
+    assert conditioning.metadata["image_size"] == 1024
+    assert conditioning.metadata["patch_grid"] == (64, 64)
+    assert conditioning.projected_features is not None
+    assert conditioning.projected_features.shape == (1, 2**3, 6)
 
 
 def test_pixal3d_projection_conditioning_reports_invalid_patch_grid():

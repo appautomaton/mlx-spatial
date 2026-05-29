@@ -15,7 +15,7 @@ from mlx_spatial.pixal3d_inference import (
     PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
     Pixal3DInferencePipeline,
 )
-from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS, Pixal3DProjectionStageConfig
+from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
 from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
 from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
 from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
@@ -32,12 +32,34 @@ from pixal3d_fixtures import (
 )
 
 
+def _write_pixal3d_test_rgba(path: Path, *, size: tuple[int, int] = (16, 12), color=(128, 64, 32)) -> None:
+    width, height = size
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    x0 = max(1, width // 8)
+    x1 = max(x0 + 1, width - x0)
+    y0 = max(1, height // 8)
+    y1 = max(y0 + 1, height - y0)
+    rgba[y0:y1, x0:x1, :3] = color
+    rgba[y0:y1, x0:x1, 3] = 255
+    Image.fromarray(rgba, mode="RGBA").save(path)
+
+
+def _pixal3d_hidden_states(*, patch_grid: int, channels: int) -> mx.array:
+    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
+    return mx.zeros((1, token_count, channels), dtype=mx.float32)
+
+
 def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
 
-    result = Pixal3DInferencePipeline(root).generate(image, manual_fov=0.2, pipeline_type="1536_cascade")
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        manual_fov=0.2,
+        pipeline_type="1536_cascade",
+        dino_root=tmp_path / "missing-dinov3",
+    )
 
     assert not result.ready
     assert result.trace.blocker is not None
@@ -51,7 +73,7 @@ def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
 def test_pixal3d_pipeline_manual_fov_does_not_invoke_moge(tmp_path, monkeypatch):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + 32 * 32
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
 
@@ -75,7 +97,7 @@ def test_pixal3d_pipeline_manual_fov_does_not_invoke_moge(tmp_path, monkeypatch)
 def test_pixal3d_pipeline_uses_moge_auto_camera_when_manual_fov_omitted(tmp_path, monkeypatch):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    Image.new("RGB", (16, 8), (128, 64, 32)).save(image)
+    _write_pixal3d_test_rgba(image, size=(16, 8))
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + 32 * 32
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
     calls = {}
@@ -111,11 +133,17 @@ def test_pixal3d_pipeline_uses_moge_auto_camera_when_manual_fov_omitted(tmp_path
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
     )
-    assert calls == {"shape": (8, 16, 3), "root": str(tmp_path / "moge"), "memory_profile": "safe"}
+    preprocessed_size = result.trace.metadata["input_preprocessing"]["output_size"]
+    assert calls == {
+        "shape": (preprocessed_size[1], preprocessed_size[0], 3),
+        "root": str(tmp_path / "moge"),
+        "memory_profile": "safe",
+    }
     assert result.trace.metadata["camera_source"] == "moge"
     assert result.trace.metadata["camera"].camera_angle_x > 0
     assert result.trace.metadata["moge_camera"]["root"] == str(tmp_path / "moge")
@@ -126,7 +154,7 @@ def test_pixal3d_pipeline_uses_moge_auto_camera_when_manual_fov_omitted(tmp_path
 def test_pixal3d_pipeline_reports_moge_camera_blocker_when_manual_fov_omitted(tmp_path, monkeypatch):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    Image.new("RGB", (16, 8), (128, 64, 32)).save(image)
+    _write_pixal3d_test_rgba(image, size=(16, 8))
 
     def fake_blocked_moge(image_rgb, *, root, memory_profile):
         return Sam3dMogeResult(
@@ -153,13 +181,13 @@ def test_pixal3d_pipeline_reports_moge_camera_blocker_when_manual_fov_omitted(tm
     assert result.trace.blocker.metadata["moge_root"] == str(tmp_path / "missing-moge")
     assert result.trace.blocker.metadata["memory_profile"] == "balanced"
     assert result.trace.blocker.metadata["expected"] == str(tmp_path / "missing-moge" / "model.safetensors")
-    assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config")
+    assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config", "input-preprocessing")
 
 
 def test_pixal3d_pipeline_reports_missing_dinov3_assets_with_manual_fov(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -173,13 +201,19 @@ def test_pixal3d_pipeline_reports_missing_dinov3_assets_with_manual_fov(tmp_path
     assert result.trace.blocker.operation == "local DINOv3 asset validation"
     assert result.trace.blocker.metadata["dino_root"] == str(tmp_path / "missing-dinov3")
     assert "hf download facebook/dinov3-vitl16-pretrain-lvd1689m" in result.trace.blocker.metadata["download_command"]
-    assert result.trace.completed_stages == ("input-image", "asset-validation", "pipeline-config", "camera-setup")
+    assert result.trace.completed_stages == (
+        "input-image",
+        "asset-validation",
+        "pipeline-config",
+        "input-preprocessing",
+        "camera-setup",
+    )
 
 
 def test_pixal3d_pipeline_validates_shape_upsample_token_limit(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -197,7 +231,7 @@ def test_pixal3d_pipeline_validates_shape_upsample_token_limit(tmp_path):
 def test_pixal3d_pipeline_validates_decoder_token_limits(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
 
     shape_result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -223,7 +257,7 @@ def test_pixal3d_pipeline_validates_decoder_token_limits(tmp_path):
 def test_pixal3d_pipeline_validates_glb_export_backend(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -243,7 +277,7 @@ def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_ro
     root = write_fake_pixal3d_root(tmp_path / "weights")
     dino_root = write_fake_pixal3d_dinov3_root(tmp_path / "dinov3")
     image = tmp_path / "image.png"
-    Image.new("RGB", (8, 8), (128, 64, 32)).save(image)
+    _write_pixal3d_test_rgba(image, size=(8, 8))
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -259,13 +293,15 @@ def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_ro
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "image-conditioning",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
     )
     assert result.trace.metadata["dino_conditioning"]["root"] == str(dino_root)
-    assert result.trace.metadata["dino_conditioning"]["shape"] == (1, 21, 1024)
+    assert result.trace.metadata["dino_conditioning"]["shape"] == (1, 1029, 1024)
+    assert result.trace.metadata["dino_conditioning"]["patch_grid"] == (32, 32)
     assert result.trace.metadata["ss_projection"]["projected_shape"] == (1, 16**3, 1024)
     assert len(result.artifacts) == 1
     assert result.artifacts[0].name == "sparse_projection.npz"
@@ -275,7 +311,7 @@ def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_ro
 def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_hidden_states(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + 32 * 32
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
 
@@ -298,7 +334,7 @@ def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_hidden_states(
 def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
     root = write_fake_pixal3d_sparse_flow_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -316,6 +352,7 @@ def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -331,7 +368,7 @@ def test_pixal3d_pipeline_runs_sparse_flow_with_valid_fake_checkpoint(tmp_path):
 def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decoder(tmp_path):
     root = write_fake_pixal3d_sparse_decoder_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -349,6 +386,7 @@ def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decod
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -374,7 +412,7 @@ def test_pixal3d_pipeline_writes_sparse_structure_artifact_with_valid_fake_decod
 def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_flow(tmp_path):
     root = write_fake_pixal3d_shape_slat_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -385,6 +423,7 @@ def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         naf_root=tmp_path / "missing-naf",
     )
@@ -396,6 +435,7 @@ def test_pixal3d_pipeline_writes_shape_slat_lr_artifact_with_fake_naf_and_shape_
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -425,25 +465,35 @@ def test_pixal3d_pipeline_uses_mlx_naf_when_shape_lr_map_is_not_supplied(tmp_pat
     root = write_fake_pixal3d_shape_slat_root(tmp_path / "weights", proj_in_channels=4, sparse_steps=1, shape_steps=1)
     naf_root = write_fake_naf_root(tmp_path / "naf")
     image = tmp_path / "image.png"
-    Image.new("RGB", (8, 8), (128, 64, 32)).save(image)
-    patch_grid = 2
-    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
-    hidden_states = mx.zeros((1, token_count, 4), dtype=mx.float32)
-    original_stage_config = pixal3d_inference.pixal3d_projection_stage_config
+    _write_pixal3d_test_rgba(image, size=(8, 8))
+    hidden_states = _pixal3d_hidden_states(patch_grid=32, channels=4)
+    naf_calls = {}
 
-    def fake_stage_config(name):
-        stage = original_stage_config(name)
-        if name == "shape_512":
-            return Pixal3DProjectionStageConfig(
-                name=stage.name,
-                image_size=8,
-                grid_resolution=stage.grid_resolution,
-                use_naf_upsample=stage.use_naf_upsample,
-                naf_target_size=8,
-            )
-        return stage
+    def fake_project_naf_features_at_points(
+        image_tensor,
+        patch_features,
+        projected_points,
+        *,
+        image_resolution,
+        output_size,
+        tensors,
+        chunk_size,
+    ):
+        point_count = int(projected_points.shape[1])
+        channels = int(patch_features.shape[1])
+        naf_calls["image_shape"] = tuple(int(dim) for dim in image_tensor.shape)
+        naf_calls["patch_shape"] = tuple(int(dim) for dim in patch_features.shape)
+        naf_calls["image_resolution"] = image_resolution
+        naf_calls["output_size"] = output_size
+        return SimpleNamespace(
+            features=mx.zeros((1, point_count, channels), dtype=mx.float32),
+            target_size=(int(output_size), int(output_size)),
+            point_count=point_count,
+            chunk_size=chunk_size,
+            kernel_size=3,
+        )
 
-    monkeypatch.setattr(pixal3d_inference, "pixal3d_projection_stage_config", fake_stage_config)
+    monkeypatch.setattr(pixal3d_inference, "project_naf_features_at_points", fake_project_naf_features_at_points)
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -462,12 +512,17 @@ def test_pixal3d_pipeline_uses_mlx_naf_when_shape_lr_map_is_not_supplied(tmp_pat
     assert result.trace.metadata["shape_lr_projection"]["source"] == "mlx-naf"
     assert result.trace.metadata["shape_lr_projection"]["selected_projected_shape"] == (4096, 8)
     assert result.trace.metadata["shape_lr_projection"]["full_map_avoidance"] is True
+    assert result.trace.metadata["shape_lr_projection"]["image_size"] == 512
+    assert result.trace.metadata["shape_lr_projection"]["dino_reused_from_stage"] == "ss"
+    assert naf_calls["patch_shape"] == (1, 4, 32, 32)
+    assert naf_calls["image_resolution"] == 512
+    assert naf_calls["output_size"] == 512
 
 
 def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path):
     root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -478,6 +533,7 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         naf_root=tmp_path / "missing-naf",
     )
@@ -490,6 +546,7 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -521,10 +578,37 @@ def test_pixal3d_pipeline_writes_hr_coordinates_with_fake_shape_decoder(tmp_path
     assert result.trace.metadata["shape_hr_cascade"]["shape_upsample_token_limit"] == PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT
 
 
+def test_pixal3d_pipeline_blocks_shape_hr_when_1024_conditioning_is_missing(tmp_path):
+    root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
+    image = tmp_path / "image.png"
+    _write_pixal3d_test_rgba(image)
+    hidden_states = _pixal3d_hidden_states(patch_grid=32, channels=3)
+    naf = mx.zeros((1, 32, 32, 3), dtype=mx.float32)
+
+    result = Pixal3DInferencePipeline(root).generate(
+        image,
+        output_dir=tmp_path / "out",
+        manual_fov=0.2,
+        projection_hidden_states=hidden_states,
+        shape_lr_naf_feature_map=naf,
+        dino_root=tmp_path / "missing-dinov3",
+    )
+
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "shape-hr-projection-conditioning"
+    assert result.trace.blocker.metadata["stage_label"] == "shape_1024"
+    assert result.trace.blocker.metadata["image_size"] == 1024
+    assert "artifact:shape_slat_hr_coordinates" in result.trace.completed_stages
+    assert "projection-conditioning:shape_1024" not in result.trace.completed_stages
+    assert result.trace.metadata["shape_lr_projection"]["image_size"] == 512
+    assert result.trace.metadata["shape_lr_projection"]["dino_reused_from_stage"] == "ss"
+
+
 def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_shape_flow(tmp_path):
     root = write_fake_pixal3d_shape_hr_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -535,6 +619,7 @@ def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_sha
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         naf_root=tmp_path / "missing-naf",
@@ -548,6 +633,7 @@ def test_pixal3d_pipeline_writes_shape_slat_hr_artifact_with_fake_hr_naf_and_sha
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -591,7 +677,7 @@ def test_pixal3d_pipeline_writes_texture_slat_and_shape_decoder_then_blocks_with
         texture_steps=1,
     )
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -602,6 +688,7 @@ def test_pixal3d_pipeline_writes_texture_slat_and_shape_decoder_then_blocks_with
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,
@@ -614,6 +701,7 @@ def test_pixal3d_pipeline_writes_texture_slat_and_shape_decoder_then_blocks_with
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -673,7 +761,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
         texture_steps=1,
     )
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -684,6 +772,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
         output_dir=tmp_path / "out",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,
@@ -696,6 +785,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
         "input-image",
         "asset-validation",
         "pipeline-config",
+        "input-preprocessing",
         "camera-setup",
         "projection-conditioning:ss",
         "artifact:sparse_projection",
@@ -748,7 +838,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
 def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -760,6 +850,7 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,
@@ -810,7 +901,7 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
 def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -878,6 +969,7 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,
@@ -915,7 +1007,7 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
 def test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -932,6 +1024,7 @@ def test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing(tmp_pat
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,
@@ -950,7 +1043,7 @@ def test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing(tmp_pat
 def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
-    image.write_bytes(b"placeholder")
+    _write_pixal3d_test_rgba(image)
     patch_grid = 32
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
@@ -962,6 +1055,7 @@ def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_pat
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
         projection_hidden_states=hidden_states,
+        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
         shape_lr_naf_feature_map=naf,
         shape_hr_naf_feature_map=naf,
         texture_naf_feature_map=naf,

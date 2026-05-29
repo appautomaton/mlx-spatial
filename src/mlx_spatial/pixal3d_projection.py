@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import mlx.core as mx
@@ -11,6 +11,7 @@ import numpy as np
 
 PIXAL3D_DINOV3_EMBED_DIM = 1024
 PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS = 4
+PIXAL3D_DINOV3_PATCH_SIZE = 16
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,20 @@ class Pixal3DProjectionStageConfig:
     grid_resolution: int
     use_naf_upsample: bool = False
     naf_target_size: int | None = None
+    patch_size: int = PIXAL3D_DINOV3_PATCH_SIZE
 
     @property
     def projected_token_count(self) -> int:
         return self.grid_resolution**3
+
+    @property
+    def expected_patch_grid(self) -> tuple[int, int]:
+        if self.patch_size <= 0:
+            raise ValueError("patch_size must be positive")
+        if self.image_size % self.patch_size != 0:
+            raise ValueError(f"image_size={self.image_size} is not divisible by patch_size={self.patch_size}")
+        side = self.image_size // self.patch_size
+        return (side, side)
 
     def expected_projected_channels(self, embed_dim: int = PIXAL3D_DINOV3_EMBED_DIM) -> int:
         return embed_dim * (2 if self.use_naf_upsample else 1)
@@ -59,6 +70,7 @@ class Pixal3DProjectionConditioning:
     projected_features: mx.array | None
     projected_lr_features: mx.array | None = None
     blocker: Pixal3DProjectionBlocker | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def ready(self) -> bool:
@@ -277,6 +289,52 @@ def build_pixal3d_projection_conditioning(
         patch_grid = (side, side)
     if patch_grid[0] * patch_grid[1] != patch_count:
         return _projection_blocked(config, "patch-grid-validation", "patch_grid does not match patch token count", patch_grid)
+    try:
+        expected_patch_grid = config.expected_patch_grid
+    except ValueError as error:
+        return _projection_blocked(config, "stage-patch-grid-validation", str(error), patch_grid)
+    if tuple(int(value) for value in patch_grid) != expected_patch_grid:
+        return Pixal3DProjectionConditioning(
+            stage=config,
+            global_tokens=None,
+            projected_features=None,
+            blocker=Pixal3DProjectionBlocker(
+                stage="projection-conditioning",
+                operation="stage-patch-grid-validation",
+                reason=(
+                    f"{config.name} expects DINO patch grid {expected_patch_grid} "
+                    f"from image_size={config.image_size}, got {tuple(int(value) for value in patch_grid)}"
+                ),
+                metadata={
+                    "stage": config.name,
+                    "image_size": config.image_size,
+                    "patch_size": config.patch_size,
+                    "expected_patch_grid": expected_patch_grid,
+                    "actual_patch_grid": tuple(int(value) for value in patch_grid),
+                    "hidden_state_shape": tuple(int(dim) for dim in hidden_states.shape),
+                },
+            ),
+            metadata={
+                "stage": config.name,
+                "image_size": config.image_size,
+                "patch_size": config.patch_size,
+                "expected_patch_grid": expected_patch_grid,
+                "actual_patch_grid": tuple(int(value) for value in patch_grid),
+            },
+        )
+
+    conditioning_metadata = {
+        "stage": config.name,
+        "image_size": config.image_size,
+        "grid_resolution": config.grid_resolution,
+        "patch_size": config.patch_size,
+        "patch_grid": tuple(int(value) for value in patch_grid),
+        "patch_token_count": int(patch_count),
+        "hidden_state_shape": tuple(int(dim) for dim in hidden_states.shape),
+        "use_naf_upsample": config.use_naf_upsample,
+        "naf_target_size": config.naf_target_size,
+        "naf_source": "supplied" if naf_feature_map is not None else None,
+    }
 
     global_tokens = hidden_states[:, :global_count, :]
     patch_tokens = hidden_states[:, global_count:, :].reshape(batch, patch_grid[0], patch_grid[1], channels)
@@ -301,6 +359,12 @@ def build_pixal3d_projection_conditioning(
             global_tokens=global_tokens,
             projected_features=lr_features,
             projected_lr_features=lr_features,
+            metadata={
+                **conditioning_metadata,
+                "global_shape": tuple(int(dim) for dim in global_tokens.shape),
+                "projected_shape": tuple(int(dim) for dim in lr_features.shape),
+                "projected_lr_shape": tuple(int(dim) for dim in lr_features.shape),
+            },
         )
 
     if naf_feature_map is None:
@@ -317,8 +381,17 @@ def build_pixal3d_projection_conditioning(
                     "stage": config.name,
                     "expected_projected_channels": config.expected_projected_channels(channels),
                     "available_lr_channels": channels,
+                    "image_size": config.image_size,
+                    "patch_grid": tuple(int(value) for value in patch_grid),
+                    "naf_target_size": config.naf_target_size,
                 },
             ),
+            metadata={
+                **conditioning_metadata,
+                "naf_source": "runtime-bridge-required",
+                "global_shape": tuple(int(dim) for dim in global_tokens.shape),
+                "projected_lr_shape": tuple(int(dim) for dim in lr_features.shape),
+            },
         )
 
     hr_features = sample_pixal3d_feature_map(
@@ -332,6 +405,14 @@ def build_pixal3d_projection_conditioning(
         global_tokens=global_tokens,
         projected_features=mx.concatenate([lr_features, hr_features], axis=-1),
         projected_lr_features=lr_features,
+        metadata={
+            **conditioning_metadata,
+            "naf_shape": tuple(int(dim) for dim in naf_feature_map.shape),
+            "global_shape": tuple(int(dim) for dim in global_tokens.shape),
+            "projected_shape": (int(batch), config.projected_token_count, int(channels) * 2),
+            "projected_lr_shape": tuple(int(dim) for dim in lr_features.shape),
+            "projected_hr_shape": tuple(int(dim) for dim in hr_features.shape),
+        },
     )
 
 
@@ -429,4 +510,10 @@ def _projection_blocked(
             reason=reason,
             metadata={"shape": tuple(shape) if isinstance(shape, tuple | list) else str(shape)},
         ),
+        metadata={
+            "stage": stage.name,
+            "image_size": stage.image_size,
+            "grid_resolution": stage.grid_resolution,
+            "patch_size": stage.patch_size,
+        },
     )
