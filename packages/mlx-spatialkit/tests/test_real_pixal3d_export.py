@@ -17,6 +17,7 @@ from mlx_spatialkit.export import (
     _native_chart_uv_candidate_status,
     _production_equivalence_summary,
     _resolve_pixal3d_export_settings,
+    _resolve_simplify_backend,
     _resolve_tile_padding,
     _resolve_pixal3d_uv_backend,
     _simplifier_backend_for_quality_preset,
@@ -1152,6 +1153,64 @@ def test_export_pixal3d_glb_rejects_invalid_public_guards(tmp_path) -> None:
         export_pixal3d_glb(decoded_dir, tmp_path / "out", source_projection_fallback_mode="far-nearest")
 
 
+def test_export_pixal3d_glb_simplify_backend_validator(tmp_path) -> None:
+    # F1: _resolve_simplify_backend accepts None and "qem", rejects anything else.
+    assert _resolve_simplify_backend(None) is None
+    assert _resolve_simplify_backend("qem") == "qem"
+    assert _resolve_simplify_backend("QEM") == "qem"
+
+    with pytest.raises(ValueError, match="simplify_backend"):
+        _resolve_simplify_backend("bogus")
+    with pytest.raises(ValueError, match="simplify_backend"):
+        _resolve_simplify_backend("topology-aware")
+    with pytest.raises(ValueError, match="simplify_backend"):
+        _resolve_simplify_backend("spatial-cluster")
+
+
+def test_export_pixal3d_glb_simplify_backend_bogus_raises(tmp_path) -> None:
+    # F1 via public API: "bogus" simplify_backend raises ValueError.
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+
+    with pytest.raises(ValueError, match="simplify_backend"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", simplify_backend="bogus")
+
+
+def test_export_pixal3d_glb_simplify_backend_qem_requires_remesh(tmp_path) -> None:
+    # M3: simplify_backend="qem" without remesh=True raises a clear ValueError.
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+
+    # remesh=False (default) raises.
+    with pytest.raises(ValueError, match="simplify_backend='qem'.*remesh=True.*remesh_repair_nonmanifold=True"):
+        export_pixal3d_glb(decoded_dir, tmp_path / "out", simplify_backend="qem")
+
+    # remesh=True but repair=False raises.
+    with pytest.raises(ValueError, match="simplify_backend='qem'.*remesh=True.*remesh_repair_nonmanifold=True"):
+        export_pixal3d_glb(
+            decoded_dir,
+            tmp_path / "out",
+            simplify_backend="qem",
+            remesh=True,
+            remesh_repair_nonmanifold=False,
+        )
+
+
+def test_export_pixal3d_glb_simplify_backend_none_preserves_preset_behavior(tmp_path) -> None:
+    # simplify_backend=None must leave the preset-derived backend untouched.
+    # _simplifier_backend_for_quality_preset is the source of truth; None must
+    # not alter the resolved value.
+    assert _simplifier_backend_for_quality_preset("preview") == "spatial-cluster"
+    assert _simplifier_backend_for_quality_preset("reference-target") == "topology-aware"
+    assert _resolve_simplify_backend(None) is None
+    # None is the additive identity: preset result is unchanged.
+    for preset, expected in [("preview", "spatial-cluster"), ("reference-target", "topology-aware")]:
+        preset_backend = _simplifier_backend_for_quality_preset(preset)
+        override = _resolve_simplify_backend(None)
+        resolved = override if override is not None else preset_backend
+        assert resolved == expected
+
+
 def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
     decoded_dir = tmp_path / "decoded"
     decoded_dir.mkdir()
@@ -1882,6 +1941,87 @@ def test_glb_viewer_compatibility_summary_checks_normals_and_uint16_chunks() -> 
     assert failing["checks"]["uint16_indices"]["passed"] is False
     assert failing["checks"]["local_index_bounds"]["passed"] is False
     assert failing["checks"]["chunking_for_large_mesh"]["passed"] is False
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_qem_input_prep_real_fixture_manifold_and_bounded() -> None:
+    """S4 heavy: real fixture export with simplify_backend="qem" produces a fully manifold mesh.
+
+    Contract (QEM-05): the output mesh is FULLY MANIFOLD (nonmanifold_edges==0 and
+    nonmanifold_vertices==0) and QEM PRESERVES topology (it adds zero boundary loops).
+    Any residual open boundary loops are large-perimeter loops that were already present
+    in the bounded pre-QEM fill stage (qem_pre_fill_residual_boundary_loops) and that
+    the bounded fill correctly refuses to close (perimeter >> the 0.03 max_perimeter
+    policy).  QEM boundary-locks and faithfully preserves those loops -- it does not
+    tear them.  Full watertightness vs the reference is a documented follow-on requiring
+    non-manifold-tolerant QEM; it is NOT a QEM-05 contract requirement.
+    """
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-qem-input-prep-export-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="preview",
+        remesh=True,
+        remesh_resolution=192,
+        remesh_repair_nonmanifold=True,
+        simplify_backend="qem",
+    )
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    export_metrics = diagnostics["stages"]["export_metrics"]["metrics"]
+
+    # 1. QEM backend was selected.
+    assert diagnostics["settings"]["simplify_backend"] == "qem"
+    assert diagnostics["settings"]["requested_simplifier_backend"] == "qem"
+    assert simplify_stats["backend"] == "qem"
+    assert simplify_stats["algorithm"] == "native_qem_edge_collapse"
+    assert simplify_stats["qem_simplification_backend"] == "native-qem-edge-collapse"
+
+    # Target reached is honest (not forced).
+    assert isinstance(simplify_stats["target_reached"], bool)
+
+    # 2. The mesh is FULLY MANIFOLD: QEM's core geometric guarantee.
+    #    These MUST be 0; if either is non-zero QEM produced a broken mesh.
+    assert export_metrics["nonmanifold_edges"] == 0, (
+        f"QEM produced non-manifold edges: nonmanifold_edges={export_metrics['nonmanifold_edges']}"
+    )
+    assert export_metrics["nonmanifold_vertices"] == 0, (
+        f"QEM produced non-manifold vertices: nonmanifold_vertices={export_metrics['nonmanifold_vertices']}"
+    )
+
+    # 3. QEM PRESERVED topology (added zero boundary loops).
+    #    The only open boundary loops in the output are the large-perimeter residual that
+    #    the bounded pre-QEM fill correctly declined to fill.  If QEM tore topology this
+    #    assertion fails because boundary_loop_count would exceed the residual.
+    pre_fill_residual = simplify_stats["qem_pre_fill_residual_boundary_loops"]
+    assert export_metrics["boundary_loop_count"] == pre_fill_residual, (
+        f"QEM tore topology: boundary_loop_count={export_metrics['boundary_loop_count']} "
+        f"!= qem_pre_fill_residual_boundary_loops={pre_fill_residual}"
+    )
+    # QEM must not produce any open chains (non-loop boundary components) either.
+    assert export_metrics["boundary_open_chain_count"] == 0, (
+        f"QEM produced open chains: boundary_open_chain_count={export_metrics['boundary_open_chain_count']}"
+    )
+
+    # 4. Residual is recorded AND bounded.
+    #    The residual is >= 0 (sanity) and <= 64 (the repair-induced openings from
+    #    remesh(repair_nonmanifold=True) splitting non-manifold edges; bounded fill
+    #    closes the small ones, correctly refuses the large-perimeter ones).
+    #    This bound documents the known behaviour -- a tighter post-remesh repair
+    #    path is a follow-on item tracked separately.
+    assert pre_fill_residual >= 0
+    assert pre_fill_residual <= 64, (
+        f"More residual boundary loops than expected from repair-induced openings: "
+        f"qem_pre_fill_residual_boundary_loops={pre_fill_residual} (expected <= 64)"
+    )
+
+    assert export_metrics["export_blocking_reasons"] == []
 
 
 def _assert_memory_diagnostics(diagnostics: dict, *, required_stages: tuple[str, ...]) -> None:

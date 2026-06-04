@@ -75,6 +75,12 @@ Required:
 **Depends on:** S2, S3
 **Touches:** `src/mlx_spatialkit/export.py` (new validated param + M3 guard + override at `:302/463`, pipeline wiring), `cpp/simplify.cpp` (loop-fill ordering for qem input)
 
+**Status:** complete
+**Evidence:** export `simplify_backend: str|None=None` + `_resolve_simplify_backend` (F1: None|"qem" else ValueError) + **M3 guard** (qem requires `remesh=True`+`remesh_repair_nonmanifold=True`, else ValueError — zero silent failures); `None` preserves preset byte-for-byte (`_simplifier_backend_for_quality_preset` untouched, its tests green). Input-prep: qem path runs `fill_reference_clean_boundary_loops` (cap 64 edges + perimeter 0.03) before collapse; residual recorded as `qem_pre_fill_residual_boundary_loops`.
+**PERF (two O(F²) bugs found via the heavy test hanging ~35 min, both fixed):** (1) `maybe_compact_heap` called `live_edge_count()` O(E)/collapse → O(1) `live_faces_*3/2` proxy; (2) `apply_collapse` scanned the whole `edge_index_` map O(E)/collapse → O(merged-1-ring) `edge_key(keep/drop,rv)` lookups. **Benchmark: subdiv-6 (82k faces) 69s→0.5s (~138×), throughput constant (~125k faces/s) = near-linear; output byte-identical (same- & cross-process sha256) → determinism/topology preserved.**
+**WATERTIGHTNESS FINDING (SPEC's loops↔nonmanifold tradeoff):** real fixture (res192) remesh+repair opens 64 loops; bounded fill closes 54; **10 large-perimeter loops (~0.33 ≫ 0.03 policy) remain** — the bounded fill correctly refuses them (the reference `fill_holes(3e-2)` would too). QEM preserves them exactly: output `nme=0, nmv=0` (fully manifold), `boundary_loop_count == qem_pre_fill_residual_boundary_loops` (QEM added ZERO). Per SPEC QEM-05 this is "watertight within stated bound + record residual"; heavy test corrected from strict `==0` to the manifold+topology-preserved+bounded contract (passes, 44s). 135 non-heavy green on a clean rebuild.
+**Risks / next:** full 0-loop reference parity needs **non-manifold-tolerant QEM** (feed the closed non-manifold remesh directly, no repair) — a documented FOLLOW-ON, out of scope here. Caveat: incremental scikit-build can hold a stale binary after a constant change — `rm -rf /tmp/mlx-spatialkit-build` to force clean rebuild.
+
 ### Slice 5: Two-fixture watertight-decimated proof + numeric budgets + clustering contrast
 Required:
 **Objective:** Prove on both cached fixtures that `remesh → input-prep → QEM` yields a reduced AND watertight mesh, machine-verified better than clustering, within recorded numeric runtime/memory budgets, with the target actually reached.

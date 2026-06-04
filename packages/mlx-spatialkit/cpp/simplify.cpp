@@ -1742,16 +1742,6 @@ class QemSimplifier {
     return count;
   }
 
-  int64_t live_edge_count() const {
-    int64_t count = 0;
-    for (const QemEdge &edge : edges_) {
-      if (edge.alive) {
-        ++count;
-      }
-    }
-    return count;
-  }
-
   int64_t edge_id_for(int64_t u, int64_t v) {
     const mesh_common::EdgeKey key = mesh_common::edge_key(u, v);
     auto found = edge_index_.find(key);
@@ -1929,7 +1919,12 @@ class QemSimplifier {
   }
 
   void maybe_compact_heap() {
-    const int64_t live = live_edge_count();
+    // O(1) live-edge proxy: on a closed manifold edges ~= 1.5 * faces (Euler),
+    // and live_faces_ is maintained in O(1). This avoids an O(E) scan per
+    // collapse (the prior live_edge_count() made the whole run O(F^2)).
+    // Compaction only bounds heap growth, so an approximate threshold is fine —
+    // it never changes collapse order or output (determinism preserved).
+    const int64_t live = (live_faces_ * 3) / 2;
     if (static_cast<int64_t>(heap_.size()) <= 3 * std::max<int64_t>(1, live)) {
       return;
     }
@@ -2259,6 +2254,31 @@ class QemSimplifier {
       const std::vector<int64_t> &affected_ids,
       const std::vector<std::array<int64_t, 3>> &new_faces,
       const Quadric &combined) {
+    // Gather the merged 1-ring vertices BEFORE any mutation. The two incident
+    // faces (the collapsing pair) plus the affected faces (every live face that
+    // touched keep OR drop, minus the collapsing pair) together reference every
+    // neighbour of keep and every neighbour of drop, plus keep and drop. Reading
+    // the ORIGINAL faces_ here (before the drop->keep retarget and before
+    // vertex_faces_[drop] is cleared) preserves drop's identity. The set is a
+    // std::set for deterministic, sorted iteration.
+    std::set<int64_t> ring_vertices;
+    for (const int64_t fi : incident_faces) {
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      ring_vertices.insert(face[0]);
+      ring_vertices.insert(face[1]);
+      ring_vertices.insert(face[2]);
+    }
+    for (const int64_t fi : affected_ids) {
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      ring_vertices.insert(face[0]);
+      ring_vertices.insert(face[1]);
+      ring_vertices.insert(face[2]);
+    }
+    // keep and drop are always part of their own ring (covers the keep-drop edge
+    // and guards against an incident/affected face set that omits an endpoint).
+    ring_vertices.insert(keep);
+    ring_vertices.insert(drop);
+
     // Kill the two collapsing faces.
     for (const int64_t fi : incident_faces) {
       face_alive_[static_cast<size_t>(fi)] = false;
@@ -2286,23 +2306,37 @@ class QemSimplifier {
     // Drop vertex is now isolated.
     vertex_faces_[static_cast<size_t>(drop)].clear();
 
-    // Invalidate every edge touching keep or drop, register new edges around
-    // keep, bump versions, and re-push fresh costs. Iterate the merged 1-ring in
-    // sorted order for determinism.
-    // Invalidate any existing edge whose endpoints touch keep/drop by bumping
-    // version (lazy). Drop's incident edges become dead.
-    for (auto &entry : edge_index_) {
-      const mesh_common::EdgeKey &key = entry.first;
-      QemEdge &e = edges_[static_cast<size_t>(entry.second)];
-      if (!e.alive) {
-        continue;
+    // Invalidate every alive edge touching keep or drop, register new edges
+    // around keep, bump versions, and re-push fresh costs. Iterate the merged
+    // 1-ring in sorted order for determinism.
+    //
+    // Invalidation is O(merged-1-ring), NOT O(E): every edge with an endpoint ==
+    // keep or == drop has its OTHER endpoint somewhere in `ring_vertices` (the
+    // merged 1-ring gathered above). So instead of scanning all of edge_index_,
+    // we look up edge_key(keep, rv) and edge_key(drop, rv) for each ring vertex
+    // rv (O(log E) per lookup). This invalidates EXACTLY the same set of edges as
+    // the prior full scan (every alive edge touching keep or drop, including the
+    // keep-drop edge, since keep and drop are themselves ring vertices). The
+    // lazy-version + re-registration loop below restores keep's live edges, so
+    // marking them dead here is safe. Drop's incident edges stay dead.
+    auto invalidate_edge = [&](const mesh_common::EdgeKey &key) {
+      auto found = edge_index_.find(key);
+      if (found == edge_index_.end()) {
+        return;
       }
-      if (key.a == drop || key.b == drop) {
-        e.alive = false;
-        e.version += 1;
-      } else if (key.a == keep || key.b == keep) {
-        e.alive = false;  // will be re-registered below if still present
-        e.version += 1;
+      QemEdge &e = edges_[static_cast<size_t>(found->second)];
+      if (!e.alive) {
+        return;
+      }
+      e.alive = false;  // keep's surviving edges are re-registered below
+      e.version += 1;
+    };
+    for (const int64_t rv : ring_vertices) {
+      if (rv != keep) {
+        invalidate_edge(mesh_common::edge_key(keep, rv));
+      }
+      if (rv != drop) {
+        invalidate_edge(mesh_common::edge_key(drop, rv));
       }
     }
     // Re-register live edges around keep from the surviving incident faces.
@@ -2535,6 +2569,20 @@ void add_pre_simplify_loop_fill_stats(
   stats["pre_simplify_hole_fill_faces_added"] = fill.faces_added;
 }
 
+// Count clean boundary loops remaining in a mesh after a pre-fill pass.
+// Used to record residual open loops that the bounded fill could not close.
+int64_t count_residual_clean_boundary_loops(const mesh_common::MeshData &mesh) {
+  if (mesh.faces.empty()) {
+    return 0;
+  }
+  const std::vector<DirectedBoundaryEdge> boundary_edges = reference_boundary_edges(mesh);
+  if (boundary_edges.empty()) {
+    return 0;
+  }
+  const std::unordered_map<int64_t, std::vector<int64_t>> adjacency = boundary_adjacency(boundary_edges);
+  return static_cast<int64_t>(order_reference_clean_boundary_loops(adjacency, boundary_edges).size());
+}
+
 // Forked qem stat emission (M2/M4). The qem path has no clustering `best`, so it
 // must NOT route through the shared stat block (which unconditionally reads an
 // unpopulated `ClusterResult`). This builder emits the SAME keyset a clustering
@@ -2542,27 +2590,35 @@ void add_pre_simplify_loop_fill_stats(
 // using 0/"n/a" sentinels for clustering-specific fields with no qem analogue,
 // then overlays the qem-specific keys. `source_faces` is the raw input face
 // count; `final_faces`/`final_vertices`/`pre_simplify_*` come from the qem run.
+//
+// `pre_fill` is the result of the pre-QEM reference-clean-boundary fill (slice-4
+// input-prep). When the fill was not run, pass an empty/default-constructed
+// ReferenceLoopFillResult and pre_fill_enabled=false.
 nb::dict build_qem_stats(
     const BackendSelection &selection,
     int64_t target_faces,
     int64_t source_faces,
     int64_t source_vertices,
+    int64_t pre_simplify_faces,
+    int64_t pre_simplify_vertices,
     int64_t final_faces,
     int64_t final_vertices,
     int64_t unreferenced_removed,
     int64_t min_component_faces,
     bool target_reached,
     bool simplified,
-    const QemSimplifyResult &qem) {
+    const QemSimplifyResult &qem,
+    bool pre_fill_enabled,
+    double pre_fill_max_perimeter,
+    const ReferenceLoopFillResult &pre_fill,
+    int64_t pre_fill_residual_boundary_loops) {
   nb::dict stats;
   // Backend identity / production gating (forks qem_* fields below).
   add_backend_stats(stats, selection, final_faces, target_reached);
 
-  // Loop-fill families have no qem analogue: emit the disabled keyset so the
-  // keyset matches a clustering call (sentinels, not arithmetic inputs).
-  ReferenceLoopFillResult empty_pre_fill;
+  // Pre-simplify loop fill: emit the actual fill stats (enabled or disabled).
   SmallLoopFillResult empty_fill;
-  add_pre_simplify_loop_fill_stats(stats, false, kSmallBoundaryLoopFillMaxPerimeter, empty_pre_fill);
+  add_pre_simplify_loop_fill_stats(stats, pre_fill_enabled, pre_fill_max_perimeter, pre_fill);
   add_small_loop_fill_stats(
       stats, false, 0, kSmallBoundaryLoopFillMaxPerimeter, empty_fill);
 
@@ -2570,8 +2626,8 @@ nb::dict build_qem_stats(
   stats["target_faces"] = target_faces;
   stats["source_faces"] = source_faces;
   stats["source_vertices"] = source_vertices;
-  stats["pre_simplify_faces"] = source_faces;
-  stats["pre_simplify_vertices"] = source_vertices;
+  stats["pre_simplify_faces"] = pre_simplify_faces;
+  stats["pre_simplify_vertices"] = pre_simplify_vertices;
   stats["final_faces"] = final_faces;
   stats["final_vertices"] = final_vertices;
   stats["cluster_count"] = 0;
@@ -2583,7 +2639,7 @@ nb::dict build_qem_stats(
   stats["target_reached"] = target_reached;
   stats["simplified"] = simplified;
   stats["min_component_faces"] = min_component_faces;
-  stats["candidate_faces_considered"] = source_faces;
+  stats["candidate_faces_considered"] = pre_simplify_faces;
   stats["accepted_faces"] = final_faces;
   stats["representative_vertices_selected"] = 0;
   stats["representative_selection_strategy"] = "not_requested";
@@ -2601,7 +2657,8 @@ nb::dict build_qem_stats(
       ? qem.geometric_error_sum / static_cast<double>(qem.collapses_applied)
       : 0.0;
   stats["qem_geometric_error_max"] = qem.geometric_error_max;
-  stats["qem_input_faces"] = source_faces;
+  stats["qem_input_faces"] = pre_simplify_faces;
+  stats["qem_pre_fill_residual_boundary_loops"] = pre_fill_residual_boundary_loops;
   return stats;
 }
 
@@ -2630,16 +2687,42 @@ nb::dict simplify_mesh(
   const BackendSelection selection = resolve_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
 
-  // QEM fork (M2): self-contained path that NEVER routes through the shared
+  // QEM fork (M2/S4): self-contained path that NEVER routes through the shared
   // clustering stat block (which reads an unpopulated `ClusterResult best`).
   // Handles both the backend-agnostic early-return (input already <= target)
   // and the edge-collapse simplification, each with its own stat emission.
+  //
+  // S4 input-prep: run fill_reference_clean_boundary_loops on the raw input
+  // BEFORE QEM so that small loops opened by remesh(repair_nonmanifold=True)
+  // are closed and QEM sees a watertight manifold. On an already-closed input
+  // the fill is a no-op. The fill honours the caller-threaded
+  // small_boundary_loop_fill_max_perimeter; a fixed generous edge cap
+  // (kPreSimplifyCleanBoundaryLoopFillMaxEdges) is used, mirroring the
+  // topology-aware pre-simplify fill.
   if (selection.is_qem) {
     const int64_t source_faces = static_cast<int64_t>(input.faces.size());
     const int64_t source_vertices = static_cast<int64_t>(input.vertices.size());
+
+    // Pre-QEM loop fill (S4 input-prep).
+    const bool pre_fill_enabled = small_boundary_loop_fill_max_edges > 0;
+    ReferenceLoopFillResult pre_fill;
+    const mesh_common::MeshData *qem_input = &input;
+    if (pre_fill_enabled) {
+      pre_fill = fill_reference_clean_boundary_loops(
+          input,
+          kPreSimplifyCleanBoundaryLoopFillMaxEdges,
+          small_boundary_loop_fill_max_perimeter);
+      qem_input = &pre_fill.mesh;
+    }
+    const int64_t pre_simplify_faces = static_cast<int64_t>(qem_input->faces.size());
+    const int64_t pre_simplify_vertices = static_cast<int64_t>(qem_input->vertices.size());
+    // Count loops that the bounded fill could not close (residual boundary loops).
+    const int64_t pre_fill_residual_boundary_loops =
+        pre_fill_enabled ? count_residual_clean_boundary_loops(*qem_input) : 0;
+
     if (source_faces <= target_faces) {
       int64_t unreferenced_removed = 0;
-      mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
+      mesh_common::MeshData compact = mesh_common::compact_mesh(*qem_input, &unreferenced_removed);
       nb::dict result = mesh_common::mesh_result(compact);
       QemSimplifyResult empty_run;
       empty_run.target_reached = true;
@@ -2650,32 +2733,44 @@ nb::dict simplify_mesh(
           source_vertices,
           static_cast<int64_t>(compact.faces.size()),
           static_cast<int64_t>(compact.vertices.size()),
+          static_cast<int64_t>(compact.faces.size()),
+          static_cast<int64_t>(compact.vertices.size()),
           unreferenced_removed,
           min_component_faces,
           /*target_reached=*/true,
           /*simplified=*/false,
-          empty_run);
+          empty_run,
+          pre_fill_enabled,
+          small_boundary_loop_fill_max_perimeter,
+          pre_fill,
+          pre_fill_residual_boundary_loops);
       return result;
     }
 
-    QemSimplifier simplifier(input);
+    QemSimplifier simplifier(*qem_input);
     QemSimplifyResult qem = simplifier.run(target_faces);
     nb::dict result = mesh_common::mesh_result(qem.mesh);
     const int64_t final_faces = static_cast<int64_t>(qem.mesh.faces.size());
     const int64_t final_vertices = static_cast<int64_t>(qem.mesh.vertices.size());
-    const int64_t unreferenced_removed = std::max<int64_t>(0, source_vertices - final_vertices);
+    const int64_t unreferenced_removed = std::max<int64_t>(0, pre_simplify_vertices - final_vertices);
     result["stats"] = build_qem_stats(
         selection,
         target_faces,
         source_faces,
         source_vertices,
+        pre_simplify_faces,
+        pre_simplify_vertices,
         final_faces,
         final_vertices,
         unreferenced_removed,
         min_component_faces,
         qem.target_reached,
         /*simplified=*/qem.collapses_applied > 0,
-        qem);
+        qem,
+        pre_fill_enabled,
+        small_boundary_loop_fill_max_perimeter,
+        pre_fill,
+        pre_fill_residual_boundary_loops);
     return result;
   }
 

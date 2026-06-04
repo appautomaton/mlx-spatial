@@ -239,6 +239,7 @@ def export_pixal3d_glb(
     remesh_resolution: int | None = None,
     remesh_project_back: float = 0.0,
     remesh_repair_nonmanifold: bool = False,
+    simplify_backend: str | None = None,
     diagnostics_path: str | Path | None = None,
 ) -> Pixal3DGlbExportResult:
     """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
@@ -278,6 +279,12 @@ def export_pixal3d_glb(
             raise ValueError("remesh_resolution must be positive")
         if not math.isfinite(remesh_project_back) or not (0.0 <= remesh_project_back <= 1.0):
             raise ValueError("remesh_project_back must be in [0, 1]")
+    resolved_simplify_backend = _resolve_simplify_backend(simplify_backend)
+    if resolved_simplify_backend == "qem" and not (remesh and remesh_repair_nonmanifold):
+        raise ValueError(
+            "simplify_backend='qem' requires remesh=True and remesh_repair_nonmanifold=True "
+            "to guarantee QEM receives a watertight manifold input"
+        )
     resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
     resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
     resolved_tile_padding, tile_padding_source = _resolve_tile_padding(tile_padding, resolved_uv_backend)
@@ -300,6 +307,8 @@ def export_pixal3d_glb(
     resolved_quality_preset = str(export_settings["quality_preset"])
     resolved_target_faces = int(export_settings["target_faces"])
     requested_simplifier_backend = _simplifier_backend_for_quality_preset(resolved_quality_preset)
+    if resolved_simplify_backend is not None:
+        requested_simplifier_backend = resolved_simplify_backend
     diagnostics: dict[str, Any] = {
         "stage": "pixal3d_glb_export",
         "source_dir": str(source_dir),
@@ -337,6 +346,7 @@ def export_pixal3d_glb(
             "remesh_resolution": int(remesh_resolution) if remesh_resolution is not None else None,
             "remesh_project_back": float(remesh_project_back),
             "remesh_repair_nonmanifold": bool(remesh_repair_nonmanifold),
+            "simplify_backend": resolved_simplify_backend,
         },
         "stages": {},
         "timings_sec": {},
@@ -1086,6 +1096,18 @@ def _resolve_tile_padding(value: float | None, uv_backend: str) -> tuple[float, 
     if not np.isfinite(padding) or padding < 0.0 or padding >= 0.45:
         raise ValueError("tile_padding must be finite and in [0, 0.45)")
     return padding, "explicit"
+
+
+def _resolve_simplify_backend(value: str | None) -> str | None:
+    """Validate the explicit simplify_backend opt-in; return None or 'qem'."""
+    if value is None:
+        return None
+    backend = str(value).strip().lower()
+    if backend == "qem":
+        return "qem"
+    raise ValueError(
+        f"simplify_backend must be None or 'qem'; got {value!r}"
+    )
 
 
 def _simplifier_backend_for_quality_preset(quality_preset: str) -> str:

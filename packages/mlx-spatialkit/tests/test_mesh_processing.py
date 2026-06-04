@@ -1243,6 +1243,7 @@ def test_qem_stats_keyset_matches_clustering_plus_qem_fields() -> None:
         "qem_geometric_error_mean",
         "qem_geometric_error_max",
         "qem_input_faces",
+        "qem_pre_fill_residual_boundary_loops",
     }
 
     # Every clustering key must be present in qem — no KeyError downstream.
@@ -1316,3 +1317,127 @@ def test_topology_aware_still_emits_not_implemented_and_blockers() -> None:
     assert stats["qem_equivalence_status"] == "qem_scored_not_edge_collapse"
     assert "missing_qem_edge_collapse_simplification" in list(stats["production_blockers"])
     assert "missing_narrow_band_dc_remesh" in list(stats["production_blockers"])
+
+
+# ---------------------------------------------------------------------------
+# S4 QEM input-prep: small boundary loop fill before edge collapse
+# ---------------------------------------------------------------------------
+
+def _icosphere_with_small_hole(subdivisions: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """An icosphere (scaled small) with one face removed to create a small 3-edge boundary loop.
+
+    Vertices are scaled to 0.01 so the triangular hole perimeter is ~0.019, which is
+    below kPreSimplifyCleanBoundaryLoopFillMaxPerimeter (0.03). This models the
+    situation after remesh(repair_nonmanifold=True), which opens small boundary loops.
+    """
+    vertices, faces = _icosphere(subdivisions)
+    # Scale to make hole perimeter small enough for the pre-QEM reference fill
+    # (perimeter ~1.89 * 0.01 = 0.019, under the 0.03 max).
+    vertices = vertices * 0.01
+    # Remove face 0 — this creates a triangular boundary loop.
+    faces_with_hole = np.delete(faces, 0, axis=0)
+    return vertices, faces_with_hole
+
+
+def test_qem_input_prep_fills_small_boundary_loop_before_collapse() -> None:
+    # S4: a mesh that has a small boundary loop (like one opened by
+    # remesh(repair_nonmanifold=True)) must end watertight after
+    # simplify_mesh(..., backend="qem") because the pre-QEM fill closes it.
+    vertices, faces = _icosphere_with_small_hole(3)
+    before = mesh_metrics(vertices, faces)
+    target = 200
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=target,
+        min_component_faces=1,
+        backend="qem",
+        small_boundary_loop_fill_max_edges=8,
+        small_boundary_loop_fill_max_perimeter=0.03,
+    )
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    # Input had a hole.
+    assert before["boundary_loop_count"] == 1
+    assert before["boundary_edges"] == 3
+
+    # Pre-fill stats recorded.
+    assert stats["pre_simplify_hole_fill_enabled"] is True
+    assert stats["pre_simplify_hole_fill_algorithm"] == "reference-clean-boundary-centroid-fan"
+    assert stats["pre_simplify_hole_fill_filled_loops"] == 1
+    assert stats["pre_simplify_hole_fill_faces_added"] == 3
+    assert stats["qem_pre_fill_residual_boundary_loops"] == 0
+
+    # Pre-simplify face count reflects the filled mesh.
+    assert stats["pre_simplify_faces"] == faces.shape[0] + 3
+    assert stats["source_faces"] == faces.shape[0]
+    assert stats["qem_input_faces"] == faces.shape[0] + 3
+
+    # Output is watertight.
+    assert after["boundary_loop_count"] == 0
+    assert after["boundary_edges"] == 0
+    assert after["nonmanifold_edges"] == 0
+    assert after["export_blocking_reasons"] == []
+    assert mesh.faces.shape[0] <= target
+
+
+def test_qem_input_prep_noop_on_already_closed_mesh() -> None:
+    # S4 determinism: on an already-closed input the fill is a no-op and
+    # topology/determinism from slice 2 are preserved.
+    vertices, faces = _icosphere(3)
+    target = 200
+
+    mesh_a, stats_a = simplify_mesh(
+        vertices, faces, target_faces=target, min_component_faces=1, backend="qem",
+        small_boundary_loop_fill_max_edges=8,
+        small_boundary_loop_fill_max_perimeter=0.03,
+    )
+    mesh_b, stats_b = simplify_mesh(
+        vertices, faces, target_faces=target, min_component_faces=1, backend="qem",
+        small_boundary_loop_fill_max_edges=8,
+        small_boundary_loop_fill_max_perimeter=0.03,
+    )
+    after = mesh_metrics(mesh_a.vertices, mesh_a.faces)
+
+    # Fill was enabled but had nothing to fill (closed mesh).
+    assert stats_a["pre_simplify_hole_fill_enabled"] is True
+    assert stats_a["pre_simplify_hole_fill_filled_loops"] == 0
+    assert stats_a["pre_simplify_hole_fill_boundary_edges_before"] == 0
+    assert stats_a["qem_pre_fill_residual_boundary_loops"] == 0
+
+    # source and pre_simplify counts are the same (fill was a no-op).
+    assert stats_a["source_faces"] == faces.shape[0]
+    assert stats_a["pre_simplify_faces"] == faces.shape[0]
+    assert stats_a["qem_input_faces"] == faces.shape[0]
+
+    # Still closed, still deterministic.
+    assert after["boundary_loop_count"] == 0
+    assert after["nonmanifold_edges"] == 0
+    np.testing.assert_array_equal(mesh_a.vertices, mesh_b.vertices)
+    np.testing.assert_array_equal(mesh_a.faces, mesh_b.faces)
+
+
+def test_qem_input_prep_disabled_when_fill_max_edges_zero() -> None:
+    # S4 opt-out: small_boundary_loop_fill_max_edges=0 disables the pre-fill;
+    # the pre_simplify_hole_fill_enabled stat must be False and the small loop
+    # remains open in the output.
+    vertices, faces = _icosphere_with_small_hole(3)
+    target = 200
+
+    mesh, stats = simplify_mesh(
+        vertices,
+        faces,
+        target_faces=target,
+        min_component_faces=1,
+        backend="qem",
+        small_boundary_loop_fill_max_edges=0,
+        small_boundary_loop_fill_max_perimeter=0.03,
+    )
+
+    assert stats["pre_simplify_hole_fill_enabled"] is False
+    assert stats["source_faces"] == faces.shape[0]
+    assert stats["pre_simplify_faces"] == faces.shape[0]
+    # The small loop was not filled; QEM boundary-locks it so it remains.
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+    assert after["boundary_loop_count"] >= 1
