@@ -831,6 +831,91 @@ def _warped_grid_mesh(quads_per_axis: int) -> tuple[np.ndarray, np.ndarray]:
     return vertices, faces
 
 
+def test_mesh_metrics_nonmanifold_vertices_detects_pinch_invisible_to_edge_metric() -> None:
+    # Two tetrahedra sharing exactly one apex vertex (vertex 0).
+    # Tetra A: vertices {0, 1, 2, 3}.  Tetra B: vertices {0, 4, 5, 6}.
+    # The shared vertex 0 is a pinch: its incident triangles form two
+    # disjoint fans (one per tetrahedron), so nonmanifold_vertices >= 1.
+    # Crucially, no edge is shared between the two tetrahedra, so
+    # nonmanifold_edges == 0.  Both tetrahedra are individually closed, so
+    # boundary_loop_count == 0.
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],   # 0 — shared apex
+            [1.0, 0.0, 0.0],   # 1  \ tetra A
+            [0.0, 1.0, 0.0],   # 2  |
+            [0.0, 0.0, 1.0],   # 3  /
+            [-1.0, 0.0, 0.0],  # 4  \ tetra B
+            [0.0, -1.0, 0.0],  # 5  |
+            [0.0, 0.0, -1.0],  # 6  /
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            # Tetra A (outward-consistent winding for a closed shell)
+            [0, 2, 1],
+            [0, 1, 3],
+            [0, 3, 2],
+            [1, 2, 3],
+            # Tetra B
+            [0, 4, 5],
+            [0, 5, 6],
+            [0, 6, 4],
+            [4, 6, 5],
+        ],
+        dtype=np.int64,
+    )
+
+    metrics = mesh_metrics(vertices, faces)
+
+    assert metrics["nonmanifold_vertices"] >= 1, (
+        "Pinched vertex shared by two separate tetra fans must be detected"
+    )
+    assert metrics["nonmanifold_edges"] == 0, (
+        "No edge is shared between the two tetrahedra, so edge metric must be 0"
+    )
+    assert metrics["boundary_loop_count"] == 0, (
+        "Both tetrahedra are individually closed; no boundary loops expected"
+    )
+
+
+def test_mesh_metrics_nonmanifold_vertices_is_zero_on_clean_closed_manifold() -> None:
+    # Regular octahedron: 6 vertices, 8 triangular faces, fully closed 2-manifold.
+    # Every vertex has exactly one fan of incident triangles.
+    s = 1.0
+    vertices = np.array(
+        [
+            [s, 0.0, 0.0],
+            [-s, 0.0, 0.0],
+            [0.0, s, 0.0],
+            [0.0, -s, 0.0],
+            [0.0, 0.0, s],
+            [0.0, 0.0, -s],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            [0, 2, 4],
+            [2, 1, 4],
+            [1, 3, 4],
+            [3, 0, 4],
+            [0, 5, 2],
+            [2, 5, 1],
+            [1, 5, 3],
+            [3, 5, 0],
+        ],
+        dtype=np.int64,
+    )
+
+    metrics = mesh_metrics(vertices, faces)
+
+    assert metrics["nonmanifold_vertices"] == 0
+    assert metrics["nonmanifold_edges"] == 0
+    assert metrics["boundary_loop_count"] == 0
+
+
 def test_mesh_processing_rejects_invalid_face_indices() -> None:
     vertices = np.zeros((2, 3), dtype=np.float32)
     faces = np.array([[0, 1, 2]], dtype=np.int64)

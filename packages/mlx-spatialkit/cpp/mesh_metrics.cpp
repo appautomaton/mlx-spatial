@@ -156,6 +156,64 @@ nb::dict mesh_metrics(nb::object vertices, nb::object faces) {
   }
   const BoundaryTopology boundary = boundary_topology(edges);
 
+  // Count non-manifold vertices (pinches): vertices whose incident triangles
+  // form more than one edge-connected fan.  Two incident triangles are in the
+  // same fan iff they share an edge that is itself incident to the vertex.
+  // We iterate faces in ascending index order for determinism.
+  int64_t nonmanifold_vertices = 0;
+  {
+    const int64_t vertex_count = static_cast<int64_t>(mesh.vertices.size());
+    // Build per-vertex incident face lists (ascending face index order).
+    std::vector<std::vector<int64_t>> vertex_faces(static_cast<size_t>(vertex_count));
+    for (int64_t fi = 0; fi < static_cast<int64_t>(mesh.faces.size()); ++fi) {
+      const auto &face = mesh.faces[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        vertex_faces[static_cast<size_t>(face[c])].push_back(fi);
+      }
+    }
+
+    for (int64_t vi = 0; vi < vertex_count; ++vi) {
+      const auto &inc = vertex_faces[static_cast<size_t>(vi)];
+      if (inc.size() < 2) {
+        // 0 or 1 incident faces: always a single fan, not a pinch.
+        continue;
+      }
+      // Map local position -> face index so we can union by local index.
+      const size_t n = inc.size();
+      mesh_common::UnionFind uf(n);
+      // For each pair of local faces, check if they share an edge through vi.
+      // Two faces share an edge through vi iff they both contain vi and share
+      // exactly one other vertex (the neighbour across that edge).
+      for (size_t a = 0; a < n; ++a) {
+        const auto &fa = mesh.faces[static_cast<size_t>(inc[a])];
+        for (size_t b = a + 1; b < n; ++b) {
+          const auto &fb = mesh.faces[static_cast<size_t>(inc[b])];
+          // Count shared vertices between fa and fb that are NOT vi.
+          int shared_non_vi = 0;
+          for (int ca = 0; ca < 3; ++ca) {
+            if (fa[ca] == vi) { continue; }
+            for (int cb = 0; cb < 3; ++cb) {
+              if (fb[cb] == vi) { continue; }
+              if (fa[ca] == fb[cb]) { ++shared_non_vi; }
+            }
+          }
+          // If they share exactly one non-vi vertex, they share an edge through vi.
+          if (shared_non_vi >= 1) {
+            uf.unite(a, b);
+          }
+        }
+      }
+      // Count distinct roots among all local faces.
+      std::set<size_t> roots;
+      for (size_t a = 0; a < n; ++a) {
+        roots.insert(uf.find(a));
+      }
+      if (roots.size() > 1) {
+        ++nonmanifold_vertices;
+      }
+    }
+  }
+
   nb::list blockers;
   if (mesh.faces.empty()) {
     blockers.append("no_faces");
@@ -193,6 +251,7 @@ nb::dict mesh_metrics(nb::object vertices, nb::object faces) {
   result["boundary_max_open_chain_edges"] = boundary.max_open_chain_edges;
   result["boundary_max_component_edges"] = boundary.max_component_edges;
   result["nonmanifold_edges"] = nonmanifold_edges;
+  result["nonmanifold_vertices"] = nonmanifold_vertices;
   result["connected_components"] = mesh_common::connected_component_count(mesh);
   result["export_blocking_reasons"] = blockers;
   return result;
