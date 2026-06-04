@@ -56,6 +56,11 @@ Required:
 **Depends on:** S2
 **Touches:** `cpp/simplify.cpp` (`production_blocker_values` `:1543`, `add_backend_stats` `:1571`, stat block `:1820-1862`), `src/mlx_spatialkit/export.py` (confirm reads `:1223-1226`, `:1420-1452`), `tests/`
 
+**Status:** complete
+**Plan correction (M4):** strict `set(qem)==set(cluster)` is wrong — qem legitimately adds qem-specific diagnostics. The correct contract is **`set(cluster) ⊆ set(qem)`** (no downstream KeyError) + expected qem-only extras. Implemented/asserted as subset.
+**Evidence:** confirmed `sc_keys − qem_keys == ∅` and `ta_keys − qem_keys == ∅`; qem-only extras = exactly `{qem_collapses_applied, qem_collapses_rejected_by_guard, qem_geometric_error_mean, qem_geometric_error_max, qem_input_faces}` (S2 already built the superset, so **no source change needed**). Blocker contract verified on main + early-return paths: only `missing_narrow_band_dc_remesh`, never `missing_qem_edge_collapse_simplification`; clustering still emits `not_implemented` + its blockers. `export.py` needed **no edit** — existing `_topology_blocker_map`/`_pixal3d_reference_stage_contract` already recognize qem (`simplify_reference=True`, qem blocker absent, remesh-cleared → `quality_tier="production"`). Tests-only diff (`test_mesh_processing.py` + `test_real_pixal3d_export.py`, 6 new). `pytest tests/ -q` = 128 passed (9 heavy deselected); source (export.py/simplify.cpp/mesh_metrics.cpp) untouched.
+**Risks / next:** none — S4 adds the export opt-in param + watertight input-prep.
+
 ### Slice 4: Watertight input-prep + explicit opt-in wiring (not the preset)
 Required:
 **Objective:** Compose `remesh(repair_nonmanifold=True)` + bounded `small_boundary_loop_fill` to feed QEM a watertight input, and expose QEM via a new validated `simplify_backend` opt-in param that **requires** the watertight input-prep — leaving `_simplifier_backend_for_quality_preset` and its tests untouched (B2/M3/F1, QEM-10).

@@ -1218,25 +1218,101 @@ def test_qem_input_already_under_target_returns_cleanly_via_early_return() -> No
 
 
 def test_qem_stats_keyset_matches_clustering_plus_qem_fields() -> None:
-    # M4: the forked qem stat dict's keyset must EQUAL a clustering call's keyset
-    # plus the new qem-specific fields (no clustering field silently dropped).
+    # M4: the forked qem stat dict's keyset must be a superset of EVERY clustering
+    # backend's keyset (no clustering field silently dropped), and the extras must
+    # be exactly the expected qem_* diagnostics — confirmed for both clustering
+    # backends (spatial-cluster and topology-aware).
     vertices, faces = _icosphere(2)
 
-    _, clustering_stats = simplify_mesh(
+    _, sc_stats = simplify_mesh(
+        vertices, faces, target_faces=120, min_component_faces=1, backend="spatial-cluster"
+    )
+    _, ta_stats = simplify_mesh(
         vertices, faces, target_faces=120, min_component_faces=1, backend="topology-aware"
     )
     _, qem_stats = simplify_mesh(
         vertices, faces, target_faces=120, min_component_faces=1, backend="qem"
     )
 
-    clustering_keys = set(clustering_stats.keys())
+    sc_keys = set(sc_stats.keys())
+    ta_keys = set(ta_stats.keys())
     qem_keys = set(qem_stats.keys())
-    new_qem_keys = {
+    expected_qem_only = {
         "qem_collapses_applied",
         "qem_collapses_rejected_by_guard",
         "qem_geometric_error_mean",
         "qem_geometric_error_max",
         "qem_input_faces",
     }
-    assert clustering_keys - qem_keys == set()
-    assert qem_keys - clustering_keys == new_qem_keys
+
+    # Every clustering key must be present in qem — no KeyError downstream.
+    assert sc_keys - qem_keys == set(), (
+        f"qem missing spatial-cluster keys: {sc_keys - qem_keys}"
+    )
+    assert ta_keys - qem_keys == set(), (
+        f"qem missing topology-aware keys: {ta_keys - qem_keys}"
+    )
+
+    # qem-only extras must be exactly the documented qem_* diagnostics (vs topology-aware,
+    # which has the same shared keyset as spatial-cluster).
+    assert qem_keys - ta_keys == expected_qem_only, (
+        f"unexpected qem-only extras vs topology-aware: {qem_keys - ta_keys - expected_qem_only}"
+    )
+    # spatial-cluster has the same shared keyset — confirm symmetry.
+    assert qem_keys - sc_keys == expected_qem_only, (
+        f"unexpected qem-only extras vs spatial-cluster: {qem_keys - sc_keys - expected_qem_only}"
+    )
+
+
+def test_qem_production_blocker_contract_main_path() -> None:
+    # QEM-04 main decimation path: missing_qem_edge_collapse_simplification must be
+    # ABSENT; missing_narrow_band_dc_remesh must be PRESENT (remesh is the remaining gap).
+    vertices, faces = _icosphere(3)
+    target = 200
+
+    _, stats = simplify_mesh(vertices, faces, target_faces=target, backend="qem")
+
+    assert stats["qem_simplification_backend"] == "native-qem-edge-collapse"
+    assert stats["qem_equivalence_status"] == "edge-collapse"
+    production_blockers = list(stats["production_blockers"])
+    assert "missing_qem_edge_collapse_simplification" not in production_blockers, (
+        "qem backend must not self-report missing_qem_edge_collapse_simplification"
+    )
+    assert "missing_narrow_band_dc_remesh" in production_blockers, (
+        "qem backend must still report missing_narrow_band_dc_remesh until remesh runs"
+    )
+
+
+def test_qem_production_blocker_contract_early_return_path() -> None:
+    # QEM-04 NR7: input already <= target triggers the early-return code path.
+    # The blocker contract must hold identically on that path.
+    vertices, faces = _subdivided_tetrahedron(1)
+    target = faces.shape[0] + 100  # input already satisfies the target
+
+    _, stats = simplify_mesh(vertices, faces, target_faces=target, backend="qem")
+
+    assert stats["simplified"] is False
+    assert stats["qem_collapses_applied"] == 0
+    assert stats["qem_simplification_backend"] == "native-qem-edge-collapse"
+    assert stats["qem_equivalence_status"] == "edge-collapse"
+    production_blockers = list(stats["production_blockers"])
+    assert "missing_qem_edge_collapse_simplification" not in production_blockers, (
+        "early-return qem must not self-report missing_qem_edge_collapse_simplification"
+    )
+    assert "missing_narrow_band_dc_remesh" in production_blockers, (
+        "early-return qem must still report missing_narrow_band_dc_remesh"
+    )
+
+
+def test_topology_aware_still_emits_not_implemented_and_blockers() -> None:
+    # QEM-04 isolation: clustering backends must be undisturbed — topology-aware
+    # must still emit qem_simplification_backend=="not_implemented" and both
+    # production blockers.
+    vertices, faces = _warped_grid_mesh(10)
+
+    _, stats = simplify_mesh(vertices, faces, target_faces=80, min_component_faces=1, backend="topology-aware")
+
+    assert stats["qem_simplification_backend"] == "not_implemented"
+    assert stats["qem_equivalence_status"] == "qem_scored_not_edge_collapse"
+    assert "missing_qem_edge_collapse_simplification" in list(stats["production_blockers"])
+    assert "missing_narrow_band_dc_remesh" in list(stats["production_blockers"])

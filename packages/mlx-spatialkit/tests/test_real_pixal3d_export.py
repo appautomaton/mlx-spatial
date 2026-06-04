@@ -1406,6 +1406,165 @@ def test_topology_blocker_map_classifies_visual_and_backend_gaps_from_diagnostic
     assert nonmanifold["classes"]["nonmanifold_edges"]["export_blocking"] is True
 
 
+def test_topology_blocker_map_qem_backend_clears_qem_blocker() -> None:
+    # QEM-04 export side: a qem-shaped stat dict must cause the topology_blocker_map
+    # to NOT append missing_qem_edge_collapse_simplification.  The narrow-band remesh
+    # blocker must still be present until remesh runs.
+    qem_clean_topology = {
+        "export_blocking_reasons": [],
+        "nonmanifold_edges": 0,
+        "boundary_loop_count": 0,
+        "boundary_small_loop_edge_count": 0,
+        "boundary_simple_open_chain_count": 0,
+        "boundary_branched_open_chain_count": 0,
+        "boundary_open_chain_edge_count": 0,
+        "boundary_open_chain_branch_vertex_count": 0,
+    }
+
+    # Main decimation path stat shape (remesh not yet run).
+    topology = _topology_blocker_map(
+        {
+            "backend": "qem",
+            "algorithm": "native_qem_edge_collapse",
+            "quality_tier": "production_candidate_blocked",
+            "production_blockers": ["missing_narrow_band_dc_remesh"],
+            "qem_simplification_backend": "native-qem-edge-collapse",
+            "qem_equivalence_status": "edge-collapse",
+            "remesh_backend": "not_implemented",
+            "remesh_equivalence_status": "blocked_missing_narrow_band_dc",
+        },
+        qem_clean_topology,
+    )
+    assert "missing_qem_edge_collapse_simplification" not in topology["production_backend_blockers"], (
+        "qem backend must not push missing_qem_edge_collapse_simplification"
+    )
+    assert "missing_narrow_band_dc_remesh" in topology["production_backend_blockers"]
+    assert topology["classes"]["heuristic_qem"]["production_blocking"] is False
+    assert topology["classes"]["missing_narrow_band_remesh"]["production_blocking"] is True
+
+    # With remesh cleared (export.py:471-478 sets remesh_backend after remesh runs):
+    # both blockers gone -> topology_clear -> quality_tier can reach "production".
+    topology_remesh_cleared = _topology_blocker_map(
+        {
+            "backend": "qem",
+            "algorithm": "native_qem_edge_collapse",
+            "quality_tier": "production",
+            "production_blockers": [],
+            "qem_simplification_backend": "native-qem-edge-collapse",
+            "qem_equivalence_status": "edge-collapse",
+            "remesh_backend": "native-narrow-band-dc",
+            "remesh_equivalence_status": "narrow_band_dc",
+        },
+        qem_clean_topology,
+    )
+    assert topology_remesh_cleared["status"] == "topology_clear"
+    assert topology_remesh_cleared["production_backend_blockers"] == ()
+
+
+def test_reference_stage_contract_qem_simplify_reference_is_true() -> None:
+    # QEM-04 export side: the reference_stage_contract logic at export.py:1223-1226
+    # must set simplify_reference=True for native_qem_edge_collapse / quality=production.
+    # Feeding a qem-shaped stat dict with remesh cleared means simplify_reference
+    # and remesh_reference are both True, so that stage passes.
+    from mlx_spatialkit.export import _pixal3d_reference_stage_contract
+
+    qem_stats_remesh_cleared = {
+        "backend": "qem",
+        "algorithm": "native_qem_edge_collapse",
+        "quality_tier": "production",
+        "production_blockers": [],
+        "qem_simplification_backend": "native-qem-edge-collapse",
+        "qem_equivalence_status": "edge-collapse",
+        "remesh_backend": "native-narrow-band-dc",
+        "remesh_equivalence_status": "narrow_band_dc",
+        "small_boundary_loop_fill_algorithm": "cumesh-perimeter-centroid-fan",
+    }
+    uv_stats = {"backend": "xatlas"}
+    texture_stats = {
+        "backend": "metal-uv-binned-nearest",
+        "uv_raster_interpolate_reference": True,
+        "source_projection_used": True,
+        "source_projection_detail": "native_bvh",
+        "sampling_mode": "trilinear",
+        "postprocess_mode": "inpaint-equivalent",
+    }
+
+    contract = _pixal3d_reference_stage_contract(
+        qem_stats_remesh_cleared,
+        uv_stats,
+        texture_stats,
+        None,
+        quality_preset="reference-target",
+    )
+    qem_stage = contract["stages"]["qem_simplification"]
+    remesh_stage = contract["stages"]["narrow_band_dc_remesh"]
+    assert qem_stage["passed"] is True, (
+        f"qem_simplification stage must pass for native_qem_edge_collapse; "
+        f"status={qem_stage.get('status')}"
+    )
+    assert remesh_stage["passed"] is True
+    # reference_trace is still a blocker (no live reference fixture in unit test).
+    assert "qem_simplification" not in contract["blockers"]
+    assert "narrow_band_dc_remesh" not in contract["blockers"]
+
+
+def test_export_quality_summary_qem_stats_clears_qem_blocker_and_keeps_remesh_blocker() -> None:
+    # QEM-04 export side: _export_quality_summary fed a qem stat dict must:
+    #   (a) not show missing_qem_edge_collapse_simplification in topology_blocker_map
+    #   (b) show missing_narrow_band_dc_remesh still present (remesh not yet run)
+    # When remesh is cleared (remesh_backend set to narrow-band-dc and production_blockers
+    # empty) -> topology_clear -> quality_tier "production".
+    from mlx_spatialkit.export import _export_quality_summary
+
+    qem_stats = {
+        "backend": "qem",
+        "algorithm": "native_qem_edge_collapse",
+        "quality_tier": "production_candidate_blocked",
+        "production_blockers": ["missing_narrow_band_dc_remesh"],
+        "qem_simplification_backend": "native-qem-edge-collapse",
+        "qem_equivalence_status": "edge-collapse",
+        "remesh_backend": "not_implemented",
+        "remesh_equivalence_status": "blocked_missing_narrow_band_dc",
+        "small_boundary_loop_fill_algorithm": "cumesh-perimeter-centroid-fan",
+        "final_faces": 120,
+    }
+    clean_export_metrics = {
+        "export_blocking_reasons": [],
+        "nonmanifold_edges": 0,
+        "boundary_loop_count": 0,
+        "boundary_small_loop_edge_count": 0,
+        "boundary_simple_open_chain_count": 0,
+        "boundary_branched_open_chain_count": 0,
+        "boundary_open_chain_edge_count": 0,
+        "boundary_open_chain_branch_vertex_count": 0,
+    }
+
+    summary = _export_quality_summary(qem_stats, clean_export_metrics)
+    topology = summary["topology_blocker_map"]
+    assert "missing_qem_edge_collapse_simplification" not in topology["production_backend_blockers"]
+    assert "missing_narrow_band_dc_remesh" in topology["production_backend_blockers"]
+    assert summary["artifact_ready"] is True
+
+    # With remesh cleared: no production blockers -> topology_clear.
+    qem_stats_remesh_cleared = {
+        "backend": "qem",
+        "algorithm": "native_qem_edge_collapse",
+        "quality_tier": "production",
+        "production_blockers": [],
+        "qem_simplification_backend": "native-qem-edge-collapse",
+        "qem_equivalence_status": "edge-collapse",
+        "remesh_backend": "native-narrow-band-dc",
+        "remesh_equivalence_status": "narrow_band_dc",
+        "small_boundary_loop_fill_algorithm": "cumesh-perimeter-centroid-fan",
+        "final_faces": 212_542,
+    }
+    summary_cleared = _export_quality_summary(qem_stats_remesh_cleared, clean_export_metrics)
+    topology_cleared = summary_cleared["topology_blocker_map"]
+    assert topology_cleared["status"] == "topology_clear"
+    assert topology_cleared["production_backend_blockers"] == ()
+    assert summary_cleared["simplifier_quality_tier"] == "production"
+
+
 def test_upstream_export_settings_summary_separates_setting_readiness_from_reference_parity() -> None:
     passing = _upstream_export_settings_summary(
         1_000_000,
