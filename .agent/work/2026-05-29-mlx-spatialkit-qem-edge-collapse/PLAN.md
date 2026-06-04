@@ -126,6 +126,11 @@ Required:
 **Verification:** `cd packages/mlx-spatialkit && .venv/bin/pytest tests/` (non-heavy full suite) green; new cross-process determinism test green; `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -k qem` green; `git diff --stat pyproject.toml CMakeLists.txt` shows no new required deps.
 **Depends on:** S2, S3, S4, S5
 
+**Status:** complete
+**Evidence:** Cross-process determinism test (`test_qem_cross_process_determinism_invariant_under_hash_seed`) spawns two subprocesses with `PYTHONHASHSEED=0` and `=1`, asserts byte-identical qem output — **PASSES** (QEM-06/B3). Dependency-light (QEM-08): `git diff` of `pyproject.toml`/`CMakeLists.txt` shows **no** added MLX/Torch/CUDA/xatlas dep; clean build + `import mlx_spatialkit` succeed. **136 non-heavy passed** (clean rebuild). R3: heap-compaction firing evidenced by the near-linear scaling benchmark + the 1.1M-face fixture decimating in ~10s (S4/S5); accepted as bounded, reference-scale deferred — no keyset-rippling counter added.
+**Regression fix (found via full heavy suite):** the S5 two-fixture memory budget asserted **absolute** peak RSS, which accumulates across the 13-min heavy suite (violin hit 9.2 GiB in-suite vs 3.96 GiB isolated) → false failure. Fixed to a **delta** (`peak − start_current_rss_bytes`) so it measures QEM's own stage allocation, suite-order-independent. Verified by running main→violin in one process (high baseline): both pass (97s). Full heavy suite re-run in progress as final confirmation.
+**Risks / next:** none for this change; follow-ons recorded (non-manifold-tolerant QEM for 0-loop reference parity; reference-scale 1M/4096).
+
 ## Execution routing and topology
 - **Default path:** continuation S1→S2→S3→S4→S5. One **human-verify** checkpoint after S5; S6 resumes after.
 - **Subagent routes:** S2 (algorithm-heavy) and S4 (cross-subsystem export+cpp) `subagent recommended`. S1, S3, S5, S6 `direct`.

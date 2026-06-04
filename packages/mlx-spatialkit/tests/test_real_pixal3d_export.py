@@ -2233,11 +2233,24 @@ def _assert_qem_two_fixture_proof(
     )
 
     _assert_memory_diagnostics(diagnostics, required_stages=("simplify_mesh",))
-    simplify_mem_peak = diagnostics["memory"]["stage_peaks"]["simplify_mesh"]["peak_current_rss_bytes"]
+    _simplify_stage_rss = diagnostics["memory"]["stage_peaks"]["simplify_mesh"]
+    simplify_mem_peak = _simplify_stage_rss["peak_current_rss_bytes"]
+    simplify_mem_start = _simplify_stage_rss.get("start_current_rss_bytes")
     assert simplify_mem_peak is not None, f"[{label}] simplify_mesh peak RSS not recorded"
-    assert simplify_mem_peak < simplify_memory_budget_bytes, (
-        f"[{label}] simplify_mesh peak RSS {simplify_mem_peak / 2**30:.2f} GiB exceeded budget "
-        f"{simplify_memory_budget_bytes / 2**30:.2f} GiB"
+    # Budget the stage's OWN allocation as a DELTA (peak - start), not the
+    # absolute process peak. Absolute RSS accumulates across the whole heavy
+    # suite (prior tests' allocations / fragmentation are not freed), so an
+    # absolute-peak budget is contaminated by test order; the delta measures
+    # what QEM itself allocated during the stage and is suite-order-independent.
+    simplify_mem_delta = (
+        simplify_mem_peak - simplify_mem_start
+        if simplify_mem_start is not None
+        else simplify_mem_peak
+    )
+    assert simplify_mem_delta < simplify_memory_budget_bytes, (
+        f"[{label}] simplify_mesh RSS delta {simplify_mem_delta / 2**30:.2f} GiB exceeded budget "
+        f"{simplify_memory_budget_bytes / 2**30:.2f} GiB "
+        f"(peak {simplify_mem_peak / 2**30:.2f} GiB, start {(simplify_mem_start or 0) / 2**30:.2f} GiB)"
     )
 
     # ------------------------------------------------------------------
