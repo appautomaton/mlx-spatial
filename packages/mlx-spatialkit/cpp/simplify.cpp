@@ -9,7 +9,9 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <map>
 #include <numeric>
+#include <queue>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -130,6 +132,7 @@ struct BackendSelection {
   std::string backend;
   std::string algorithm;
   bool topology_aware = false;
+  bool is_qem = false;
 };
 
 struct Quadric {
@@ -1520,6 +1523,835 @@ int64_t initial_grid_resolution(int64_t target_faces) {
   return std::max<int64_t>(2, static_cast<int64_t>(resolution));
 }
 
+// ---------------------------------------------------------------------------
+// Native QEM (quadric-error-metric) edge-collapse simplifier.
+//
+// Decimates a closed manifold toward a target face count while preserving
+// closed-manifold topology by construction: a collapse is applied only when
+// every validity guard (boundary lock, link condition, vertex-fan/pinch,
+// low-valence/fold, normal-flip, degeneracy) passes.  Determinism is mandatory,
+// so every container whose iteration order can influence the collapse ORDER is
+// ordered (sorted std::vector / std::map / std::set) — never std::unordered_*.
+// See DESIGN.md for the authoritative mechanism.
+// ---------------------------------------------------------------------------
+
+// Tunables (fixed thresholds — deterministic across builds, no env reads).
+constexpr double kQemLambdaEdgeLength = 1.0e-3;   // length regularizer (reorder only)
+constexpr double kQemLambdaSkinny = 1.0e-3;       // sliver penalty (reorder only)
+constexpr double kQemNormalFlipCosThreshold = 0.2;  // positive cos(theta_min) guard
+constexpr double kQemMinTriangleArea2 = 1.0e-12;  // post-collapse area*2 hard reject
+constexpr double kQemMinTriangleAspect = 1.0e-4;  // post-collapse aspect hard reject
+constexpr int64_t kQemTetrahedronFloorFaces = 4;  // never decimate below a tetrahedron
+
+// Ordered comparator for EdgeKey so it can key std::map / std::set (EdgeKey has
+// no operator<). Lexicographic (a, b) — deterministic, ASLR-independent.
+struct EdgeKeyLess {
+  bool operator()(const mesh_common::EdgeKey &left, const mesh_common::EdgeKey &right) const {
+    if (left.a != right.a) {
+      return left.a < right.a;
+    }
+    return left.b < right.b;
+  }
+};
+
+struct QemEdgeCost {
+  double cost = 0.0;
+  int64_t edge_id = 0;
+  int64_t version = 0;
+};
+
+// Min-heap ordering: cost ASC, edge_id ASC, version DESC.  std::priority_queue
+// is a MAX-heap on operator<, so this comparator returns true when `left` should
+// pop AFTER `right` (i.e. when left is the "greater"/lower-priority element).
+struct QemEdgeCostGreater {
+  bool operator()(const QemEdgeCost &left, const QemEdgeCost &right) const {
+    if (left.cost != right.cost) {
+      return left.cost > right.cost;  // smaller cost pops first
+    }
+    if (left.edge_id != right.edge_id) {
+      return left.edge_id > right.edge_id;  // smaller edge_id pops first
+    }
+    return left.version < right.version;  // newer version pops first
+  }
+};
+
+struct QemEdge {
+  int64_t a = 0;
+  int64_t b = 0;
+  int64_t version = 0;
+  bool alive = false;
+};
+
+// Solve the 3x3 system A x = -b (with A = upper-left 3x3 of Q, b = Q[0..2][3])
+// to find the optimal collapse position.  Returns false when ill-conditioned.
+bool solve_optimal_vertex(const Quadric &quadric, std::array<float, 3> &out) {
+  const double a00 = quadric.values[0];
+  const double a01 = quadric.values[1];
+  const double a02 = quadric.values[2];
+  const double a11 = quadric.values[5];
+  const double a12 = quadric.values[6];
+  const double a22 = quadric.values[10];
+  const double b0 = quadric.values[3];
+  const double b1 = quadric.values[7];
+  const double b2 = quadric.values[11];
+
+  const double det = a00 * (a11 * a22 - a12 * a12)
+      - a01 * (a01 * a22 - a12 * a02)
+      + a02 * (a01 * a12 - a11 * a02);
+  if (!std::isfinite(det) || std::fabs(det) <= 1e-12) {
+    return false;
+  }
+  const double inv_det = 1.0 / det;
+  // Cofactor inverse of symmetric A, applied to -b.
+  const double c00 = (a11 * a22 - a12 * a12);
+  const double c01 = (a02 * a12 - a01 * a22);
+  const double c02 = (a01 * a12 - a02 * a11);
+  const double c11 = (a00 * a22 - a02 * a02);
+  const double c12 = (a02 * a01 - a00 * a12);
+  const double c22 = (a00 * a11 - a01 * a01);
+  const double x = -(c00 * b0 + c01 * b1 + c02 * b2) * inv_det;
+  const double y = -(c01 * b0 + c11 * b1 + c12 * b2) * inv_det;
+  const double z = -(c02 * b0 + c12 * b1 + c22 * b2) * inv_det;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    return false;
+  }
+  out = {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+  return true;
+}
+
+// Choose the collapse target position for edge (a,b) and return its quadric
+// error.  Falls back to the best of {midpoint,a,b} when the system is singular,
+// with explicit tiebreak (error -> distance-to-midpoint -> fixed candidate
+// order) mirroring cluster_mesh's representative selection.
+double qem_collapse_target(
+    const Quadric &combined,
+    const std::array<float, 3> &va,
+    const std::array<float, 3> &vb,
+    std::array<float, 3> &target) {
+  std::array<float, 3> solved{};
+  if (solve_optimal_vertex(combined, solved)) {
+    target = solved;
+    const double error = evaluate_quadric(combined, solved);
+    if (std::isfinite(error)) {
+      return error;
+    }
+  }
+  const std::array<float, 3> midpoint{
+      0.5f * (va[0] + vb[0]),
+      0.5f * (va[1] + vb[1]),
+      0.5f * (va[2] + vb[2]),
+  };
+  const std::array<std::array<float, 3>, 3> candidates{midpoint, va, vb};
+  double best_error = std::numeric_limits<double>::infinity();
+  double best_distance = std::numeric_limits<double>::infinity();
+  int best_index = -1;
+  for (int index = 0; index < 3; ++index) {
+    const std::array<float, 3> &candidate = candidates[static_cast<size_t>(index)];
+    double error = evaluate_quadric(combined, candidate);
+    if (!std::isfinite(error)) {
+      error = std::numeric_limits<double>::infinity();
+    }
+    const double dx = static_cast<double>(candidate[0]) - static_cast<double>(midpoint[0]);
+    const double dy = static_cast<double>(candidate[1]) - static_cast<double>(midpoint[1]);
+    const double dz = static_cast<double>(candidate[2]) - static_cast<double>(midpoint[2]);
+    const double distance = dx * dx + dy * dy + dz * dz;
+    if (error < best_error - 1e-18 ||
+        (std::fabs(error - best_error) <= 1e-18 && distance < best_distance - 1e-18) ||
+        (std::fabs(error - best_error) <= 1e-18 && std::fabs(distance - best_distance) <= 1e-18 &&
+         best_index < 0)) {
+      best_error = error;
+      best_distance = distance;
+      best_index = index;
+    }
+  }
+  target = candidates[static_cast<size_t>(std::max(0, best_index))];
+  return std::isfinite(best_error) ? best_error : 0.0;
+}
+
+struct QemSimplifyResult {
+  mesh_common::MeshData mesh;
+  int64_t collapses_applied = 0;
+  int64_t collapses_rejected_by_guard = 0;
+  double geometric_error_sum = 0.0;
+  double geometric_error_max = 0.0;
+  bool target_reached = false;
+};
+
+class QemSimplifier {
+ public:
+  explicit QemSimplifier(const mesh_common::MeshData &input)
+      : vertices_(input.vertices), live_faces_(static_cast<int64_t>(input.faces.size())) {
+    faces_.reserve(input.faces.size());
+    face_alive_.reserve(input.faces.size());
+    for (const auto &face : input.faces) {
+      faces_.push_back(face);
+      face_alive_.push_back(true);
+    }
+    quadrics_ = vertex_plane_quadrics(input);
+    build_topology();
+  }
+
+  QemSimplifyResult run(int64_t target_faces) {
+    QemSimplifyResult result;
+    while (live_faces_ > target_faces && live_faces_ > kQemTetrahedronFloorFaces) {
+      QemEdgeCost top;
+      if (!pop_valid_edge(top)) {
+        break;  // no valid collapse remains (stall / exhausted)
+      }
+      double applied_error = 0.0;
+      if (collapse_edge(top.edge_id, applied_error)) {
+        result.collapses_applied += 1;
+        result.geometric_error_sum += applied_error;
+        result.geometric_error_max = std::max(result.geometric_error_max, applied_error);
+        live_faces_ -= 2;
+      } else {
+        result.collapses_rejected_by_guard += 1;
+      }
+      maybe_compact_heap();
+    }
+    result.mesh = emit_mesh();
+    result.target_reached = static_cast<int64_t>(result.mesh.faces.size()) <= target_faces;
+    return result;
+  }
+
+ private:
+  std::vector<std::array<float, 3>> vertices_;
+  std::vector<std::array<int64_t, 3>> faces_;
+  std::vector<bool> face_alive_;
+  std::vector<Quadric> quadrics_;
+  int64_t live_faces_ = 0;  // O(1) maintained; decremented by 2 per successful collapse.
+
+  // Ordered adjacency (determinism-critical):
+  //  - vertex_faces_: per-vertex sorted incident-face indices.
+  //  - edge_index_: EdgeKey -> edge_id in an ordered std::map.
+  //  - edges_: edge records indexed by edge_id.
+  std::vector<std::set<int64_t>> vertex_faces_;
+  std::map<mesh_common::EdgeKey, int64_t, EdgeKeyLess> edge_index_;
+  std::vector<QemEdge> edges_;
+  std::vector<bool> boundary_vertex_;
+
+  std::priority_queue<QemEdgeCost, std::vector<QemEdgeCost>, QemEdgeCostGreater> heap_;
+
+  int64_t live_face_count() const {
+    int64_t count = 0;
+    for (const bool alive : face_alive_) {
+      if (alive) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  int64_t live_edge_count() const {
+    int64_t count = 0;
+    for (const QemEdge &edge : edges_) {
+      if (edge.alive) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  int64_t edge_id_for(int64_t u, int64_t v) {
+    const mesh_common::EdgeKey key = mesh_common::edge_key(u, v);
+    auto found = edge_index_.find(key);
+    if (found != edge_index_.end()) {
+      return found->second;
+    }
+    const int64_t id = static_cast<int64_t>(edges_.size());
+    edges_.push_back(QemEdge{key.a, key.b, 0, true});
+    edge_index_.emplace(key, id);
+    return id;
+  }
+
+  void build_topology() {
+    vertex_faces_.assign(vertices_.size(), {});
+    for (int64_t fi = 0; fi < static_cast<int64_t>(faces_.size()); ++fi) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        vertex_faces_[static_cast<size_t>(face[c])].insert(fi);
+      }
+      edge_id_for(face[0], face[1]);
+      edge_id_for(face[1], face[2]);
+      edge_id_for(face[2], face[0]);
+    }
+    // Boundary vertices: any endpoint of an edge used by exactly one live face.
+    boundary_vertex_.assign(vertices_.size(), false);
+    std::map<mesh_common::EdgeKey, int64_t, EdgeKeyLess> counts;
+    for (int64_t fi = 0; fi < static_cast<int64_t>(faces_.size()); ++fi) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      counts[mesh_common::edge_key(face[0], face[1])] += 1;
+      counts[mesh_common::edge_key(face[1], face[2])] += 1;
+      counts[mesh_common::edge_key(face[2], face[0])] += 1;
+    }
+    for (const auto &entry : counts) {
+      if (entry.second != 2) {
+        boundary_vertex_[static_cast<size_t>(entry.first.a)] = true;
+        boundary_vertex_[static_cast<size_t>(entry.first.b)] = true;
+      }
+    }
+    // Seed the heap from the live edges in edge_id order (deterministic).
+    for (int64_t id = 0; id < static_cast<int64_t>(edges_.size()); ++id) {
+      if (edges_[static_cast<size_t>(id)].alive) {
+        push_edge_cost(id);
+      }
+    }
+  }
+
+  void push_edge_cost(int64_t edge_id) {
+    const QemEdge &edge = edges_[static_cast<size_t>(edge_id)];
+    if (!edge.alive) {
+      return;
+    }
+    Quadric combined = quadrics_[static_cast<size_t>(edge.a)];
+    add_quadric(combined, quadrics_[static_cast<size_t>(edge.b)]);
+    const std::array<float, 3> &va = vertices_[static_cast<size_t>(edge.a)];
+    const std::array<float, 3> &vb = vertices_[static_cast<size_t>(edge.b)];
+    std::array<float, 3> target{};
+    double cost = qem_collapse_target(combined, va, vb, target);
+    if (!std::isfinite(cost)) {
+      cost = std::numeric_limits<double>::infinity();
+    }
+    const double dx = static_cast<double>(va[0]) - static_cast<double>(vb[0]);
+    const double dy = static_cast<double>(va[1]) - static_cast<double>(vb[1]);
+    const double dz = static_cast<double>(va[2]) - static_cast<double>(vb[2]);
+    const double len2 = dx * dx + dy * dy + dz * dz;
+    cost += kQemLambdaEdgeLength * len2;
+    cost += kQemLambdaSkinny * skinny_penalty(edge.a, edge.b);
+    heap_.push(QemEdgeCost{cost, edge_id, edge.version});
+  }
+
+  // Sliver penalty proportional to inverse aspect of the worst incident face
+  // (reorder only; never substitutes a guard).
+  double skinny_penalty(int64_t u, int64_t v) const {
+    double worst = 0.0;
+    std::set<int64_t> incident = vertex_faces_[static_cast<size_t>(u)];
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(v)]) {
+      incident.insert(fi);
+    }
+    for (const int64_t fi : incident) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const double aspect = triangle_inverse_aspect(faces_[static_cast<size_t>(fi)]);
+      worst = std::max(worst, aspect);
+    }
+    return worst;
+  }
+
+  double triangle_inverse_aspect(const std::array<int64_t, 3> &face) const {
+    const auto &a = vertices_[static_cast<size_t>(face[0])];
+    const auto &b = vertices_[static_cast<size_t>(face[1])];
+    const auto &c = vertices_[static_cast<size_t>(face[2])];
+    auto dist2 = [](const std::array<float, 3> &p, const std::array<float, 3> &q) {
+      const double dx = static_cast<double>(p[0]) - static_cast<double>(q[0]);
+      const double dy = static_cast<double>(p[1]) - static_cast<double>(q[1]);
+      const double dz = static_cast<double>(p[2]) - static_cast<double>(q[2]);
+      return dx * dx + dy * dy + dz * dz;
+    };
+    const double longest = std::sqrt(std::max({dist2(a, b), dist2(b, c), dist2(c, a)}));
+    const double area2 = triangle_area2_local(face);
+    if (area2 <= 1e-18) {
+      return 1.0e6;
+    }
+    return (longest * longest) / area2;
+  }
+
+  double triangle_area2_local(const std::array<int64_t, 3> &face) const {
+    const auto &a = vertices_[static_cast<size_t>(face[0])];
+    const auto &b = vertices_[static_cast<size_t>(face[1])];
+    const auto &c = vertices_[static_cast<size_t>(face[2])];
+    const double ab[3] = {
+        static_cast<double>(b[0]) - static_cast<double>(a[0]),
+        static_cast<double>(b[1]) - static_cast<double>(a[1]),
+        static_cast<double>(b[2]) - static_cast<double>(a[2]),
+    };
+    const double ac[3] = {
+        static_cast<double>(c[0]) - static_cast<double>(a[0]),
+        static_cast<double>(c[1]) - static_cast<double>(a[1]),
+        static_cast<double>(c[2]) - static_cast<double>(a[2]),
+    };
+    const double cross[3] = {
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    return std::sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]);
+  }
+
+  std::array<double, 3> triangle_normal(
+      const std::array<float, 3> &a,
+      const std::array<float, 3> &b,
+      const std::array<float, 3> &c) const {
+    const double ab[3] = {
+        static_cast<double>(b[0]) - static_cast<double>(a[0]),
+        static_cast<double>(b[1]) - static_cast<double>(a[1]),
+        static_cast<double>(b[2]) - static_cast<double>(a[2]),
+    };
+    const double ac[3] = {
+        static_cast<double>(c[0]) - static_cast<double>(a[0]),
+        static_cast<double>(c[1]) - static_cast<double>(a[1]),
+        static_cast<double>(c[2]) - static_cast<double>(a[2]),
+    };
+    std::array<double, 3> normal{
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    const double len = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+    if (!std::isfinite(len) || len <= 1e-18) {
+      return {0.0, 0.0, 0.0};
+    }
+    normal[0] /= len;
+    normal[1] /= len;
+    normal[2] /= len;
+    return normal;
+  }
+
+  bool pop_valid_edge(QemEdgeCost &out) {
+    while (!heap_.empty()) {
+      QemEdgeCost candidate = heap_.top();
+      heap_.pop();
+      const QemEdge &edge = edges_[static_cast<size_t>(candidate.edge_id)];
+      if (!edge.alive || edge.version != candidate.version) {
+        continue;  // stale lazy entry
+      }
+      out = candidate;
+      return true;
+    }
+    return false;
+  }
+
+  void maybe_compact_heap() {
+    const int64_t live = live_edge_count();
+    if (static_cast<int64_t>(heap_.size()) <= 3 * std::max<int64_t>(1, live)) {
+      return;
+    }
+    decltype(heap_) rebuilt;
+    for (int64_t id = 0; id < static_cast<int64_t>(edges_.size()); ++id) {
+      if (edges_[static_cast<size_t>(id)].alive) {
+        const QemEdge &edge = edges_[static_cast<size_t>(id)];
+        Quadric combined = quadrics_[static_cast<size_t>(edge.a)];
+        add_quadric(combined, quadrics_[static_cast<size_t>(edge.b)]);
+        const std::array<float, 3> &va = vertices_[static_cast<size_t>(edge.a)];
+        const std::array<float, 3> &vb = vertices_[static_cast<size_t>(edge.b)];
+        std::array<float, 3> target{};
+        double cost = qem_collapse_target(combined, va, vb, target);
+        if (!std::isfinite(cost)) {
+          cost = std::numeric_limits<double>::infinity();
+        }
+        const double dx = static_cast<double>(va[0]) - static_cast<double>(vb[0]);
+        const double dy = static_cast<double>(va[1]) - static_cast<double>(vb[1]);
+        const double dz = static_cast<double>(va[2]) - static_cast<double>(vb[2]);
+        cost += kQemLambdaEdgeLength * (dx * dx + dy * dy + dz * dz);
+        cost += kQemLambdaSkinny * skinny_penalty(edge.a, edge.b);
+        rebuilt.push(QemEdgeCost{cost, id, edge.version});
+      }
+    }
+    heap_ = std::move(rebuilt);
+  }
+
+  // Live faces incident to vertex v (those that are alive and reference v).
+  std::vector<int64_t> live_incident_faces(int64_t v) const {
+    std::vector<int64_t> out;
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(v)]) {
+      if (face_alive_[static_cast<size_t>(fi)]) {
+        out.push_back(fi);
+      }
+    }
+    return out;  // already ascending: std::set iteration
+  }
+
+  // Common one-ring neighbours of a and b (vertices adjacent to both via a live
+  // face), returned sorted/ascending.
+  std::vector<int64_t> common_neighbours(int64_t a, int64_t b) const {
+    std::set<int64_t> na = one_ring(a);
+    std::set<int64_t> nb = one_ring(b);
+    std::vector<int64_t> shared;
+    std::set_intersection(na.begin(), na.end(), nb.begin(), nb.end(), std::back_inserter(shared));
+    return shared;
+  }
+
+  std::set<int64_t> one_ring(int64_t v) const {
+    std::set<int64_t> ring;
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(v)]) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        if (face[c] != v) {
+          ring.insert(face[c]);
+        }
+      }
+    }
+    return ring;
+  }
+
+  // The two faces shared by edge (a,b): faces containing both a and b.
+  std::vector<int64_t> faces_on_edge(int64_t a, int64_t b) const {
+    std::vector<int64_t> out;
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(a)]) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      if (face[0] == b || face[1] == b || face[2] == b) {
+        out.push_back(fi);
+      }
+    }
+    return out;
+  }
+
+  int64_t opposite_vertex(int64_t face_index, int64_t a, int64_t b) const {
+    const auto &face = faces_[static_cast<size_t>(face_index)];
+    for (int c = 0; c < 3; ++c) {
+      if (face[c] != a && face[c] != b) {
+        return face[c];
+      }
+    }
+    return -1;
+  }
+
+  // Try to collapse edge (a,b) -> a.  Returns true and mutates the mesh when all
+  // guards pass; otherwise returns false (no mutation, edge stays alive).
+  bool collapse_edge(int64_t edge_id, double &applied_error) {
+    const QemEdge edge = edges_[static_cast<size_t>(edge_id)];
+    const int64_t a0 = edge.a;
+    const int64_t b0 = edge.b;
+
+    // Guard 1: boundary lock (interior-only collapse in v1).
+    if (boundary_vertex_[static_cast<size_t>(a0)] || boundary_vertex_[static_cast<size_t>(b0)]) {
+      return false;
+    }
+
+    const std::vector<int64_t> incident_faces = faces_on_edge(a0, b0);
+    if (incident_faces.size() != 2) {
+      return false;  // interior manifold edge must have exactly two faces
+    }
+    const int64_t opp0 = opposite_vertex(incident_faces[0], a0, b0);
+    const int64_t opp1 = opposite_vertex(incident_faces[1], a0, b0);
+    if (opp0 < 0 || opp1 < 0 || opp0 == opp1) {
+      return false;
+    }
+
+    // Guard 2: link condition. Common one-ring neighbours of a and b must be
+    // EXACTLY the two opposite vertices.
+    {
+      std::vector<int64_t> common = common_neighbours(a0, b0);
+      std::vector<int64_t> expected{std::min(opp0, opp1), std::max(opp0, opp1)};
+      if (common != expected) {
+        return false;
+      }
+    }
+
+    // Decide collapse target a := keep, b := removed.  Keep the lower index as
+    // the survivor for deterministic output ordering.
+    const int64_t keep = std::min(a0, b0);
+    const int64_t drop = std::max(a0, b0);
+
+    Quadric combined = quadrics_[static_cast<size_t>(a0)];
+    add_quadric(combined, quadrics_[static_cast<size_t>(b0)]);
+    std::array<float, 3> target{};
+    const double error = qem_collapse_target(
+        combined, vertices_[static_cast<size_t>(a0)], vertices_[static_cast<size_t>(b0)], target);
+
+    // Build the candidate surviving faces around `keep` after the collapse.
+    // These are all live faces incident to keep OR drop, excluding the two
+    // collapsing faces, with `drop` retargeted to `keep`.
+    std::set<int64_t> affected;
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(a0)]) {
+      if (face_alive_[static_cast<size_t>(fi)]) {
+        affected.insert(fi);
+      }
+    }
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(b0)]) {
+      if (face_alive_[static_cast<size_t>(fi)]) {
+        affected.insert(fi);
+      }
+    }
+    affected.erase(incident_faces[0]);
+    affected.erase(incident_faces[1]);
+
+    std::vector<std::array<int64_t, 3>> new_faces;
+    new_faces.reserve(affected.size());
+    std::vector<int64_t> affected_ids(affected.begin(), affected.end());
+    for (const int64_t fi : affected_ids) {
+      std::array<int64_t, 3> face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        if (face[c] == drop) {
+          face[c] = keep;
+        }
+      }
+      new_faces.push_back(face);
+    }
+
+    // Guard 4a: canonical-face duplicate (fold-over). No two surviving faces in
+    // the merged 1-ring may share the same canonical vertex set.
+    {
+      std::set<std::array<int64_t, 3>> seen;
+      for (const auto &face : new_faces) {
+        if (face[0] == face[1] || face[1] == face[2] || face[0] == face[2]) {
+          return false;  // degenerate retarget
+        }
+        std::array<int64_t, 3> canonical = mesh_common::canonical_face(face);
+        if (!seen.insert(canonical).second) {
+          return false;
+        }
+      }
+    }
+
+    // Guards 5 + 6: normal-flip and degeneracy over the merged 1-ring.
+    for (size_t index = 0; index < new_faces.size(); ++index) {
+      const std::array<int64_t, 3> &pre_face = faces_[static_cast<size_t>(affected_ids[index])];
+      const std::array<int64_t, 3> &post_face = new_faces[index];
+      const std::array<double, 3> normal_pre = triangle_normal(
+          vertices_[static_cast<size_t>(pre_face[0])],
+          vertices_[static_cast<size_t>(pre_face[1])],
+          vertices_[static_cast<size_t>(pre_face[2])]);
+      // Post position: vertex `keep` moves to `target`.
+      auto pos = [&](int64_t vid) -> std::array<float, 3> {
+        return vid == keep ? target : vertices_[static_cast<size_t>(vid)];
+      };
+      const std::array<double, 3> normal_post = triangle_normal(
+          pos(post_face[0]), pos(post_face[1]), pos(post_face[2]));
+      const double dot = normal_pre[0] * normal_post[0] + normal_pre[1] * normal_post[1]
+          + normal_pre[2] * normal_post[2];
+      // Guard 5: normal-flip — reject when alignment drops below positive thresh.
+      if (dot <= kQemNormalFlipCosThreshold) {
+        return false;
+      }
+      // Guard 6: degeneracy — hard reject on tiny area / bad aspect.
+      const double area2 = triangle_area2_at(post_face, keep, target);
+      if (!std::isfinite(area2) || area2 <= kQemMinTriangleArea2) {
+        return false;
+      }
+      const double aspect_inv = 1.0 / std::max(1e-12, triangle_inverse_aspect_at(post_face, keep, target));
+      if (aspect_inv < kQemMinTriangleAspect) {
+        return false;
+      }
+    }
+
+    // Guard 3: vertex-fan / pinch test. After the retarget, the surviving faces
+    // incident to `keep` must form a SINGLE edge-connected fan (one umbrella),
+    // mirroring the nonmanifold_vertices metric's union-find over shared edges.
+    if (!single_fan_after_collapse(new_faces, keep)) {
+      return false;
+    }
+
+    // All guards passed — apply the collapse.
+    apply_collapse(keep, drop, target, incident_faces, affected_ids, new_faces, combined);
+    applied_error = std::isfinite(error) ? error : 0.0;
+    return true;
+  }
+
+  double triangle_area2_at(
+      const std::array<int64_t, 3> &face,
+      int64_t moved_vertex,
+      const std::array<float, 3> &moved_position) const {
+    auto pos = [&](int64_t vid) -> std::array<float, 3> {
+      return vid == moved_vertex ? moved_position : vertices_[static_cast<size_t>(vid)];
+    };
+    const std::array<float, 3> a = pos(face[0]);
+    const std::array<float, 3> b = pos(face[1]);
+    const std::array<float, 3> c = pos(face[2]);
+    const double ab[3] = {
+        static_cast<double>(b[0]) - static_cast<double>(a[0]),
+        static_cast<double>(b[1]) - static_cast<double>(a[1]),
+        static_cast<double>(b[2]) - static_cast<double>(a[2]),
+    };
+    const double ac[3] = {
+        static_cast<double>(c[0]) - static_cast<double>(a[0]),
+        static_cast<double>(c[1]) - static_cast<double>(a[1]),
+        static_cast<double>(c[2]) - static_cast<double>(a[2]),
+    };
+    const double cross[3] = {
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    return std::sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]);
+  }
+
+  double triangle_inverse_aspect_at(
+      const std::array<int64_t, 3> &face,
+      int64_t moved_vertex,
+      const std::array<float, 3> &moved_position) const {
+    auto pos = [&](int64_t vid) -> std::array<float, 3> {
+      return vid == moved_vertex ? moved_position : vertices_[static_cast<size_t>(vid)];
+    };
+    const std::array<float, 3> a = pos(face[0]);
+    const std::array<float, 3> b = pos(face[1]);
+    const std::array<float, 3> c = pos(face[2]);
+    auto dist2 = [](const std::array<float, 3> &p, const std::array<float, 3> &q) {
+      const double dx = static_cast<double>(p[0]) - static_cast<double>(q[0]);
+      const double dy = static_cast<double>(p[1]) - static_cast<double>(q[1]);
+      const double dz = static_cast<double>(p[2]) - static_cast<double>(q[2]);
+      return dx * dx + dy * dy + dz * dz;
+    };
+    const double longest = std::sqrt(std::max({dist2(a, b), dist2(b, c), dist2(c, a)}));
+    const double area2 = triangle_area2_at(face, moved_vertex, moved_position);
+    if (area2 <= 1e-18) {
+      return 1.0e6;
+    }
+    return (longest * longest) / area2;
+  }
+
+  // Union-find over the candidate surviving faces incident to `keep`, uniting
+  // two faces when they share a non-keep vertex (an edge through keep). A single
+  // root => one fan; more than one => a pinch (reject).
+  bool single_fan_after_collapse(
+      const std::vector<std::array<int64_t, 3>> &new_faces,
+      int64_t keep) const {
+    std::vector<size_t> incident;
+    for (size_t index = 0; index < new_faces.size(); ++index) {
+      const auto &face = new_faces[index];
+      if (face[0] == keep || face[1] == keep || face[2] == keep) {
+        incident.push_back(index);
+      }
+    }
+    if (incident.size() < 2) {
+      return true;  // 0 or 1 incident face is always a single fan
+    }
+    const size_t n = incident.size();
+    mesh_common::UnionFind uf(n);
+    for (size_t a = 0; a < n; ++a) {
+      const auto &fa = new_faces[incident[a]];
+      for (size_t b = a + 1; b < n; ++b) {
+        const auto &fb = new_faces[incident[b]];
+        int shared_non_keep = 0;
+        for (int ca = 0; ca < 3; ++ca) {
+          if (fa[ca] == keep) {
+            continue;
+          }
+          for (int cb = 0; cb < 3; ++cb) {
+            if (fb[cb] == keep) {
+              continue;
+            }
+            if (fa[ca] == fb[cb]) {
+              ++shared_non_keep;
+            }
+          }
+        }
+        if (shared_non_keep >= 1) {
+          uf.unite(a, b);
+        }
+      }
+    }
+    std::set<size_t> roots;
+    for (size_t a = 0; a < n; ++a) {
+      roots.insert(uf.find(a));
+    }
+    return roots.size() == 1;
+  }
+
+  void apply_collapse(
+      int64_t keep,
+      int64_t drop,
+      const std::array<float, 3> &target,
+      const std::vector<int64_t> &incident_faces,
+      const std::vector<int64_t> &affected_ids,
+      const std::vector<std::array<int64_t, 3>> &new_faces,
+      const Quadric &combined) {
+    // Kill the two collapsing faces.
+    for (const int64_t fi : incident_faces) {
+      face_alive_[static_cast<size_t>(fi)] = false;
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        vertex_faces_[static_cast<size_t>(face[c])].erase(fi);
+      }
+    }
+    // Retarget affected faces drop->keep, maintaining adjacency.
+    for (size_t index = 0; index < affected_ids.size(); ++index) {
+      const int64_t fi = affected_ids[index];
+      std::array<int64_t, 3> &face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        if (face[c] == drop) {
+          vertex_faces_[static_cast<size_t>(drop)].erase(fi);
+          face[c] = keep;
+          vertex_faces_[static_cast<size_t>(keep)].insert(fi);
+        }
+      }
+    }
+    // Move the survivor to the optimal position and accumulate quadrics.
+    vertices_[static_cast<size_t>(keep)] = target;
+    quadrics_[static_cast<size_t>(keep)] = combined;
+
+    // Drop vertex is now isolated.
+    vertex_faces_[static_cast<size_t>(drop)].clear();
+
+    // Invalidate every edge touching keep or drop, register new edges around
+    // keep, bump versions, and re-push fresh costs. Iterate the merged 1-ring in
+    // sorted order for determinism.
+    // Invalidate any existing edge whose endpoints touch keep/drop by bumping
+    // version (lazy). Drop's incident edges become dead.
+    for (auto &entry : edge_index_) {
+      const mesh_common::EdgeKey &key = entry.first;
+      QemEdge &e = edges_[static_cast<size_t>(entry.second)];
+      if (!e.alive) {
+        continue;
+      }
+      if (key.a == drop || key.b == drop) {
+        e.alive = false;
+        e.version += 1;
+      } else if (key.a == keep || key.b == keep) {
+        e.alive = false;  // will be re-registered below if still present
+        e.version += 1;
+      }
+    }
+    // Re-register live edges around keep from the surviving incident faces.
+    std::set<mesh_common::EdgeKey, EdgeKeyLess> live_keep_edges;
+    for (const int64_t fi : vertex_faces_[static_cast<size_t>(keep)]) {
+      if (!face_alive_[static_cast<size_t>(fi)]) {
+        continue;
+      }
+      const auto &face = faces_[static_cast<size_t>(fi)];
+      for (int c = 0; c < 3; ++c) {
+        const int64_t u = face[c];
+        const int64_t v = face[(c + 1) % 3];
+        if (u == keep || v == keep) {
+          live_keep_edges.insert(mesh_common::edge_key(u, v));
+        }
+      }
+    }
+    for (const mesh_common::EdgeKey &key : live_keep_edges) {
+      auto found = edge_index_.find(key);
+      int64_t id = -1;
+      if (found == edge_index_.end()) {
+        id = static_cast<int64_t>(edges_.size());
+        edges_.push_back(QemEdge{key.a, key.b, 0, true});
+        edge_index_.emplace(key, id);
+      } else {
+        id = found->second;
+        QemEdge &e = edges_[static_cast<size_t>(id)];
+        e.alive = true;
+        e.version += 1;
+      }
+      push_edge_cost(id);
+    }
+  }
+
+  // Compact to a clean MeshData, dropping dead faces and isolated vertices.
+  mesh_common::MeshData emit_mesh() const {
+    mesh_common::MeshData out;
+    out.faces.reserve(faces_.size());
+    for (int64_t fi = 0; fi < static_cast<int64_t>(faces_.size()); ++fi) {
+      if (face_alive_[static_cast<size_t>(fi)]) {
+        out.faces.push_back(faces_[static_cast<size_t>(fi)]);
+      }
+    }
+    out.vertices = vertices_;
+    int64_t unreferenced_removed = 0;
+    return mesh_common::compact_mesh(out, &unreferenced_removed);
+  }
+};
+
 BackendSelection resolve_backend(const std::string &backend) {
   if (backend.empty() || backend == "spatial-cluster" || backend == "preview") {
     return BackendSelection{
@@ -1537,7 +2369,16 @@ BackendSelection resolve_backend(const std::string &backend) {
         true,
     };
   }
-  throw nb::value_error("simplifier backend must be 'spatial-cluster' or 'topology-aware'");
+  if (backend == "qem") {
+    return BackendSelection{
+        "qem",
+        "qem",
+        "native_qem_edge_collapse",
+        true,
+        true,
+    };
+  }
+  throw nb::value_error("simplifier backend must be 'spatial-cluster', 'topology-aware', or 'qem'");
 }
 
 std::vector<std::string> production_blocker_values(
@@ -1555,7 +2396,11 @@ std::vector<std::string> production_blocker_values(
   if (!target_reached) {
     blockers.push_back("target_not_reached");
   }
-  blockers.push_back("missing_qem_edge_collapse_simplification");
+  if (!selection.is_qem) {
+    // qem already provides native edge-collapse simplification; only the
+    // narrow-band DC remesh (cleared by export.py post-remesh) remains.
+    blockers.push_back("missing_qem_edge_collapse_simplification");
+  }
   blockers.push_back("missing_narrow_band_dc_remesh");
   return blockers;
 }
@@ -1585,10 +2430,14 @@ void add_backend_stats(
   stats["backend_selection_reason"] = selection.topology_aware ? "topology_aware_backend_requested" : "preview_backend_requested";
   stats["remesh_backend"] = "not_implemented";
   stats["remesh_equivalence_status"] = "blocked_missing_narrow_band_dc";
-  stats["qem_simplification_backend"] = "not_implemented";
-  stats["qem_equivalence_status"] = selection.topology_aware
-      ? "qem_scored_not_edge_collapse"
-      : "not_requested_preview_backend";
+  if (!selection.is_qem) {
+    // For the qem path these fields are written once with correct final values
+    // by build_qem_stats; skip the stale intermediate write here.
+    stats["qem_simplification_backend"] = "not_implemented";
+    stats["qem_equivalence_status"] = selection.topology_aware
+        ? "qem_scored_not_edge_collapse"
+        : "not_requested_preview_backend";
+  }
   stats["reference_geometry_backend_status"] = production_ready
       ? "reference_ready"
       : "blocked_missing_reference_geometry";
@@ -1686,6 +2535,76 @@ void add_pre_simplify_loop_fill_stats(
   stats["pre_simplify_hole_fill_faces_added"] = fill.faces_added;
 }
 
+// Forked qem stat emission (M2/M4). The qem path has no clustering `best`, so it
+// must NOT route through the shared stat block (which unconditionally reads an
+// unpopulated `ClusterResult`). This builder emits the SAME keyset a clustering
+// call produces on the same input (so S3 can widen to full keyset-equality),
+// using 0/"n/a" sentinels for clustering-specific fields with no qem analogue,
+// then overlays the qem-specific keys. `source_faces` is the raw input face
+// count; `final_faces`/`final_vertices`/`pre_simplify_*` come from the qem run.
+nb::dict build_qem_stats(
+    const BackendSelection &selection,
+    int64_t target_faces,
+    int64_t source_faces,
+    int64_t source_vertices,
+    int64_t final_faces,
+    int64_t final_vertices,
+    int64_t unreferenced_removed,
+    int64_t min_component_faces,
+    bool target_reached,
+    bool simplified,
+    const QemSimplifyResult &qem) {
+  nb::dict stats;
+  // Backend identity / production gating (forks qem_* fields below).
+  add_backend_stats(stats, selection, final_faces, target_reached);
+
+  // Loop-fill families have no qem analogue: emit the disabled keyset so the
+  // keyset matches a clustering call (sentinels, not arithmetic inputs).
+  ReferenceLoopFillResult empty_pre_fill;
+  SmallLoopFillResult empty_fill;
+  add_pre_simplify_loop_fill_stats(stats, false, kSmallBoundaryLoopFillMaxPerimeter, empty_pre_fill);
+  add_small_loop_fill_stats(
+      stats, false, 0, kSmallBoundaryLoopFillMaxPerimeter, empty_fill);
+
+  // Scalar block — same keys the clustering path emits.
+  stats["target_faces"] = target_faces;
+  stats["source_faces"] = source_faces;
+  stats["source_vertices"] = source_vertices;
+  stats["pre_simplify_faces"] = source_faces;
+  stats["pre_simplify_vertices"] = source_vertices;
+  stats["final_faces"] = final_faces;
+  stats["final_vertices"] = final_vertices;
+  stats["cluster_count"] = 0;
+  stats["grid_resolution"] = 0;
+  stats["degenerate_faces_removed"] = 0;
+  stats["duplicate_faces_removed"] = 0;
+  stats["nonmanifold_faces_removed"] = 0;
+  stats["unreferenced_vertices_removed"] = unreferenced_removed;
+  stats["target_reached"] = target_reached;
+  stats["simplified"] = simplified;
+  stats["min_component_faces"] = min_component_faces;
+  stats["candidate_faces_considered"] = source_faces;
+  stats["accepted_faces"] = final_faces;
+  stats["representative_vertices_selected"] = 0;
+  stats["representative_selection_strategy"] = "not_requested";
+  stats["quadric_representative_candidates_evaluated"] = 0;
+  stats["quadric_representative_nonfinite_candidates"] = 0;
+  stats["quadric_representative_error_sum"] = 0.0;
+  stats["quadric_representative_error_max"] = 0.0;
+
+  // qem-specific overlays.
+  stats["qem_simplification_backend"] = "native-qem-edge-collapse";
+  stats["qem_equivalence_status"] = "edge-collapse";
+  stats["qem_collapses_applied"] = qem.collapses_applied;
+  stats["qem_collapses_rejected_by_guard"] = qem.collapses_rejected_by_guard;
+  stats["qem_geometric_error_mean"] = qem.collapses_applied > 0
+      ? qem.geometric_error_sum / static_cast<double>(qem.collapses_applied)
+      : 0.0;
+  stats["qem_geometric_error_max"] = qem.geometric_error_max;
+  stats["qem_input_faces"] = source_faces;
+  return stats;
+}
+
 }  // namespace
 
 nb::dict simplify_mesh(
@@ -1710,6 +2629,55 @@ nb::dict simplify_mesh(
   }
   const BackendSelection selection = resolve_backend(backend);
   mesh_common::MeshData input = mesh_common::load_mesh(vertices, faces);
+
+  // QEM fork (M2): self-contained path that NEVER routes through the shared
+  // clustering stat block (which reads an unpopulated `ClusterResult best`).
+  // Handles both the backend-agnostic early-return (input already <= target)
+  // and the edge-collapse simplification, each with its own stat emission.
+  if (selection.is_qem) {
+    const int64_t source_faces = static_cast<int64_t>(input.faces.size());
+    const int64_t source_vertices = static_cast<int64_t>(input.vertices.size());
+    if (source_faces <= target_faces) {
+      int64_t unreferenced_removed = 0;
+      mesh_common::MeshData compact = mesh_common::compact_mesh(input, &unreferenced_removed);
+      nb::dict result = mesh_common::mesh_result(compact);
+      QemSimplifyResult empty_run;
+      empty_run.target_reached = true;
+      result["stats"] = build_qem_stats(
+          selection,
+          target_faces,
+          source_faces,
+          source_vertices,
+          static_cast<int64_t>(compact.faces.size()),
+          static_cast<int64_t>(compact.vertices.size()),
+          unreferenced_removed,
+          min_component_faces,
+          /*target_reached=*/true,
+          /*simplified=*/false,
+          empty_run);
+      return result;
+    }
+
+    QemSimplifier simplifier(input);
+    QemSimplifyResult qem = simplifier.run(target_faces);
+    nb::dict result = mesh_common::mesh_result(qem.mesh);
+    const int64_t final_faces = static_cast<int64_t>(qem.mesh.faces.size());
+    const int64_t final_vertices = static_cast<int64_t>(qem.mesh.vertices.size());
+    const int64_t unreferenced_removed = std::max<int64_t>(0, source_vertices - final_vertices);
+    result["stats"] = build_qem_stats(
+        selection,
+        target_faces,
+        source_faces,
+        source_vertices,
+        final_faces,
+        final_vertices,
+        unreferenced_removed,
+        min_component_faces,
+        qem.target_reached,
+        /*simplified=*/qem.collapses_applied > 0,
+        qem);
+    return result;
+  }
 
   if (static_cast<int64_t>(input.faces.size()) <= target_faces) {
     int64_t unreferenced_removed = 0;

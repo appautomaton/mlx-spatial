@@ -41,6 +41,10 @@ Required:
 **Touches:** `cpp/simplify.cpp` (new engine + forked qem return path + early-return `:1714` + `resolve_backend` `:1523/1540` + `BackendSelection` `:128`), `cpp/bindings.cpp` (accept `"qem"`, default unchanged), `tests/test_mesh_processing.py`
 **Detail:** `DESIGN.md`
 
+**Status:** complete (Opus implementer + spec/quality review + fix round)
+**Evidence:** `QemSimplifier` in `cpp/simplify.cpp` — all 6 guards (boundary-lock, link-condition, vertex-fan/pinch, low-valence/4-face-floor, normal-flip `cos≤0.2`, degeneracy hard-reject); ordered containers only (`std::map`/`std::set` + named heap comparator cost↑/edge_id↑/version↓); lazy invalidation + compaction at >3× live; **forked qem stat path** (never reads clustering `best.*`) incl. early-return; `resolve_backend` qem arm + extended throw. 8 new qem tests on 4 adversarial closed manifolds (icosphere, thin double-sided sheet, high-valence hub, subdivided tetrahedron) all keep boundary/open-chain/nonmanifold-edge/**nonmanifold-vertex** == 0; cross-process determinism (3 procs, randomized PYTHONHASHSEED) byte-identical. **Spec review APPROVED**; **quality review** CHANGES_REQUESTED → fixed (O(F²)→O(1) `live_faces_` counter [perf-critical for S5 fixture scale], dead `touched_vertices` removed, stat double-write deduped, unused var removed). `pytest tests/test_mesh_processing.py -q` = 33 passed; forbidden files (export.py/mesh_metrics.cpp/bindings.cpp) untouched.
+**Risks / next:** qem stat keyset is a superset of clustering's (S3 widens to full set-equality). Perf proven at toy scale; fixture-scale budget measured in S5.
+
 ### Slice 3: Stat-field contract, diagnostics & blocker wiring
 Required:
 **Objective:** Widen the qem stat dict to the full clustering keyset (legacy fields as sentinels + new QEM fields) and clear only its own blocker — without disturbing clustering diagnostics (B4/M4, QEM-04).

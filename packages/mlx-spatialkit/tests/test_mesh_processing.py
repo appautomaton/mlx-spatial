@@ -950,3 +950,293 @@ def test_simplify_mesh_rejects_invalid_small_boundary_loop_fill_perimeter() -> N
 
     with pytest.raises(ValueError, match="small_boundary_loop_fill_max_perimeter"):
         simplify_mesh(vertices, faces, target_faces=4, small_boundary_loop_fill_max_perimeter=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Native QEM edge-collapse simplifier (slice 2).
+#
+# Each adversarial input below is a CLOSED manifold (boundary_loop_count == 0,
+# boundary_open_chain_count == 0, nonmanifold_edges == 0, nonmanifold_vertices
+# == 0). The QEM backend must reduce face count toward the target while keeping
+# all four topology metrics at zero (no tearing, no pinch). The
+# nonmanifold_vertices oracle comes from slice 1's mesh_metrics.
+# ---------------------------------------------------------------------------
+
+
+def _assert_closed_manifold(metrics: dict[str, object]) -> None:
+    assert metrics["boundary_loop_count"] == 0
+    assert metrics["boundary_open_chain_count"] == 0
+    assert metrics["nonmanifold_edges"] == 0
+    assert metrics["nonmanifold_vertices"] == 0
+
+
+def _icosphere(subdivisions: int) -> tuple[np.ndarray, np.ndarray]:
+    """Closed manifold sphere built by subdividing an icosahedron."""
+    t = (1.0 + 5.0**0.5) / 2.0
+    verts = [
+        [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
+        [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
+        [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
+    ]
+    faces = [
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+    ]
+    for _ in range(subdivisions):
+        mid: dict[tuple[int, int], int] = {}
+
+        def midpoint(a: int, b: int) -> int:
+            key = (min(a, b), max(a, b))
+            if key in mid:
+                return mid[key]
+            pa, pb = verts[a], verts[b]
+            m = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2]
+            norm = (m[0] ** 2 + m[1] ** 2 + m[2] ** 2) ** 0.5 or 1.0
+            m = [m[0] / norm, m[1] / norm, m[2] / norm]
+            idx = len(verts)
+            verts.append(m)
+            mid[key] = idx
+            return idx
+
+        new_faces = []
+        for a, b, c in faces:
+            ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+            new_faces += [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]
+        faces = new_faces
+    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _thin_double_sided_sheet(grid: int) -> tuple[np.ndarray, np.ndarray]:
+    """Two near-coincident triangle layers sealed by a rim — a closed, very thin
+    box that provokes fold/pinch failures under naive collapse."""
+    eps = 1.0e-3
+    top = []
+    bottom = []
+    top_idx = {}
+    bottom_idx = {}
+    verts = []
+    for j in range(grid + 1):
+        for i in range(grid + 1):
+            x = i / grid
+            y = j / grid
+            top_idx[(i, j)] = len(verts)
+            verts.append([x, y, eps])
+            top.append((i, j))
+    for j in range(grid + 1):
+        for i in range(grid + 1):
+            x = i / grid
+            y = j / grid
+            bottom_idx[(i, j)] = len(verts)
+            verts.append([x, y, -eps])
+            bottom.append((i, j))
+
+    faces = []
+    # Top layer (CCW from above).
+    for j in range(grid):
+        for i in range(grid):
+            a = top_idx[(i, j)]
+            b = top_idx[(i + 1, j)]
+            c = top_idx[(i + 1, j + 1)]
+            d = top_idx[(i, j + 1)]
+            faces += [[a, b, c], [a, c, d]]
+    # Bottom layer (reversed winding so the closed solid is outward-oriented).
+    for j in range(grid):
+        for i in range(grid):
+            a = bottom_idx[(i, j)]
+            b = bottom_idx[(i + 1, j)]
+            c = bottom_idx[(i + 1, j + 1)]
+            d = bottom_idx[(i, j + 1)]
+            faces += [[a, c, b], [a, d, c]]
+    # Rim: seal the four borders connecting top and bottom into a closed solid.
+    border = []
+    for i in range(grid):
+        border.append(((i, 0), (i + 1, 0)))
+    for j in range(grid):
+        border.append(((grid, j), (grid, j + 1)))
+    for i in range(grid, 0, -1):
+        border.append(((i, grid), (i - 1, grid)))
+    for j in range(grid, 0, -1):
+        border.append(((0, j), (0, j - 1)))
+    for (i0, j0), (i1, j1) in border:
+        ta = top_idx[(i0, j0)]
+        tb = top_idx[(i1, j1)]
+        ba = bottom_idx[(i0, j0)]
+        bb = bottom_idx[(i1, j1)]
+        faces += [[ta, ba, bb], [ta, bb, tb]]
+    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _high_valence_hub(spokes: int) -> tuple[np.ndarray, np.ndarray]:
+    """A sealed bipyramid: a ring of `spokes` vertices fanned to two apex hubs,
+    giving each apex a high degree (the hub) on a closed manifold."""
+    verts = []
+    ring = []
+    for k in range(spokes):
+        angle = 2.0 * np.pi * k / spokes
+        ring.append(len(verts))
+        verts.append([float(np.cos(angle)), float(np.sin(angle)), 0.0])
+    top = len(verts)
+    verts.append([0.0, 0.0, 1.0])
+    bottom = len(verts)
+    verts.append([0.0, 0.0, -1.0])
+    faces = []
+    for k in range(spokes):
+        a = ring[k]
+        b = ring[(k + 1) % spokes]
+        faces.append([a, b, top])
+        faces.append([b, a, bottom])
+    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _subdivided_tetrahedron(subdivisions: int) -> tuple[np.ndarray, np.ndarray]:
+    """A tetrahedron (valence-3 corners) optionally subdivided — closed manifold
+    that stresses the valence-3 / fold guard."""
+    verts = [
+        [1.0, 1.0, 1.0],
+        [1.0, -1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        [-1.0, -1.0, 1.0],
+    ]
+    faces = [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]]
+    for _ in range(subdivisions):
+        mid: dict[tuple[int, int], int] = {}
+
+        def midpoint(a: int, b: int) -> int:
+            key = (min(a, b), max(a, b))
+            if key in mid:
+                return mid[key]
+            pa, pb = verts[a], verts[b]
+            m = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2]
+            idx = len(verts)
+            verts.append(m)
+            mid[key] = idx
+            return idx
+
+        new_faces = []
+        for a, b, c in faces:
+            ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+            new_faces += [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]
+        faces = new_faces
+    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def test_qem_input_fixtures_are_closed_manifolds() -> None:
+    # Sanity: every adversarial QEM input starts as a clean closed manifold so a
+    # post-output regression is attributable to the collapser, not the fixture.
+    for vertices, faces in (
+        _icosphere(3),
+        _thin_double_sided_sheet(6),
+        _high_valence_hub(24),
+        _subdivided_tetrahedron(3),
+    ):
+        _assert_closed_manifold(mesh_metrics(vertices, faces))
+
+
+def test_qem_simplifies_icosphere_preserving_closed_manifold() -> None:
+    vertices, faces = _icosphere(3)
+    target = 200
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=target, backend="qem")
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["backend"] == "qem"
+    assert stats["requested_backend"] == "qem"
+    assert stats["algorithm"] == "native_qem_edge_collapse"
+    assert stats["qem_simplification_backend"] == "native-qem-edge-collapse"
+    assert stats["qem_equivalence_status"] == "edge-collapse"
+    assert stats["source_faces"] == faces.shape[0]
+    assert stats["qem_input_faces"] == faces.shape[0]
+    assert stats["target_faces"] == target
+    assert stats["final_faces"] == mesh.faces.shape[0]
+    assert stats["qem_collapses_applied"] > 0
+    assert mesh.faces.shape[0] < faces.shape[0]
+    assert mesh.faces.shape[0] <= target
+    assert stats["target_reached"] is True
+    _assert_closed_manifold(after)
+
+
+def test_qem_simplifies_thin_double_sided_sheet_without_pinch() -> None:
+    vertices, faces = _thin_double_sided_sheet(6)
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=80, backend="qem")
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["backend"] == "qem"
+    assert mesh.faces.shape[0] < faces.shape[0]
+    _assert_closed_manifold(after)
+
+
+def test_qem_simplifies_high_valence_hub_without_tearing() -> None:
+    vertices, faces = _high_valence_hub(24)
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=16, backend="qem")
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["backend"] == "qem"
+    assert mesh.faces.shape[0] <= faces.shape[0]
+    _assert_closed_manifold(after)
+
+
+def test_qem_simplifies_subdivided_tetrahedron_without_fold() -> None:
+    vertices, faces = _subdivided_tetrahedron(3)
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=32, backend="qem")
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["backend"] == "qem"
+    assert mesh.faces.shape[0] < faces.shape[0]
+    _assert_closed_manifold(after)
+
+
+def test_qem_is_deterministic_across_repeated_calls() -> None:
+    vertices, faces = _icosphere(3)
+
+    mesh_a, _ = simplify_mesh(vertices, faces, target_faces=150, backend="qem")
+    mesh_b, _ = simplify_mesh(vertices, faces, target_faces=150, backend="qem")
+
+    np.testing.assert_array_equal(mesh_a.vertices, mesh_b.vertices)
+    np.testing.assert_array_equal(mesh_a.faces, mesh_b.faces)
+
+
+def test_qem_input_already_under_target_returns_cleanly_via_early_return() -> None:
+    vertices, faces = _subdivided_tetrahedron(1)
+    target = faces.shape[0] + 100  # input already <= target
+
+    mesh, stats = simplify_mesh(vertices, faces, target_faces=target, backend="qem")
+    after = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["backend"] == "qem"
+    assert stats["qem_simplification_backend"] == "native-qem-edge-collapse"
+    assert stats["qem_equivalence_status"] == "edge-collapse"
+    assert stats["target_reached"] is True
+    assert stats["simplified"] is False
+    assert stats["qem_collapses_applied"] == 0
+    assert mesh.faces.shape[0] == faces.shape[0]
+    _assert_closed_manifold(after)
+
+
+def test_qem_stats_keyset_matches_clustering_plus_qem_fields() -> None:
+    # M4: the forked qem stat dict's keyset must EQUAL a clustering call's keyset
+    # plus the new qem-specific fields (no clustering field silently dropped).
+    vertices, faces = _icosphere(2)
+
+    _, clustering_stats = simplify_mesh(
+        vertices, faces, target_faces=120, min_component_faces=1, backend="topology-aware"
+    )
+    _, qem_stats = simplify_mesh(
+        vertices, faces, target_faces=120, min_component_faces=1, backend="qem"
+    )
+
+    clustering_keys = set(clustering_stats.keys())
+    qem_keys = set(qem_stats.keys())
+    new_qem_keys = {
+        "qem_collapses_applied",
+        "qem_collapses_rejected_by_guard",
+        "qem_geometric_error_mean",
+        "qem_geometric_error_max",
+        "qem_input_faces",
+    }
+    assert clustering_keys - qem_keys == set()
+    assert qem_keys - clustering_keys == new_qem_keys
