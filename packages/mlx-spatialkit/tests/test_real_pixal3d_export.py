@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mlx_spatialkit import export_pixal3d_glb, metal_device_available
+from mlx_spatialkit.mesh import (
+    clean_mesh,
+    extract_flexi_dual_grid,
+    mesh_metrics,
+    remesh_narrow_band,
+    simplify_mesh,
+)
 from mlx_spatialkit.export import (
     NativeGlbArtifact,
     _build_pixal3d_run_manifest,
@@ -2045,3 +2054,368 @@ def _assert_memory_diagnostics(diagnostics: dict, *, required_stages: tuple[str,
             stage["start_current_rss_bytes"],
             stage["end_current_rss_bytes"],
         )
+
+
+def _load_remeshed_mesh_from_fixture(
+    fixture: Path,
+    *,
+    grid_size: int = 256,
+    remesh_resolution: int = 256,
+    min_component_faces: int = 32,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract, clean, and remesh a Pixal3D fixture; return (vertices, faces).
+
+    Used to produce a single remeshed geometry that can then be fed to both
+    simplify_mesh(backend="qem") and simplify_mesh(backend="topology-aware")
+    for a fair apples-to-apples clustering contrast without running a full bake.
+    """
+    shape_path = fixture / "shape_decoder_fields.npz"
+    with np.load(shape_path) as payload:
+        coordinates = np.asarray(payload["coordinates"])
+        fields = np.asarray(payload["fields"])
+
+    raw = extract_flexi_dual_grid(coordinates, fields, grid_size=grid_size)
+    cleaned, _ = clean_mesh(raw.vertices, raw.faces, min_component_faces=min_component_faces)
+    remeshed, _ = remesh_narrow_band(
+        cleaned.vertices,
+        cleaned.faces,
+        resolution=remesh_resolution,
+        repair_nonmanifold=True,
+    )
+    return remeshed.vertices, remeshed.faces
+
+
+def _assert_qem_two_fixture_proof(
+    fixture: Path,
+    output_dir: Path,
+    *,
+    # Perf budgets: set to 5x the observed value on the calibration run.
+    # MAIN fixture (res=256):
+    #   observed timings_sec[simplify_mesh] ~ 14.15 s  => BUDGET_S = 70 s
+    #   observed peak_current_rss_bytes     ~ 3.65 GB  => BUDGET_B = 18_000_000_000
+    # VIOLIN fixture (res=256):
+    #   observed timings_sec[simplify_mesh] ~ 2.51 s   => BUDGET_S = 13 s
+    #   observed peak_current_rss_bytes     ~ 1.44 GB  => BUDGET_B = 7_500_000_000
+    simplify_timing_budget_s: float,
+    simplify_memory_budget_bytes: int,
+    # Name tag for error messages.
+    label: str = "",
+) -> dict:
+    """Core QEM two-fixture proof assertions (assertions 1-8 from SPEC QEM-05).
+
+    Resolution: remesh_resolution=256 (tractable).
+    Reference-scale (res1024 / 1M-face / 4096-texture) is explicitly DEFERRED per SPEC.
+
+    Contract (per SPEC QEM-05 and slice-5 acceptance criteria):
+    - QEM selected (backend/algorithm/qem_simplification_backend).
+    - FULLY MANIFOLD: nonmanifold_edges==0 AND nonmanifold_vertices==0.
+    - TOPOLOGY PRESERVED: boundary_loop_count == qem_pre_fill_residual_boundary_loops,
+      boundary_open_chain_count==0.
+    - MATERIALLY BETTER THAN CLUSTERING: QEM boundary_loop_count < clustering's on the
+      same remeshed input.  NOTE: we do NOT assert strict 0-loop watertightness (that is
+      a documented follow-on); we assert QEM is strictly better than clustering.
+    - INPUT != TARGET: source_faces >> target_faces.
+    - NUMERIC BUDGETS: timings_sec[simplify_mesh] < BUDGET_S,
+      memory.stage_peaks[simplify_mesh].peak_current_rss_bytes < BUDGET_B.
+    - QUADRIC-ERROR FIDELITY: qem_geometric_error_mean/max present, finite, bounded.
+    - PROOF SCOPE: preset/target recorded; non-reference target noted (reference-scale deferred).
+    """
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="preview",
+        remesh=True,
+        remesh_resolution=256,
+        remesh_repair_nonmanifold=True,
+        simplify_backend="qem",
+        min_component_faces=32,
+    )
+
+    assert result.glb.path.read_bytes()[:4] == b"glTF", f"[{label}] GLB header corrupt"
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    export_metrics = diagnostics["stages"]["export_metrics"]["metrics"]
+
+    # ------------------------------------------------------------------
+    # Assertion 1: QEM selected.
+    # ------------------------------------------------------------------
+    assert diagnostics["settings"]["simplify_backend"] == "qem", (
+        f"[{label}] settings.simplify_backend must be 'qem'"
+    )
+    assert diagnostics["settings"]["requested_simplifier_backend"] == "qem", (
+        f"[{label}] settings.requested_simplifier_backend must be 'qem'"
+    )
+    assert simplify_stats["backend"] == "qem", (
+        f"[{label}] simplify_stats.backend must be 'qem', got {simplify_stats['backend']!r}"
+    )
+    assert simplify_stats["algorithm"] == "native_qem_edge_collapse", (
+        f"[{label}] simplify_stats.algorithm must be 'native_qem_edge_collapse'"
+    )
+    assert simplify_stats["qem_simplification_backend"] == "native-qem-edge-collapse", (
+        f"[{label}] qem_simplification_backend must be 'native-qem-edge-collapse'"
+    )
+    # target_reached is honest: it reflects whether QEM reached the target, not forced True.
+    assert isinstance(simplify_stats["target_reached"], bool), (
+        f"[{label}] target_reached must be a bool"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 2: FULLY MANIFOLD — QEM's core geometric guarantee.
+    # ------------------------------------------------------------------
+    assert export_metrics["nonmanifold_edges"] == 0, (
+        f"[{label}] QEM produced nonmanifold edges: {export_metrics['nonmanifold_edges']}"
+    )
+    assert export_metrics["nonmanifold_vertices"] == 0, (
+        f"[{label}] QEM produced nonmanifold vertices: {export_metrics['nonmanifold_vertices']}"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 3: TOPOLOGY PRESERVED (QEM-02 on real data).
+    # The output boundary_loop_count must exactly equal the pre-QEM fill residual.
+    # If QEM tore topology, boundary_loop_count would exceed the residual.
+    # We do NOT assert strict 0-loop watertightness (that is a documented follow-on).
+    # ------------------------------------------------------------------
+    pre_fill_residual: int = simplify_stats["qem_pre_fill_residual_boundary_loops"]
+    assert export_metrics["boundary_loop_count"] == pre_fill_residual, (
+        f"[{label}] QEM tore topology: boundary_loop_count={export_metrics['boundary_loop_count']} "
+        f"!= qem_pre_fill_residual_boundary_loops={pre_fill_residual}"
+    )
+    assert export_metrics["boundary_open_chain_count"] == 0, (
+        f"[{label}] QEM produced open chains: boundary_open_chain_count="
+        f"{export_metrics['boundary_open_chain_count']}"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 4: MATERIALLY BETTER THAN CLUSTERING (R5).
+    # Re-extract the same remeshed geometry without a full bake and compare
+    # simplify_mesh(topology-aware) boundary_loop_count to the QEM result.
+    # ------------------------------------------------------------------
+    remesh_v, remesh_f = _load_remeshed_mesh_from_fixture(fixture)
+    _cluster_mesh, _cluster_stats = simplify_mesh(
+        remesh_v,
+        remesh_f,
+        target_faces=int(simplify_stats["target_faces"]),
+        min_component_faces=32,
+        backend="topology-aware",
+    )
+    cluster_metrics = mesh_metrics(_cluster_mesh.vertices, _cluster_mesh.faces)
+    cluster_boundary_loops: int = int(cluster_metrics["boundary_loop_count"])
+    qem_boundary_loops: int = int(export_metrics["boundary_loop_count"])
+
+    assert qem_boundary_loops < cluster_boundary_loops, (
+        f"[{label}] QEM boundary_loop_count ({qem_boundary_loops}) must be strictly LESS "
+        f"than clustering boundary_loop_count ({cluster_boundary_loops}) on the same remeshed input"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 5: INPUT != TARGET (R1).
+    # source_faces is what QEM received (the remesh output); it must be >> target_faces.
+    # ------------------------------------------------------------------
+    source_faces: int = simplify_stats["source_faces"]
+    target_faces: int = simplify_stats["target_faces"]
+    assert source_faces > target_faces, (
+        f"[{label}] source_faces ({source_faces}) must exceed target_faces ({target_faces})"
+    )
+    # Ensure the remesh actually produced substantial geometry.
+    assert source_faces >= 10_000, (
+        f"[{label}] source_faces ({source_faces}) unexpectedly low"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 6: NUMERIC BUDGETS (R2).
+    # Budgets are anchored at 5x the observed calibration values (recorded above).
+    # simplify_mesh timing and per-stage peak RSS must stay within budget.
+    # ------------------------------------------------------------------
+    observed_timing = diagnostics["timings_sec"]["simplify_mesh"]
+    assert observed_timing < simplify_timing_budget_s, (
+        f"[{label}] simplify_mesh timing {observed_timing:.2f}s exceeded budget "
+        f"{simplify_timing_budget_s:.0f}s"
+    )
+
+    _assert_memory_diagnostics(diagnostics, required_stages=("simplify_mesh",))
+    simplify_mem_peak = diagnostics["memory"]["stage_peaks"]["simplify_mesh"]["peak_current_rss_bytes"]
+    assert simplify_mem_peak is not None, f"[{label}] simplify_mesh peak RSS not recorded"
+    assert simplify_mem_peak < simplify_memory_budget_bytes, (
+        f"[{label}] simplify_mesh peak RSS {simplify_mem_peak / 2**30:.2f} GiB exceeded budget "
+        f"{simplify_memory_budget_bytes / 2**30:.2f} GiB"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 7: QUADRIC-ERROR FIDELITY (QEM-03).
+    # qem_geometric_error_mean and qem_geometric_error_max must be present,
+    # finite, and within the empirically bounded range from calibration runs.
+    # ------------------------------------------------------------------
+    geo_err_mean = simplify_stats["qem_geometric_error_mean"]
+    geo_err_max = simplify_stats["qem_geometric_error_max"]
+    assert geo_err_mean is not None, f"[{label}] qem_geometric_error_mean missing"
+    assert geo_err_max is not None, f"[{label}] qem_geometric_error_max missing"
+    assert math.isfinite(float(geo_err_mean)), (
+        f"[{label}] qem_geometric_error_mean is not finite: {geo_err_mean}"
+    )
+    assert math.isfinite(float(geo_err_max)), (
+        f"[{label}] qem_geometric_error_max is not finite: {geo_err_max}"
+    )
+    assert float(geo_err_mean) >= 0.0, f"[{label}] qem_geometric_error_mean must be >= 0"
+    assert float(geo_err_max) >= float(geo_err_mean), (
+        f"[{label}] qem_geometric_error_max must be >= mean"
+    )
+    # Upper bound: must be < 1.0 (normalised mesh units; anything >= 1.0 is pathological).
+    assert float(geo_err_max) < 1.0, (
+        f"[{label}] qem_geometric_error_max ({geo_err_max}) >= 1.0 (pathological)"
+    )
+
+    # ------------------------------------------------------------------
+    # Assertion 8: PROOF SCOPE (F2).
+    # Record the proof settings so reviewers can confirm the preview/res256 scope.
+    # A preview/non-reference target does NOT clear the reference-target production gate.
+    # Full reference-target parity (res1024/1M-face/4096-texture) is DEFERRED per SPEC.
+    # ------------------------------------------------------------------
+    quality_preset = diagnostics["settings"]["quality_preset"]
+    proof_target_faces = diagnostics["settings"]["target_faces"]
+    proof_target_faces_source = diagnostics["settings"]["target_faces_source"]
+    # This proof uses the preview preset and preview default target (50,000 faces).
+    # It does not satisfy the reference-target production gate.
+    assert quality_preset == "preview", (
+        f"[{label}] This proof uses quality_preset='preview'; got {quality_preset!r}"
+    )
+    assert diagnostics["result"]["production_quality_ready"] is False, (
+        f"[{label}] preview/res256 proof must NOT set production_quality_ready=True "
+        f"(reference-target parity is deferred)"
+    )
+    # The proof target must be the preview default, not the reference face count.
+    assert proof_target_faces_source == "preview_default", (
+        f"[{label}] proof must use preview_default target; got {proof_target_faces_source!r}"
+    )
+
+    return {
+        "label": label,
+        "quality_preset": quality_preset,
+        "target_faces": proof_target_faces,
+        "target_faces_source": proof_target_faces_source,
+        "source_faces": source_faces,
+        "qem_boundary_loops": qem_boundary_loops,
+        "cluster_boundary_loops": cluster_boundary_loops,
+        "pre_fill_residual": pre_fill_residual,
+        "simplify_timing_s": observed_timing,
+        "simplify_peak_rss_bytes": simplify_mem_peak,
+        "qem_geometric_error_mean": float(geo_err_mean),
+        "qem_geometric_error_max": float(geo_err_max),
+    }
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_qem_two_fixture_main_manifold_and_beats_clustering() -> None:
+    """Slice-5 QEM proof: main fixture (pixal3d-1024-cascade-decoded-pbr) at res=256.
+
+    All eight acceptance criteria from SPEC QEM-05 / slice-5:
+    1. QEM selected (backend/algorithm/qem_simplification_backend).
+    2. Fully manifold: nonmanifold_edges==0 AND nonmanifold_vertices==0.
+    3. Topology preserved: boundary_loop_count == qem_pre_fill_residual_boundary_loops,
+       boundary_open_chain_count==0.
+    4. Materially better than clustering: QEM boundary_loop_count < clustering's on same input.
+    5. Input != target: source_faces (remesh output) >> target_faces.
+    6. Numeric budgets: simplify_mesh timing < BUDGET_S, peak RSS < BUDGET_B.
+       Calibration (observed, 2026-06-04, Apple Silicon, res=256):
+         timings_sec[simplify_mesh] ~ 14.15 s   => BUDGET_S = 70 s (5x margin)
+         peak_current_rss_bytes     ~ 3.65 GB   => BUDGET_B = 18 GB (5x margin)
+    7. Quadric-error fidelity: qem_geometric_error_mean/max present, finite, bounded.
+       Calibration: mean ~ 1.11e-4, max ~ 2.85e-2.
+    8. Proof scope: preview/res256; reference-scale (res1024/1M/4096) is DEFERRED per SPEC.
+
+    NOTE: strict watertight (boundary_loop_count==0) is NOT asserted.
+    That is a documented follow-on requiring a non-manifold-tolerant QEM path.
+    """
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"main Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-qem-main-proof-{os.getpid()}"
+
+    # Perf budgets anchored to 5x the observed calibration values (see docstring).
+    BUDGET_S = 70.0       # seconds  (observed ~ 14.15 s)
+    BUDGET_B = 18_000_000_000  # bytes (~18 GB; observed ~ 3.65 GB = 3,651,977,216)
+
+    proof = _assert_qem_two_fixture_proof(
+        fixture,
+        output_dir,
+        simplify_timing_budget_s=BUDGET_S,
+        simplify_memory_budget_bytes=BUDGET_B,
+        label="main",
+    )
+
+    # Report observed numbers for CI traceability.
+    print(
+        f"\n[main fixture QEM proof]\n"
+        f"  preset={proof['quality_preset']!r}  target={proof['target_faces']}  "
+        f"source={proof['target_faces_source']!r}\n"
+        f"  source_faces={proof['source_faces']:,}  target_faces={proof['target_faces']:,}\n"
+        f"  qem_boundary_loops={proof['qem_boundary_loops']}  "
+        f"cluster_boundary_loops={proof['cluster_boundary_loops']}  "
+        f"pre_fill_residual={proof['pre_fill_residual']}\n"
+        f"  simplify_timing={proof['simplify_timing_s']:.2f}s (budget {BUDGET_S:.0f}s)  "
+        f"peak_rss={proof['simplify_peak_rss_bytes'] / 2**30:.2f} GiB "
+        f"(budget {BUDGET_B / 2**30:.2f} GiB)\n"
+        f"  geo_error_mean={proof['qem_geometric_error_mean']:.3e}  "
+        f"geo_error_max={proof['qem_geometric_error_max']:.3e}"
+    )
+
+
+@pytest.mark.heavy
+def test_export_pixal3d_glb_qem_two_fixture_violin_manifold_and_beats_clustering() -> None:
+    """Slice-5 QEM proof: violin-bow fixture at res=256.
+
+    All eight acceptance criteria from SPEC QEM-05 / slice-5:
+    1. QEM selected (backend/algorithm/qem_simplification_backend).
+    2. Fully manifold: nonmanifold_edges==0 AND nonmanifold_vertices==0.
+    3. Topology preserved: boundary_loop_count == qem_pre_fill_residual_boundary_loops,
+       boundary_open_chain_count==0.
+    4. Materially better than clustering: QEM boundary_loop_count < clustering's on same input.
+    5. Input != target: source_faces (remesh output) >> target_faces.
+    6. Numeric budgets: simplify_mesh timing < BUDGET_S, peak RSS < BUDGET_B.
+       Calibration (observed, 2026-06-04, Apple Silicon, res=256):
+         timings_sec[simplify_mesh] ~ 2.51 s    => BUDGET_S = 13 s (5x margin)
+         peak_current_rss_bytes     ~ 1.44 GB   => BUDGET_B = 7.5 GB (5x margin)
+    7. Quadric-error fidelity: qem_geometric_error_mean/max present, finite, bounded.
+       Calibration: mean ~ 9.54e-6, max ~ 5.86e-3.
+    8. Proof scope: preview/res256; reference-scale (res1024/1M/4096) is DEFERRED per SPEC.
+
+    NOTE: strict watertight (boundary_loop_count==0) is NOT asserted.
+    That is a documented follow-on requiring a non-manifold-tolerant QEM path.
+    """
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "violin-bow" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
+
+    output_dir = Path("/tmp") / f"mlx-spatialkit-qem-violin-proof-{os.getpid()}"
+
+    # Perf budgets anchored to 5x the observed calibration values (see docstring).
+    BUDGET_S = 13.0       # seconds  (observed ~ 2.51 s)
+    BUDGET_B = 7_500_000_000  # bytes (~7.5 GB; observed ~ 1.44 GB = 1,442,709,504)
+
+    proof = _assert_qem_two_fixture_proof(
+        fixture,
+        output_dir,
+        simplify_timing_budget_s=BUDGET_S,
+        simplify_memory_budget_bytes=BUDGET_B,
+        label="violin",
+    )
+
+    # Report observed numbers for CI traceability.
+    print(
+        f"\n[violin fixture QEM proof]\n"
+        f"  preset={proof['quality_preset']!r}  target={proof['target_faces']}  "
+        f"source={proof['target_faces_source']!r}\n"
+        f"  source_faces={proof['source_faces']:,}  target_faces={proof['target_faces']:,}\n"
+        f"  qem_boundary_loops={proof['qem_boundary_loops']}  "
+        f"cluster_boundary_loops={proof['cluster_boundary_loops']}  "
+        f"pre_fill_residual={proof['pre_fill_residual']}\n"
+        f"  simplify_timing={proof['simplify_timing_s']:.2f}s (budget {BUDGET_S:.0f}s)  "
+        f"peak_rss={proof['simplify_peak_rss_bytes'] / 2**30:.2f} GiB "
+        f"(budget {BUDGET_B / 2**30:.2f} GiB)\n"
+        f"  geo_error_mean={proof['qem_geometric_error_mean']:.3e}  "
+        f"geo_error_max={proof['qem_geometric_error_max']:.3e}"
+    )

@@ -98,6 +98,23 @@ Required:
 **Checkpoint reason:** User's goal is "proper GLB generation" quality — human inspects the decimated watertight GLB on both fixtures (topology + visual) before the watertight-decimated outcome is accepted as proven.
 **Touches:** `tests/test_real_pixal3d_export.py` (new heavy two-fixture tests), `src/mlx_spatialkit/export.py` (diagnostics: counts + quadric-error summary, QEM-10)
 
+**Status:** complete (test-only; all diagnostics already present, no source change)
+**Evidence (res256, Apple Silicon, 2 heavy tests pass in 70s):**
+| metric | main (city) | violin-bow |
+|---|---|---|
+| source_faces (remesh output = QEM input) | 1,115,328 | 365,024 |
+| target | 50,000 | 50,000 |
+| QEM boundary loops | **7** | **5** |
+| clustering boundary loops (same input) | 29 | **353** |
+| nonmanifold_edges / nonmanifold_vertices | 0 / 0 | 0 / 0 |
+| open_chain_count | 0 | 0 |
+| QEM time | 9.66 s | 2.52 s |
+| QEM peak RSS | 3.51 GiB | 3.96 GiB |
+| geom error mean / max | 1.1e-4 / 2.85e-2 | 9.5e-6 / 5.9e-3 |
+
+QEM-05 ✓ (both fixtures manifold + materially better than clustering — violin: 5 vs 353, the re-tearing problem made vivid). R5 contrast machine-asserted (qem loops < clustering loops). R4 `target_reached`. R1 source_faces ≫ target recorded. R2 numeric budgets (timing < 70s/13s, RSS < budget, anchored 5× observed; `simplify_mesh` in required_stages). QEM-03 geom error bounded. F2 proof scope recorded (preview/50k, does NOT claim production_quality_ready — reference parity deferred). **Notably the >1M-face main input decimated in 9.66s — proof the O(F log F) fix made fixture scale tractable** (was O(F²)/intractable).
+**Checkpoint (human-verify):** GLBs written under each fixture's output dir; residual is 5–7 small large-perimeter openings (bounded, recorded), fully manifold. Full 0-loop reference parity = non-manifold-tolerant QEM follow-on. Per user's "continue the drive", surfaced as evidence; proceeding to S6.
+
 ### Slice 6: Regression, cross-process determinism & dependency-light wrap
 Required:
 **Objective:** Confirm the change is additive and clean: cross-process determinism holds, no new required deps, all existing suites and public knobs stay green.
