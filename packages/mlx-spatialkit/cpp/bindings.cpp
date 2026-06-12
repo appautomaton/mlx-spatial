@@ -8,6 +8,7 @@
 #include "pixal3d_contracts.hpp"
 #include "remesh.hpp"
 #include "texture_bake.hpp"
+#include "uv_metrics.hpp"
 
 namespace nb = nanobind;
 
@@ -88,6 +89,14 @@ NB_MODULE(_native, module) {
              nb::arg("chart_angle_degrees") = 45.0,
              nb::arg("tile_padding") = 0.04,
              "Create a deterministic native chart UV mesh.");
+
+  module.def("uv_quality_metrics",
+             &mlx_spatialkit::uv_quality_metrics,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("chart_ids") = nb::none(),
+             "Return report-only UV quality metrics: overlaps, flips, Sander stretch, utilization.");
 
   module.def("textured_glb_payload",
              &mlx_spatialkit::textured_glb_payload,

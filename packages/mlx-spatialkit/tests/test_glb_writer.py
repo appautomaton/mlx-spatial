@@ -14,6 +14,7 @@ from mlx_spatialkit import (
     textured_glb_payload,
     write_textured_glb,
 )
+from mlx_spatialkit._native import uv_quality_metrics
 from glb_texture_utils import glb_image_payload, png_coverage
 
 
@@ -656,3 +657,213 @@ def test_textured_glb_payload_rejects_huge_logical_texture_before_copying() -> N
             base_color_rgba=huge_base_color,
             metallic_roughness=metallic_roughness,
         )
+
+
+def _uv_metrics_grid_mesh(n: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    axis = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    grid_x, grid_y = np.meshgrid(axis, axis, indexing="ij")
+    vertices = np.stack(
+        [grid_x.ravel(), grid_y.ravel(), np.zeros(n * n, dtype=np.float32)],
+        axis=1,
+    ).astype(np.float32)
+    faces = []
+    for i in range(n - 1):
+        for j in range(n - 1):
+            a = i * n + j
+            b = (i + 1) * n + j
+            c = i * n + j + 1
+            d = (i + 1) * n + j + 1
+            faces.append([a, b, c])
+            faces.append([c, b, d])
+    return vertices, np.array(faces, dtype=np.int64)
+
+
+def _uv_metrics_overlap_fixture() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int64)
+    uvs = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.25, 0.25],
+            [1.25, 0.25],
+            [0.25, 1.25],
+        ],
+        dtype=np.float32,
+    )
+    return vertices, faces, uvs
+
+
+def test_uv_metrics_clean_grid_has_no_overlaps_or_flips() -> None:
+    vertices, faces = _uv_metrics_grid_mesh()
+    uvs = vertices[:, :2].copy()
+
+    metrics = uv_quality_metrics(vertices, faces, uvs)
+
+    assert metrics["uv_overlap_count"] == 0
+    assert metrics["uv_flipped_count"] == 0
+    assert metrics["uv_degenerate_count"] == 0
+    assert metrics["uv_overlap_checked_pairs"] >= 0
+    assert metrics["uv_total_area"] == pytest.approx(1.0)
+    assert metrics["uv_bbox_utilization"] == pytest.approx(1.0)
+    assert metrics["uv_stretch_l2"] == pytest.approx(1.0, rel=1e-6)
+    assert metrics["uv_stretch_linf"] == pytest.approx(1.0, rel=1e-6)
+
+
+def test_uv_metrics_counts_overlapping_uv_triangles() -> None:
+    vertices, faces, uvs = _uv_metrics_overlap_fixture()
+
+    metrics = uv_quality_metrics(vertices, faces, uvs)
+
+    assert metrics["uv_overlap_count"] == 1
+    assert metrics["uv_overlap_checked_pairs"] >= 1
+    assert metrics["uv_flipped_count"] == 0
+    assert metrics["uv_degenerate_count"] == 0
+
+
+def test_uv_metrics_overlap_dedup_counts_each_pair_once_across_shared_cells() -> None:
+    # Three identical atlas-spanning triangles plus four tiny well-separated
+    # triangles inside them.  The tiny extents drag the median-based cell size
+    # down, so each big triangle occupies every grid cell and every big-big /
+    # big-tiny pair co-occupies many cells.  The dedup must still check each
+    # unordered pair exactly once: 3 big-big + 3*4 big-tiny = 15 pairs, all of
+    # which genuinely overlap; the tiny triangles share no cells (and do not
+    # overlap) with each other.
+    big_uv = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    tiny_offsets = [(0.02, 0.02), (0.32, 0.02), (0.02, 0.32), (0.32, 0.32)]
+    uv_rows: list[tuple[float, float]] = []
+    for _ in range(3):
+        uv_rows.extend(big_uv)
+    for x, y in tiny_offsets:
+        uv_rows.extend([(x, y), (x + 0.06, y), (x, y + 0.06)])
+    uvs = np.array(uv_rows, dtype=np.float32)
+    vertices = np.array(
+        [[u, v, float(i // 3)] for i, (u, v) in enumerate(uv_rows)],
+        dtype=np.float32,
+    )
+    faces = np.arange(len(uv_rows), dtype=np.int64).reshape(-1, 3)
+
+    metrics = uv_quality_metrics(vertices, faces, uvs)
+
+    assert metrics["uv_overlap_checked_pairs"] == 15
+    assert metrics["uv_overlap_count"] == 15
+    assert metrics["uv_flipped_count"] == 0
+    assert metrics["uv_degenerate_count"] == 0
+
+    repeat = uv_quality_metrics(vertices, faces, uvs)
+    assert repeat["uv_overlap_checked_pairs"] == 15
+    assert repeat["uv_overlap_count"] == 15
+
+
+def test_uv_metrics_counts_mirrored_uv_triangle_as_flipped() -> None:
+    vertices = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2]], dtype=np.int64)
+    mirrored_uvs = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+
+    metrics = uv_quality_metrics(vertices, faces, mirrored_uvs)
+
+    assert metrics["uv_flipped_count"] == 1
+    assert metrics["uv_overlap_count"] == 0
+    assert metrics["uv_total_area"] == pytest.approx(0.5)
+    assert metrics["uv_bbox_utilization"] == pytest.approx(0.5)
+
+    clean_uvs = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    clean = uv_quality_metrics(vertices, faces, clean_uvs)
+    assert clean["uv_flipped_count"] == 0
+
+
+def test_uv_metrics_isotropic_stretch_matches_scale() -> None:
+    vertices, faces = _uv_metrics_grid_mesh()
+    scale = 2.0
+    uvs = (vertices[:, :2] / scale).astype(np.float32)
+
+    metrics = uv_quality_metrics(vertices, faces, uvs)
+
+    assert metrics["uv_stretch_l2"] == pytest.approx(scale, rel=1e-6)
+    assert metrics["uv_stretch_linf"] == pytest.approx(scale, rel=1e-6)
+
+
+def test_uv_metrics_anisotropic_stretch_reports_max_singular_value() -> None:
+    vertices, faces = _uv_metrics_grid_mesh()
+    squash = 4.0
+    uvs = vertices[:, :2].copy()
+    uvs[:, 0] /= squash
+
+    metrics = uv_quality_metrics(vertices, faces, uvs)
+
+    assert metrics["uv_stretch_linf"] == pytest.approx(squash, rel=1e-6)
+    assert metrics["uv_stretch_l2"] == pytest.approx(
+        np.sqrt((squash**2 + 1.0) / 2.0), rel=1e-6
+    )
+
+
+def _uv_metrics_two_chart_fixture() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [3.0, 1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [2, 1, 3], [4, 5, 6], [6, 5, 7]], dtype=np.int64)
+    uvs = np.array(
+        [
+            [0.0, 0.0],
+            [0.5, 0.0],
+            [0.0, 0.5],
+            [0.5, 0.5],
+            [0.6, 0.0],
+            [0.85, 0.0],
+            [0.6, 0.25],
+            [0.85, 0.25],
+        ],
+        dtype=np.float32,
+    )
+    chart_ids = np.array([0, 0, 1, 1], dtype=np.int64)
+    return vertices, faces, uvs, chart_ids
+
+
+def test_uv_metrics_per_chart_stretch_breakdown() -> None:
+    vertices, faces, uvs, chart_ids = _uv_metrics_two_chart_fixture()
+
+    metrics = uv_quality_metrics(vertices, faces, uvs, chart_ids=chart_ids)
+
+    assert metrics["chart_ids_present"] == [0, 1]
+    assert metrics["chart_stretch_l2"] == pytest.approx([2.0, 4.0], rel=1e-6)
+    assert metrics["chart_stretch_linf"] == pytest.approx([2.0, 4.0], rel=1e-6)
+    assert metrics["uv_stretch_linf"] == pytest.approx(4.0, rel=1e-6)
+    assert metrics["uv_flipped_count"] == 0
+    assert metrics["uv_degenerate_count"] == 0
+    assert metrics["uv_overlap_count"] == 0
+
+
+def test_uv_metrics_repeat_calls_are_deterministic() -> None:
+    vertices, faces, uvs = _uv_metrics_overlap_fixture()
+    first = uv_quality_metrics(vertices, faces, uvs)
+    second = uv_quality_metrics(vertices, faces, uvs)
+    assert first == second
+
+    chart_vertices, chart_faces, chart_uvs, chart_ids = _uv_metrics_two_chart_fixture()
+    chart_first = uv_quality_metrics(chart_vertices, chart_faces, chart_uvs, chart_ids=chart_ids)
+    chart_second = uv_quality_metrics(chart_vertices, chart_faces, chart_uvs, chart_ids=chart_ids)
+    assert chart_first == chart_second

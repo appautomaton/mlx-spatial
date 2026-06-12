@@ -75,6 +75,7 @@ nanobind_add_module(
   cpp/pixal3d_contracts.cpp
   cpp/simplify.cpp
   cpp/remesh.cpp
+  cpp/uv_metrics.cpp
   metal/texture_bake.mm
 )
 

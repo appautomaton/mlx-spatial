@@ -1,8 +1,7 @@
 {
-  "active_change": "2026-05-29-mlx-spatialkit-qem-edge-collapse",
-  "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-29-mlx-spatialkit-qem-edge-collapse/SPEC.md",
-  "canonical_design": ".agent/work/2026-05-29-mlx-spatialkit-qem-edge-collapse/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-05-29-mlx-spatialkit-qem-edge-collapse/PLAN.md",
-  "engineering_review": "approved_with_risks"
+  "active_change": "2026-06-11-mlx-spatialkit-xatlas-uv-unwrap",
+  "stage": "execute",
+  "canonical_spec": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/SPEC.md",
+  "canonical_design": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/PLAN.md"
 }
