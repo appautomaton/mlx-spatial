@@ -396,6 +396,30 @@ def _metrics_block(
     if unassigned_faces and present and int(present[-1]) == int(chart_count):
         chart_stretch_l2 = chart_stretch_l2[:-1]
         chart_stretch_linf = chart_stretch_linf[:-1]
+
+    # Scale-free per-chart stretch: l2_c * sqrt(Auv_c / A3d_c) >= 1, with 1 ==
+    # isometric. This is the cross-pipeline parity signal: the raw l2 above
+    # carries the atlas packing scale, which differs between the oracle's
+    # packed [0,1] output and a chart-local native parameterization.
+    uv_tris = np.asarray(uvs, dtype=np.float64)[np.asarray(faces)]
+    uv_signed = 0.5 * (
+        (uv_tris[:, 1, 0] - uv_tris[:, 0, 0]) * (uv_tris[:, 2, 1] - uv_tris[:, 0, 1])
+        - (uv_tris[:, 2, 0] - uv_tris[:, 0, 0]) * (uv_tris[:, 1, 1] - uv_tris[:, 0, 1])
+    )
+    p_tris = np.asarray(vertices_3d, dtype=np.float64)[np.asarray(faces)]
+    a3d = 0.5 * np.linalg.norm(
+        np.cross(p_tris[:, 1] - p_tris[:, 0], p_tris[:, 2] - p_tris[:, 0]), axis=1
+    )
+    measurable = (uv_signed > 1e-12) & (a3d > 0.0)
+    chart_stretch_l2_normalized = []
+    for chart, raw_l2 in enumerate(chart_stretch_l2):
+        in_chart = measurable & (np.asarray(face_chart_ids) == chart)
+        auv = float(uv_signed[in_chart].sum())
+        a3 = float(a3d[in_chart].sum())
+        if raw_l2 > 0.0 and auv > 0.0 and a3 > 0.0:
+            chart_stretch_l2_normalized.append(raw_l2 * math.sqrt(auv / a3))
+        else:
+            chart_stretch_l2_normalized.append(0.0)  # sentinel, excluded below
     output_vertices = int(vertices_3d.shape[0])
     block = {
         "chart_count": int(chart_count),
@@ -414,6 +438,7 @@ def _metrics_block(
         "degenerate_unassigned_faces": unassigned_faces,
         "chart_stretch_l2_summary": _stretch_summary(chart_stretch_l2),
         "chart_stretch_linf_summary": _stretch_summary(chart_stretch_linf),
+        "chart_stretch_l2_normalized_summary": _stretch_summary(chart_stretch_l2_normalized),
     }
     log(f"[{name}] {label}: charts={block['chart_count']} "
         f"atlas_util={block['atlas_utilization']:.4f} "

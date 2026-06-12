@@ -2542,3 +2542,151 @@ def test_reference_uv_chart_growth_parity_violin_fixture() -> None:
         pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
     summary = _assert_chart_growth_parity_against_oracle(fixture, "violin_bow")
     print(f"\n[violin chart-growth parity] {summary}")
+
+
+def _assert_parameterization_invariants_and_stretch_parity(
+    fixture: Path, anchor_name: str
+) -> dict:
+    """Slice-5 heavy: zero-overlap/zero-flip invariant + stretch parity.
+
+    Full native pipeline (stage-A production knobs -> stage-B growth ->
+    parameterize: projection / LSCM / targeted-split repair), then:
+      1. INVARIANT: zero flipped faces (native recount) and zero intra-chart
+         UV overlaps, cross-checked per chart via uv_quality_metrics with
+         per-chart centering (float32-safe), never trusted from builder
+         counters alone (UVU-04).
+      2. STRETCH PARITY: scale-free per-chart stretch (l2 * sqrt(Auv/A3d))
+         mean and p95 must not exceed 1.25x the pip-xatlas oracle's
+         chart_stretch_l2_normalized_summary (UVU-04; measured 2026-06-12:
+         ours p95 ~1.1 vs oracle 3.06 (main) / 1.97 (violin) — we are
+         substantially better, the band guards regression).
+      3. Repair stays bounded: shattered single-face charts < 25% of output
+         charts (the targeted-split fix; blind bisection produced >50%).
+    """
+    import json
+    import math as _math
+
+    from mlx_spatialkit._native import (
+        compute_uv_charts,
+        grow_uv_charts,
+        parameterize_uv_charts,
+        uv_quality_metrics,
+    )
+
+    anchors_path = Path(__file__).resolve().parent / "data" / "uv_oracle_anchors.json"
+    oracle = json.loads(anchors_path.read_text())["fixtures"][anchor_name]
+
+    remesh_v, remesh_f = _load_remeshed_mesh_from_fixture(fixture)
+    simplified, stats = simplify_mesh(
+        remesh_v, remesh_f, target_faces=50_000, min_component_faces=32, backend="qem")
+    assert stats["backend"] == "qem"
+    vertices = np.ascontiguousarray(simplified.vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(simplified.faces, dtype=np.int64)
+
+    stage_a = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=_math.radians(90.0),
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001)
+    grown = grow_uv_charts(
+        vertices, faces,
+        cluster_ids=np.ascontiguousarray(np.asarray(stage_a["chart_ids"]), dtype=np.int64))
+    result = parameterize_uv_charts(
+        vertices, faces,
+        np.ascontiguousarray(np.asarray(grown["chart_ids"]), dtype=np.int64))
+
+    # 1. Invariants.
+    assert result["uv_flipped_count"] == 0, f"[{anchor_name}] flipped faces in final UVs"
+    assert result["lscm_unconverged_count"] == 0, f"[{anchor_name}] LSCM failed to converge"
+    chart_ids = np.asarray(result["chart_ids"])
+    assert (chart_ids >= 0).all()
+    corner_uvs = np.asarray(result["corner_uvs"]).reshape(faces.shape[0], 3, 2)
+    total_overlap = 0
+    total_flip = 0
+    for chart in range(result["chart_count"]):
+        mask = chart_ids == chart
+        sub_faces = faces[mask]
+        sub_uvs = corner_uvs[mask]
+        sub_uvs = sub_uvs - sub_uvs.reshape(-1, 2).mean(axis=0)  # float32-safe
+        corner_positions = vertices[sub_faces].reshape(-1, 3).astype(np.float32)
+        corner_faces = np.arange(sub_faces.shape[0] * 3, dtype=np.int64).reshape(-1, 3)
+        metrics = uv_quality_metrics(
+            corner_positions, corner_faces,
+            np.ascontiguousarray(sub_uvs.reshape(-1, 2), dtype=np.float32))
+        total_overlap += metrics["uv_overlap_count"]
+        total_flip += metrics["uv_flipped_count"]
+    assert total_overlap == 0, f"[{anchor_name}] intra-chart UV overlaps: {total_overlap}"
+    assert total_flip == 0, f"[{anchor_name}] cross-checked flipped faces: {total_flip}"
+
+    # 2. Scale-free stretch parity vs oracle.
+    uv_signed = 0.5 * (
+        (corner_uvs[:, 1, 0] - corner_uvs[:, 0, 0]) * (corner_uvs[:, 2, 1] - corner_uvs[:, 0, 1])
+        - (corner_uvs[:, 2, 0] - corner_uvs[:, 0, 0]) * (corner_uvs[:, 1, 1] - corner_uvs[:, 0, 1])
+    )
+    tri = vertices[faces].astype(np.float64)
+    a3d = 0.5 * np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1)
+    chart_l2 = np.asarray(result["chart_stretch_l2"])
+    measurable = (uv_signed > 1e-12) & (a3d > 0.0)
+    normalized = []
+    for chart in range(result["chart_count"]):
+        in_chart = measurable & (chart_ids == chart)
+        auv = float(uv_signed[in_chart].sum())
+        a3 = float(a3d[in_chart].sum())
+        if chart_l2[chart] > 0.0 and auv > 0.0 and a3 > 0.0:
+            normalized.append(chart_l2[chart] * _math.sqrt(auv / a3))
+    normalized = np.asarray(normalized)
+    oracle_summary = oracle["per_cluster_composition"]["chart_stretch_l2_normalized_summary"]
+    ours_mean = float(normalized.mean())
+    ours_p95 = float(np.percentile(normalized, 95))
+    assert ours_mean <= 1.25 * oracle_summary["mean"], (
+        f"[{anchor_name}] normalized stretch mean {ours_mean:.3f} exceeds "
+        f"1.25x oracle {oracle_summary['mean']:.3f}"
+    )
+    assert ours_p95 <= 1.25 * oracle_summary["p95"], (
+        f"[{anchor_name}] normalized stretch p95 {ours_p95:.3f} exceeds "
+        f"1.25x oracle {oracle_summary['p95']:.3f}"
+    )
+
+    # 3. Repair bounded.
+    shatter_fraction = result["shattered_face_chart_count"] / max(result["chart_count"], 1)
+    assert shatter_fraction < 0.25, (
+        f"[{anchor_name}] shattered fraction {shatter_fraction:.3f} >= 0.25"
+    )
+    return {
+        "chart_count": result["chart_count"],
+        "projected": result["projected_chart_count"],
+        "projection_fallback": result["projection_fallback_chart_count"],
+        "lscm": result["lscm_chart_count"],
+        "shattered": result["shattered_face_chart_count"],
+        "stretch_mean": ours_mean,
+        "stretch_p95": ours_p95,
+        "oracle_mean": oracle_summary["mean"],
+        "oracle_p95": oracle_summary["p95"],
+    }
+
+
+@pytest.mark.heavy
+def test_reference_uv_param_overlap_and_stretch_parity_main_fixture() -> None:
+    """Slice-5 heavy: zero-overlap invariant + stretch parity (main)."""
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"main Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_parameterization_invariants_and_stretch_parity(fixture, "main")
+    print(f"\n[main parameterization invariants+parity] {summary}")
+
+
+@pytest.mark.heavy
+def test_reference_uv_param_overlap_and_stretch_parity_violin_fixture() -> None:
+    """Slice-5 heavy: zero-overlap invariant + stretch parity (violin-bow)."""
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = (
+        _repo_root() / "inputs" / "mlx-spatialkit" / "violin-bow"
+        / "pixal3d-1024-cascade-decoded-pbr"
+    )
+    if not fixture.exists():
+        pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_parameterization_invariants_and_stretch_parity(fixture, "violin_bow")
+    print(f"\n[violin parameterization invariants+parity] {summary}")

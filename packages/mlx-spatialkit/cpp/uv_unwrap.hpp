@@ -56,4 +56,20 @@ nanobind::dict grow_uv_charts(
     double max_chart_area,
     double max_boundary_length);
 
+// Stage B parameterization (slice 5): per-chart final UVs — orthographic
+// projection where it passes flip/overlap/stretch acceptance, LSCM (xatlas
+// computeLeastSquaresConformalMap behavior) otherwise, with deterministic
+// bounded split/shatter repair so every emitted chart is flip-free and
+// interior-overlap-free (chart-local UV space; packing normalizes later).
+// Returns chart_ids (post-split, dense), corner_uvs ([F*3, 2]), per-chart
+// stretch/method arrays, and method/repair counters; uv_flipped_count is an
+// independent recount and must be 0.
+nanobind::dict parameterize_uv_charts(
+    nanobind::object vertices,
+    nanobind::object faces,
+    nanobind::object chart_ids,
+    double projection_linf_threshold,
+    int64_t max_split_depth,
+    int64_t lscm_iteration_factor);
+
 }  // namespace mlx_spatialkit

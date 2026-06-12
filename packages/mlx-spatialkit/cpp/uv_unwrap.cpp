@@ -1904,6 +1904,821 @@ class ChartBuilder {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Stage B parameterization (slice 5): LSCM for charts whose orthographic
+// projection fails the flip/overlap/stretch acceptance, plus bounded
+// split/shatter repair establishing the zero-overlap invariant per chart.
+// Behavior reference: xatlas computeLeastSquaresConformalMap
+// (/tmp/CuMesh/third_party/xatlas/xatlas.cpp:6482) — ABF conformal relations
+// (setup_abf_relations :6424) with the projected-triangle LSCM fallback
+// (:6391), pins from findApproximateDiameterVertices (:6333), solved by
+// OpenNL's Jacobi-preconditioned CG on the normal equations warm-started from
+// the projection (NL_MAX_ITERATIONS = 5*V). Documented deviations:
+//  6. The solver is a matrix-free Jacobi-CG port of OpenNL's path (same
+//     system, same pins, same warm start, tolerance 1e-6), not a line port.
+//  7. Charts that stay invalid after LSCM are repaired by deterministic
+//     longest-axis bisection (depth-capped), then shattered to single-face
+//     charts — the reference has no equivalent (its invalid charts ship);
+//     this is what buys the zero-overlap invariant the SPEC requires.
+//  8. Validity here adds a full interior triangle-overlap SAT check (the
+//     growth phase, like the reference, only tests boundary
+//     self-intersection); eps-touching does not count as overlap.
+// ---------------------------------------------------------------------------
+
+constexpr double kLscmTolerance = 1e-6;
+
+struct ParamOptions {
+  double projection_linf_threshold = 1.25;
+  int64_t max_split_depth = 3;
+  int64_t lscm_iteration_factor = 5;
+  // A valid-but-stretchy projection is kept as the fallback when LSCM fails
+  // validity — but only below this Linf cap; beyond it the chart is split
+  // (unbounded fallback stretch produced fixture charts with Linf > 1000,
+  // wrecking the mean stretch parity while p95 stayed ~1.1).
+  double fallback_linf_cap = 12.5;
+};
+
+// Exact 2D triangle-triangle interior overlap (SAT over the 6 edge normals,
+// eps slack so touching does not count). Triangles given as corner arrays.
+bool triangles_overlap_2d(const std::array<Vec2d, 3> &a, const std::array<Vec2d, 3> &b) {
+  const double eps = 1e-12;
+  const auto separated_by_edges_of = [&](const std::array<Vec2d, 3> &p,
+                                         const std::array<Vec2d, 3> &q) {
+    for (int i = 0; i < 3; ++i) {
+      const Vec2d &e0 = p[static_cast<size_t>(i)];
+      const Vec2d &e1 = p[static_cast<size_t>((i + 1) % 3)];
+      const double nx = -(e1.v - e0.v);
+      const double ny = e1.u - e0.u;
+      double pmin = std::numeric_limits<double>::max();
+      double pmax = std::numeric_limits<double>::lowest();
+      double qmin = std::numeric_limits<double>::max();
+      double qmax = std::numeric_limits<double>::lowest();
+      for (int k = 0; k < 3; ++k) {
+        const double pp = nx * p[static_cast<size_t>(k)].u + ny * p[static_cast<size_t>(k)].v;
+        const double qq = nx * q[static_cast<size_t>(k)].u + ny * q[static_cast<size_t>(k)].v;
+        pmin = std::min(pmin, pp);
+        pmax = std::max(pmax, pp);
+        qmin = std::min(qmin, qq);
+        qmax = std::max(qmax, qq);
+      }
+      const double scale = std::max({std::fabs(pmin), std::fabs(pmax), std::fabs(qmin),
+                                     std::fabs(qmax), 1e-300});
+      if (pmax - qmin <= eps * scale || qmax - pmin <= eps * scale) {
+        return true;  // separating axis (touching counts as separated)
+      }
+    }
+    return false;
+  };
+  return !separated_by_edges_of(a, b) && !separated_by_edges_of(b, a);
+}
+
+// Sparse least-squares row set with locked variables, solved by
+// Jacobi-preconditioned CG on the normal equations (deviation 6).
+class LscmSolver {
+ public:
+  explicit LscmSolver(int64_t variable_count) : variable_count_(variable_count) {}
+
+  void begin_row() { row_starts_.push_back(static_cast<int64_t>(coefficients_.size())); }
+  void coefficient(int64_t variable, double value) {
+    coefficients_.push_back({variable, value});
+  }
+
+  // x: initial values (warm start); locked: mask of locked variables.
+  // Returns false when CG failed to reach the tolerance.
+  bool solve(std::vector<double> &x, const std::vector<bool> &locked, int64_t max_iterations) {
+    row_starts_.push_back(static_cast<int64_t>(coefficients_.size()));
+    const int64_t rows = static_cast<int64_t>(row_starts_.size()) - 1;
+    // b = -A_locked * x_locked per row; unknowns are the free variables.
+    std::vector<double> row_rhs(static_cast<size_t>(rows), 0.0);
+    for (int64_t r = 0; r < rows; ++r) {
+      double rhs = 0.0;
+      for (int64_t c = row_starts_[static_cast<size_t>(r)];
+           c < row_starts_[static_cast<size_t>(r) + 1]; ++c) {
+        const auto &[variable, value] = coefficients_[static_cast<size_t>(c)];
+        if (locked[static_cast<size_t>(variable)]) {
+          rhs -= value * x[static_cast<size_t>(variable)];
+        }
+      }
+      row_rhs[static_cast<size_t>(r)] = rhs;
+    }
+    // Normal equations: M = A_f^T A_f, rhs_n = A_f^T b. Matrix-free apply.
+    const auto apply = [&](const std::vector<double> &in, std::vector<double> &out) {
+      std::fill(out.begin(), out.end(), 0.0);
+      for (int64_t r = 0; r < rows; ++r) {
+        double dot_row = 0.0;
+        for (int64_t c = row_starts_[static_cast<size_t>(r)];
+             c < row_starts_[static_cast<size_t>(r) + 1]; ++c) {
+          const auto &[variable, value] = coefficients_[static_cast<size_t>(c)];
+          if (!locked[static_cast<size_t>(variable)]) {
+            dot_row += value * in[static_cast<size_t>(variable)];
+          }
+        }
+        for (int64_t c = row_starts_[static_cast<size_t>(r)];
+             c < row_starts_[static_cast<size_t>(r) + 1]; ++c) {
+          const auto &[variable, value] = coefficients_[static_cast<size_t>(c)];
+          if (!locked[static_cast<size_t>(variable)]) {
+            out[static_cast<size_t>(variable)] += value * dot_row;
+          }
+        }
+      }
+    };
+    std::vector<double> rhs_n(static_cast<size_t>(variable_count_), 0.0);
+    std::vector<double> diag(static_cast<size_t>(variable_count_), 0.0);
+    for (int64_t r = 0; r < rows; ++r) {
+      for (int64_t c = row_starts_[static_cast<size_t>(r)];
+           c < row_starts_[static_cast<size_t>(r) + 1]; ++c) {
+        const auto &[variable, value] = coefficients_[static_cast<size_t>(c)];
+        if (!locked[static_cast<size_t>(variable)]) {
+          rhs_n[static_cast<size_t>(variable)] += value * row_rhs[static_cast<size_t>(r)];
+          diag[static_cast<size_t>(variable)] += value * value;
+        }
+      }
+    }
+    const auto precondition = [&](const std::vector<double> &in, std::vector<double> &out) {
+      for (int64_t i = 0; i < variable_count_; ++i) {
+        out[static_cast<size_t>(i)] = diag[static_cast<size_t>(i)] > 0.0
+            ? in[static_cast<size_t>(i)] / diag[static_cast<size_t>(i)]
+            : 0.0;
+      }
+    };
+    std::vector<double> residual(static_cast<size_t>(variable_count_), 0.0);
+    std::vector<double> z(static_cast<size_t>(variable_count_), 0.0);
+    std::vector<double> direction(static_cast<size_t>(variable_count_), 0.0);
+    std::vector<double> applied(static_cast<size_t>(variable_count_), 0.0);
+    apply(x, applied);
+    double rhs_norm_sq = 0.0;
+    for (int64_t i = 0; i < variable_count_; ++i) {
+      if (locked[static_cast<size_t>(i)]) {
+        continue;
+      }
+      residual[static_cast<size_t>(i)] =
+          rhs_n[static_cast<size_t>(i)] - applied[static_cast<size_t>(i)];
+      rhs_norm_sq += rhs_n[static_cast<size_t>(i)] * rhs_n[static_cast<size_t>(i)];
+    }
+    const double stop_sq = std::max(rhs_norm_sq, 1e-300) * kLscmTolerance * kLscmTolerance;
+    precondition(residual, z);
+    direction = z;
+    double rz = 0.0;
+    double residual_sq = 0.0;
+    for (int64_t i = 0; i < variable_count_; ++i) {
+      rz += residual[static_cast<size_t>(i)] * z[static_cast<size_t>(i)];
+      residual_sq += residual[static_cast<size_t>(i)] * residual[static_cast<size_t>(i)];
+    }
+    for (int64_t iteration = 0; iteration < max_iterations; ++iteration) {
+      if (residual_sq <= stop_sq) {
+        return true;
+      }
+      apply(direction, applied);
+      double d_ad = 0.0;
+      for (int64_t i = 0; i < variable_count_; ++i) {
+        d_ad += direction[static_cast<size_t>(i)] * applied[static_cast<size_t>(i)];
+      }
+      if (!(d_ad > 0.0) || !std::isfinite(d_ad)) {
+        return residual_sq <= stop_sq;
+      }
+      const double alpha = rz / d_ad;
+      residual_sq = 0.0;
+      for (int64_t i = 0; i < variable_count_; ++i) {
+        if (locked[static_cast<size_t>(i)]) {
+          continue;
+        }
+        x[static_cast<size_t>(i)] += alpha * direction[static_cast<size_t>(i)];
+        residual[static_cast<size_t>(i)] -= alpha * applied[static_cast<size_t>(i)];
+        residual_sq +=
+            residual[static_cast<size_t>(i)] * residual[static_cast<size_t>(i)];
+      }
+      precondition(residual, z);
+      double rz_next = 0.0;
+      for (int64_t i = 0; i < variable_count_; ++i) {
+        rz_next += residual[static_cast<size_t>(i)] * z[static_cast<size_t>(i)];
+      }
+      const double beta = rz > 0.0 ? rz_next / rz : 0.0;
+      rz = rz_next;
+      for (int64_t i = 0; i < variable_count_; ++i) {
+        direction[static_cast<size_t>(i)] =
+            z[static_cast<size_t>(i)] + beta * direction[static_cast<size_t>(i)];
+      }
+    }
+    return residual_sq <= stop_sq;
+  }
+
+ private:
+  int64_t variable_count_;
+  std::vector<std::pair<int64_t, double>> coefficients_;
+  std::vector<int64_t> row_starts_;
+};
+
+// xatlas setup_abf_relations (:6424): conformal relations from triangle
+// angles; returns false for degenerate angles (caller falls back to the
+// projected-triangle LSCM rows).
+bool add_abf_rows(LscmSolver &solver, std::array<int64_t, 3> ids, const std::array<Vec3, 3> &p) {
+  const auto angle = [](const Vec3 &v1, const Vec3 &v2, const Vec3 &v3) {
+    const Vec3 d1 = vec_sub(v1, v2);
+    const Vec3 d2 = vec_sub(v3, v2);
+    const double denom = norm(d1) * norm(d2);
+    if (denom <= 0.0) {
+      return 0.0;
+    }
+    return std::acos(std::clamp(dot(d1, d2) / denom, -1.0, 1.0));
+  };
+  double a0 = angle(p[2], p[0], p[1]);
+  double a1 = angle(p[0], p[1], p[2]);
+  double a2 = 3.14159265358979323846 - a1 - a0;
+  if (a0 == 0.0 || a1 == 0.0 || a2 == 0.0) {
+    return false;
+  }
+  double s0 = std::sin(a0);
+  double s1 = std::sin(a1);
+  double s2 = std::sin(a2);
+  int64_t id0 = ids[0], id1 = ids[1], id2 = ids[2];
+  if (s1 > s0 && s1 > s2) {
+    std::swap(s1, s2);
+    std::swap(s0, s1);
+    std::swap(a1, a2);
+    std::swap(a0, a1);
+    std::swap(id1, id2);
+    std::swap(id0, id1);
+  } else if (s0 > s1 && s0 > s2) {
+    std::swap(s0, s2);
+    std::swap(s0, s1);
+    std::swap(a0, a2);
+    std::swap(a0, a1);
+    std::swap(id0, id2);
+    std::swap(id0, id1);
+  }
+  const double c0 = std::cos(a0);
+  const double ratio = s2 == 0.0 ? 1.0 : s1 / s2;
+  const double cosine = c0 * ratio;
+  const double sine = s0 * ratio;
+  solver.begin_row();
+  solver.coefficient(2 * id0, cosine - 1.0);
+  solver.coefficient(2 * id0 + 1, -sine);
+  solver.coefficient(2 * id1, -cosine);
+  solver.coefficient(2 * id1 + 1, sine);
+  solver.coefficient(2 * id2, 1.0);
+  solver.begin_row();
+  solver.coefficient(2 * id0, sine);
+  solver.coefficient(2 * id0 + 1, cosine - 1.0);
+  solver.coefficient(2 * id1, -sine);
+  solver.coefficient(2 * id1 + 1, -cosine);
+  solver.coefficient(2 * id2 + 1, 1.0);
+  return true;
+}
+
+// xatlas projectTriangle fallback rows (:6391, b == 0 form).
+void add_projected_rows(LscmSolver &solver, const std::array<int64_t, 3> &ids,
+                        const std::array<Vec3, 3> &p) {
+  const Vec3 x_axis = normalized_or_zero(vec_sub(p[1], p[0]));
+  const Vec3 z_axis = normalized_or_zero(vec_cross(x_axis, vec_sub(p[2], p[0])));
+  const Vec3 y_axis = vec_cross(z_axis, x_axis);
+  const double a = norm(vec_sub(p[1], p[0]));
+  const double c = dot(vec_sub(p[2], p[0]), x_axis);
+  const double d = dot(vec_sub(p[2], p[0]), y_axis);
+  solver.begin_row();
+  solver.coefficient(2 * ids[0], -a + c);
+  solver.coefficient(2 * ids[0] + 1, -d);
+  solver.coefficient(2 * ids[1], -c);
+  solver.coefficient(2 * ids[1] + 1, d);
+  solver.coefficient(2 * ids[2], a);
+  solver.begin_row();
+  solver.coefficient(2 * ids[0], d);
+  solver.coefficient(2 * ids[0] + 1, -a + c);
+  solver.coefficient(2 * ids[1], -d);
+  solver.coefficient(2 * ids[1] + 1, -c);
+  solver.coefficient(2 * ids[2] + 1, a);
+}
+
+struct ParamChartOut {
+  std::vector<int64_t> faces;            // global face ids
+  std::vector<Vec2d> corner_uvs;         // per corner of `faces`
+  int64_t method = 0;                    // 0 projection, 1 lscm, 2 shatter
+  double stretch_l2 = 0.0;
+  double stretch_linf = 0.0;
+};
+
+class ChartParameterizer {
+ public:
+  ChartParameterizer(const mesh_common::MeshData &mesh, const ParamOptions &options)
+      : mesh_(mesh), options_(options) {
+    face_areas_.reserve(mesh_.faces.size());
+    for (const auto &face : mesh_.faces) {
+      const Vec3 a = vertex_position(mesh_, face[0]);
+      const Vec3 b = vertex_position(mesh_, face[1]);
+      const Vec3 c = vertex_position(mesh_, face[2]);
+      const double n = norm(vec_cross(vec_sub(b, a), vec_sub(c, a)));
+      face_areas_.push_back(std::isfinite(n) ? 0.5 * n : 0.0);
+    }
+  }
+
+  // Parameterize one input chart; appends one or more output charts.
+  void parameterize(const std::vector<int64_t> &faces, std::vector<ParamChartOut> &out) {
+    parameterize_recursive(faces, 0, out);
+  }
+
+  int64_t projected_chart_count = 0;
+  int64_t projection_fallback_chart_count = 0;
+  int64_t lscm_chart_count = 0;
+  int64_t shattered_face_chart_count = 0;
+  int64_t split_event_count = 0;
+  int64_t lscm_unconverged_count = 0;
+
+ private:
+  const mesh_common::MeshData &mesh_;
+  const ParamOptions options_;
+  std::vector<double> face_areas_;
+
+  struct LocalChart {
+    std::vector<int64_t> faces;                 // global face ids
+    std::vector<int64_t> local_vertices;        // global vertex ids, first-use order
+    std::vector<std::array<int64_t, 3>> local_faces;  // local vertex indices
+    std::vector<Vec2d> vertex_uvs;              // per local vertex
+  };
+
+  LocalChart weld(const std::vector<int64_t> &faces) const {
+    LocalChart chart;
+    chart.faces = faces;
+    std::map<int64_t, int64_t> remap;
+    chart.local_faces.reserve(faces.size());
+    for (const int64_t f : faces) {
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      std::array<int64_t, 3> local{};
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t v = fv[static_cast<size_t>(corner)];
+        auto found = remap.find(v);
+        if (found == remap.end()) {
+          found = remap.emplace(v, static_cast<int64_t>(chart.local_vertices.size())).first;
+          chart.local_vertices.push_back(v);
+        }
+        local[static_cast<size_t>(corner)] = found->second;
+      }
+      chart.local_faces.push_back(local);
+    }
+    chart.vertex_uvs.assign(chart.local_vertices.size(), Vec2d{});
+    return chart;
+  }
+
+  double signed_area(const LocalChart &chart, size_t face_index) const {
+    const auto &lf = chart.local_faces[face_index];
+    const Vec2d &a = chart.vertex_uvs[static_cast<size_t>(lf[0])];
+    const Vec2d &b = chart.vertex_uvs[static_cast<size_t>(lf[1])];
+    const Vec2d &c = chart.vertex_uvs[static_cast<size_t>(lf[2])];
+    return 0.5 * ((b.u - a.u) * (c.v - a.v) - (c.u - a.u) * (b.v - a.v));
+  }
+
+  // Zero-flip + zero-interior-overlap validity over the chart's own faces
+  // (deviation 8). Flips are evaluated after orientation normalization by the
+  // caller; this checks raw state.
+  bool chart_uvs_valid(const LocalChart &chart) const {
+    for (size_t i = 0; i < chart.local_faces.size(); ++i) {
+      const double area = signed_area(chart, i);
+      if (!std::isfinite(area) || area < -kUvAreaEpsilon) {
+        return false;
+      }
+    }
+    for (const Vec2d &uv : chart.vertex_uvs) {
+      if (!std::isfinite(uv.u) || !std::isfinite(uv.v)) {
+        return false;
+      }
+    }
+    // O(T^2) with bbox cull; charts are small.
+    std::vector<std::array<Vec2d, 3>> triangles;
+    std::vector<std::array<double, 4>> boxes;
+    triangles.reserve(chart.local_faces.size());
+    for (const auto &lf : chart.local_faces) {
+      const std::array<Vec2d, 3> tri{
+          chart.vertex_uvs[static_cast<size_t>(lf[0])],
+          chart.vertex_uvs[static_cast<size_t>(lf[1])],
+          chart.vertex_uvs[static_cast<size_t>(lf[2])]};
+      const double min_u = std::min({tri[0].u, tri[1].u, tri[2].u});
+      const double max_u = std::max({tri[0].u, tri[1].u, tri[2].u});
+      const double min_v = std::min({tri[0].v, tri[1].v, tri[2].v});
+      const double max_v = std::max({tri[0].v, tri[1].v, tri[2].v});
+      triangles.push_back(tri);
+      boxes.push_back({min_u, max_u, min_v, max_v});
+    }
+    for (size_t i = 0; i < triangles.size(); ++i) {
+      const double area_i = std::fabs(signed_area(chart, i));
+      if (area_i <= kUvAreaEpsilon) {
+        continue;
+      }
+      for (size_t j = i + 1; j < triangles.size(); ++j) {
+        if (std::fabs(signed_area(chart, j)) <= kUvAreaEpsilon) {
+          continue;
+        }
+        if (boxes[i][0] > boxes[j][1] || boxes[j][0] > boxes[i][1] ||
+            boxes[i][2] > boxes[j][3] || boxes[j][2] > boxes[i][3]) {
+          continue;
+        }
+        if (triangles_overlap_2d(triangles[i], triangles[j])) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  void orientation_normalize(LocalChart &chart) const {
+    double total = 0.0;
+    for (size_t i = 0; i < chart.local_faces.size(); ++i) {
+      total += signed_area(chart, i);
+    }
+    if (total < 0.0) {
+      for (Vec2d &uv : chart.vertex_uvs) {
+        uv.u = -uv.u;
+      }
+    }
+  }
+
+  struct StretchOut {
+    double l2 = 0.0;
+    double linf = 0.0;
+  };
+
+  StretchOut chart_stretch(const LocalChart &chart) const {
+    double weighted_l2_sq = 0.0;
+    double total_area3d = 0.0;
+    double linf = 0.0;
+    for (size_t i = 0; i < chart.local_faces.size(); ++i) {
+      const double uv_area = signed_area(chart, i);
+      const double area3d = face_areas_[static_cast<size_t>(chart.faces[i])];
+      if (uv_area <= kUvAreaEpsilon || area3d <= 0.0) {
+        continue;
+      }
+      const auto &lf = chart.local_faces[i];
+      const Vec3 q0 = vertex_position(
+          mesh_, chart.local_vertices[static_cast<size_t>(lf[0])]);
+      const Vec3 q1 = vertex_position(
+          mesh_, chart.local_vertices[static_cast<size_t>(lf[1])]);
+      const Vec3 q2 = vertex_position(
+          mesh_, chart.local_vertices[static_cast<size_t>(lf[2])]);
+      const Vec2d &t0 = chart.vertex_uvs[static_cast<size_t>(lf[0])];
+      const Vec2d &t1 = chart.vertex_uvs[static_cast<size_t>(lf[1])];
+      const Vec2d &t2 = chart.vertex_uvs[static_cast<size_t>(lf[2])];
+      const double inv2a = 1.0 / (2.0 * uv_area);
+      Vec3 ss{0.0, 0.0, 0.0};
+      Vec3 st{0.0, 0.0, 0.0};
+      for (int axis = 0; axis < 3; ++axis) {
+        ss[static_cast<size_t>(axis)] =
+            (q0[static_cast<size_t>(axis)] * (t1.v - t2.v) +
+             q1[static_cast<size_t>(axis)] * (t2.v - t0.v) +
+             q2[static_cast<size_t>(axis)] * (t0.v - t1.v)) * inv2a;
+        st[static_cast<size_t>(axis)] =
+            (q0[static_cast<size_t>(axis)] * (t2.u - t1.u) +
+             q1[static_cast<size_t>(axis)] * (t0.u - t2.u) +
+             q2[static_cast<size_t>(axis)] * (t1.u - t0.u)) * inv2a;
+      }
+      const double a = dot(ss, ss);
+      const double b = dot(ss, st);
+      const double c = dot(st, st);
+      const double disc = std::sqrt(std::max(0.0, (a - c) * (a - c) + 4.0 * b * b));
+      weighted_l2_sq += ((a + c) * 0.5) * area3d;
+      total_area3d += area3d;
+      linf = std::max(linf, std::sqrt(std::max(0.0, ((a + c) + disc) * 0.5)));
+    }
+    StretchOut result;
+    result.l2 = total_area3d > 0.0 ? std::sqrt(weighted_l2_sq / total_area3d) : 0.0;
+    result.linf = linf;
+    return result;
+  }
+
+  enum class ProjectionState { kInvalid, kValidButStretchy, kAccepted };
+
+  ProjectionState try_projection(LocalChart &chart, double *linf_out = nullptr) const {
+    std::vector<Vec3> points;
+    points.reserve(chart.local_faces.size() * 3);
+    for (const int64_t f : chart.faces) {
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      points.push_back(vertex_position(mesh_, fv[0]));
+      points.push_back(vertex_position(mesh_, fv[1]));
+      points.push_back(vertex_position(mesh_, fv[2]));
+    }
+    Basis basis;
+    if (!least_squares_basis(points, &basis)) {
+      return ProjectionState::kInvalid;
+    }
+    for (size_t i = 0; i < chart.local_vertices.size(); ++i) {
+      const Vec3 p = vertex_position(mesh_, chart.local_vertices[i]);
+      chart.vertex_uvs[i] = Vec2d{dot(basis.tangent, p), dot(basis.bitangent, p)};
+    }
+    orientation_normalize(chart);
+    if (!chart_uvs_valid(chart)) {
+      return ProjectionState::kInvalid;
+    }
+    const double linf = chart_stretch(chart).linf;
+    if (linf_out != nullptr) {
+      *linf_out = linf;
+    }
+    return linf <= options_.projection_linf_threshold
+        ? ProjectionState::kAccepted
+        : ProjectionState::kValidButStretchy;
+  }
+
+  // Faces violating the zero-flip / zero-interior-overlap invariant in the
+  // chart's current UVs (used for targeted splitting).
+  std::set<size_t> offending_faces(const LocalChart &chart) const {
+    std::set<size_t> offending;
+    std::vector<std::array<Vec2d, 3>> triangles;
+    triangles.reserve(chart.local_faces.size());
+    for (const auto &lf : chart.local_faces) {
+      triangles.push_back({chart.vertex_uvs[static_cast<size_t>(lf[0])],
+                           chart.vertex_uvs[static_cast<size_t>(lf[1])],
+                           chart.vertex_uvs[static_cast<size_t>(lf[2])]});
+    }
+    for (size_t i = 0; i < chart.local_faces.size(); ++i) {
+      const double area = signed_area(chart, i);
+      if (!std::isfinite(area) || area < -kUvAreaEpsilon) {
+        offending.insert(i);
+      }
+    }
+    for (size_t i = 0; i < triangles.size(); ++i) {
+      if (std::fabs(signed_area(chart, i)) <= kUvAreaEpsilon) {
+        continue;
+      }
+      for (size_t j = i + 1; j < triangles.size(); ++j) {
+        if (std::fabs(signed_area(chart, j)) <= kUvAreaEpsilon) {
+          continue;
+        }
+        if (offending.count(i) > 0 && offending.count(j) > 0) {
+          continue;
+        }
+        if (triangles_overlap_2d(triangles[i], triangles[j])) {
+          offending.insert(i);
+          offending.insert(j);
+        }
+      }
+    }
+    return offending;
+  }
+
+  bool try_lscm(LocalChart &chart) {
+    // Boundary vertices: on an edge with != 2 incident chart faces.
+    std::map<mesh_common::EdgeKey, int64_t, EdgeKeyLess> edge_counts;
+    for (const auto &lf : chart.local_faces) {
+      for (int corner = 0; corner < 3; ++corner) {
+        edge_counts[mesh_common::edge_key(
+            lf[static_cast<size_t>(corner)], lf[static_cast<size_t>((corner + 1) % 3)])] += 1;
+      }
+    }
+    std::vector<bool> boundary_vertex(chart.local_vertices.size(), false);
+    bool any_boundary = false;
+    for (const auto &[key, count] : edge_counts) {
+      if (count != 2) {
+        boundary_vertex[static_cast<size_t>(key.a)] = true;
+        boundary_vertex[static_cast<size_t>(key.b)] = true;
+        any_boundary = true;
+      }
+    }
+    if (!any_boundary) {
+      return false;  // closed chart: reference LSCM refuses too
+    }
+    // Pins: findApproximateDiameterVertices port (axis-extreme boundary pair,
+    // including the reference's v=1 scan start).
+    const int64_t vertex_count = static_cast<int64_t>(chart.local_vertices.size());
+    std::array<int64_t, 3> min_vertex{-1, -1, -1};
+    std::array<int64_t, 3> max_vertex{-1, -1, -1};
+    for (int64_t v = 1; v < vertex_count; ++v) {
+      if (boundary_vertex[static_cast<size_t>(v)]) {
+        min_vertex = {v, v, v};
+        max_vertex = {v, v, v};
+        break;
+      }
+    }
+    if (min_vertex[0] < 0) {
+      return false;
+    }
+    const auto position = [&](int64_t local) {
+      return vertex_position(mesh_, chart.local_vertices[static_cast<size_t>(local)]);
+    };
+    for (int64_t v = 1; v < vertex_count; ++v) {
+      if (!boundary_vertex[static_cast<size_t>(v)]) {
+        continue;
+      }
+      const Vec3 pos = position(v);
+      for (int axis = 0; axis < 3; ++axis) {
+        if (pos[static_cast<size_t>(axis)] <
+            position(min_vertex[static_cast<size_t>(axis)])[static_cast<size_t>(axis)]) {
+          min_vertex[static_cast<size_t>(axis)] = v;
+        } else if (pos[static_cast<size_t>(axis)] >
+                   position(max_vertex[static_cast<size_t>(axis)])[static_cast<size_t>(axis)]) {
+          max_vertex[static_cast<size_t>(axis)] = v;
+        }
+      }
+    }
+    std::array<double, 3> lengths{};
+    for (int axis = 0; axis < 3; ++axis) {
+      lengths[static_cast<size_t>(axis)] = norm(vec_sub(
+          position(min_vertex[static_cast<size_t>(axis)]),
+          position(max_vertex[static_cast<size_t>(axis)])));
+    }
+    int64_t pin0 = 0;
+    int64_t pin1 = 0;
+    if (lengths[0] > lengths[1] && lengths[0] > lengths[2]) {
+      pin0 = min_vertex[0];
+      pin1 = max_vertex[0];
+    } else if (lengths[1] > lengths[2]) {
+      pin0 = min_vertex[1];
+      pin1 = max_vertex[1];
+    } else {
+      pin0 = min_vertex[2];
+      pin1 = max_vertex[2];
+    }
+    if (pin0 == pin1) {
+      return false;
+    }
+    // Warm start from current (projection) UVs; lock the two pins.
+    LscmSolver solver(2 * vertex_count);
+    for (const auto &lf : chart.local_faces) {
+      const std::array<int64_t, 3> ids{lf[0], lf[1], lf[2]};
+      const std::array<Vec3, 3> p{position(lf[0]), position(lf[1]), position(lf[2])};
+      if (!add_abf_rows(solver, ids, p)) {
+        add_projected_rows(solver, ids, p);
+      }
+    }
+    std::vector<double> x(static_cast<size_t>(2 * vertex_count), 0.0);
+    std::vector<bool> locked(static_cast<size_t>(2 * vertex_count), false);
+    for (int64_t v = 0; v < vertex_count; ++v) {
+      x[static_cast<size_t>(2 * v)] = chart.vertex_uvs[static_cast<size_t>(v)].u;
+      x[static_cast<size_t>(2 * v) + 1] = chart.vertex_uvs[static_cast<size_t>(v)].v;
+    }
+    locked[static_cast<size_t>(2 * pin0)] = true;
+    locked[static_cast<size_t>(2 * pin0) + 1] = true;
+    locked[static_cast<size_t>(2 * pin1)] = true;
+    locked[static_cast<size_t>(2 * pin1) + 1] = true;
+    if (!solver.solve(x, locked, options_.lscm_iteration_factor * vertex_count)) {
+      lscm_unconverged_count += 1;
+      return false;
+    }
+    for (int64_t v = 0; v < vertex_count; ++v) {
+      chart.vertex_uvs[static_cast<size_t>(v)] =
+          Vec2d{x[static_cast<size_t>(2 * v)], x[static_cast<size_t>(2 * v) + 1]};
+    }
+    orientation_normalize(chart);
+    return chart_uvs_valid(chart);
+  }
+
+  void emit(const LocalChart &chart, int64_t method, std::vector<ParamChartOut> &out) {
+    ParamChartOut emitted;
+    emitted.faces = chart.faces;
+    emitted.corner_uvs.reserve(chart.faces.size() * 3);
+    for (const auto &lf : chart.local_faces) {
+      for (int corner = 0; corner < 3; ++corner) {
+        emitted.corner_uvs.push_back(
+            chart.vertex_uvs[static_cast<size_t>(lf[static_cast<size_t>(corner)])]);
+      }
+    }
+    emitted.method = method;
+    const StretchOut stretch = chart_stretch(chart);
+    emitted.stretch_l2 = stretch.l2;
+    emitted.stretch_linf = stretch.linf;
+    out.push_back(std::move(emitted));
+  }
+
+  void shatter(const std::vector<int64_t> &faces, std::vector<ParamChartOut> &out) {
+    for (const int64_t f : faces) {
+      LocalChart single = weld({f});
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      const std::array<Vec3, 3> p{
+          vertex_position(mesh_, fv[0]),
+          vertex_position(mesh_, fv[1]),
+          vertex_position(mesh_, fv[2])};
+      const Vec3 x_axis = normalized_or_zero(vec_sub(p[1], p[0]));
+      const Vec3 z_axis = normalized_or_zero(vec_cross(x_axis, vec_sub(p[2], p[0])));
+      const Vec3 y_axis = vec_cross(z_axis, x_axis);
+      single.vertex_uvs[static_cast<size_t>(single.local_faces[0][0])] = Vec2d{0.0, 0.0};
+      single.vertex_uvs[static_cast<size_t>(single.local_faces[0][1])] =
+          Vec2d{norm(vec_sub(p[1], p[0])), 0.0};
+      single.vertex_uvs[static_cast<size_t>(single.local_faces[0][2])] =
+          Vec2d{dot(vec_sub(p[2], p[0]), x_axis), dot(vec_sub(p[2], p[0]), y_axis)};
+      orientation_normalize(single);
+      shattered_face_chart_count += 1;
+      emit(single, 2, out);
+    }
+  }
+
+  void parameterize_recursive(
+      const std::vector<int64_t> &faces, int64_t depth, std::vector<ParamChartOut> &out) {
+    LocalChart chart = weld(faces);
+    double projection_linf = std::numeric_limits<double>::infinity();
+    const ProjectionState projection = try_projection(chart, &projection_linf);
+    if (projection == ProjectionState::kAccepted) {
+      projected_chart_count += 1;
+      emit(chart, 0, out);
+      return;
+    }
+    LocalChart lscm_chart = weld(faces);
+    // Warm start: LSCM starts from the projection even when the projection
+    // failed acceptance (reference warm-starts from ortho texcoords). The
+    // weld order is identical, so the UVs carry over directly.
+    lscm_chart.vertex_uvs = chart.vertex_uvs;
+    const bool lscm_valid = try_lscm(lscm_chart);
+    const double lscm_linf =
+        lscm_valid ? chart_stretch(lscm_chart).linf : std::numeric_limits<double>::infinity();
+
+    // Best valid candidate by Linf stretch. Free-boundary LSCM on tube-like
+    // charts is valid but decays exponentially (fixture Linf reached 9000+),
+    // so a valid projection with lower stretch must win, and an over-stretchy
+    // best candidate splits rather than ships while budget remains.
+    const bool projection_valid = projection == ProjectionState::kValidButStretchy;
+    const bool lscm_is_best = lscm_valid && (!projection_valid || lscm_linf <= projection_linf);
+    const double best_linf = lscm_is_best
+        ? lscm_linf
+        : (projection_valid ? projection_linf : std::numeric_limits<double>::infinity());
+    // Accept the best valid candidate under the fallback cap (the reference
+    // accepts LSCM unconditionally; the cap only excises the exponential-decay
+    // tube pathology). Beyond the cap, split while budget remains.
+    if (best_linf <= options_.fallback_linf_cap) {
+      if (lscm_is_best) {
+        lscm_chart_count += 1;
+        emit(lscm_chart, 1, out);
+      } else {
+        projection_fallback_chart_count += 1;
+        emit(chart, 0, out);
+      }
+      return;
+    }
+    const bool can_split = faces.size() > 1 && depth < options_.max_split_depth;
+    if (!can_split) {
+      shatter(faces, out);
+      return;
+    }
+    // Targeted split when the LSCM result violates the invariant: peel the
+    // offending faces into their own chart; the cleaned remainder usually
+    // flattens. (For valid-but-stretchy candidates the offender set is empty
+    // and the geometric bisection below applies.)
+    if (!lscm_valid) {
+      const std::set<size_t> offending = offending_faces(lscm_chart);
+      if (!offending.empty() && offending.size() < faces.size()) {
+        std::vector<int64_t> clean;
+        std::vector<int64_t> dirty;
+        for (size_t i = 0; i < faces.size(); ++i) {
+          if (offending.count(i) > 0) {
+            dirty.push_back(faces[i]);
+          } else {
+            clean.push_back(faces[i]);
+          }
+        }
+        split_event_count += 1;
+        parameterize_recursive(clean, depth + 1, out);
+        parameterize_recursive(dirty, depth + 1, out);
+        return;
+      }
+    }
+    // Deterministic longest-axis bisection by face centroid; fall back to a
+    // face-order halving when geometry collapses to a point.
+    std::array<double, 3> bbox_min{
+        std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::max()};
+    std::array<double, 3> bbox_max{
+        std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::lowest()};
+    std::vector<Vec3> centroids;
+    centroids.reserve(faces.size());
+    for (const int64_t f : faces) {
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      const Vec3 p0 = vertex_position(mesh_, fv[0]);
+      const Vec3 p1 = vertex_position(mesh_, fv[1]);
+      const Vec3 p2 = vertex_position(mesh_, fv[2]);
+      const Vec3 center{(p0[0] + p1[0] + p2[0]) / 3.0, (p0[1] + p1[1] + p2[1]) / 3.0,
+                        (p0[2] + p1[2] + p2[2]) / 3.0};
+      centroids.push_back(center);
+      for (int axis = 0; axis < 3; ++axis) {
+        bbox_min[static_cast<size_t>(axis)] =
+            std::min(bbox_min[static_cast<size_t>(axis)], center[static_cast<size_t>(axis)]);
+        bbox_max[static_cast<size_t>(axis)] =
+            std::max(bbox_max[static_cast<size_t>(axis)], center[static_cast<size_t>(axis)]);
+      }
+    }
+    int best_axis = 0;
+    double best_extent = -1.0;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double extent =
+          bbox_max[static_cast<size_t>(axis)] - bbox_min[static_cast<size_t>(axis)];
+      if (extent > best_extent) {
+        best_extent = extent;
+        best_axis = axis;
+      }
+    }
+    const double midpoint = 0.5 *
+        (bbox_min[static_cast<size_t>(best_axis)] + bbox_max[static_cast<size_t>(best_axis)]);
+    std::vector<int64_t> low;
+    std::vector<int64_t> high;
+    for (size_t i = 0; i < faces.size(); ++i) {
+      if (centroids[i][static_cast<size_t>(best_axis)] <= midpoint) {
+        low.push_back(faces[i]);
+      } else {
+        high.push_back(faces[i]);
+      }
+    }
+    if (low.empty() || high.empty()) {
+      low.assign(faces.begin(), faces.begin() + static_cast<std::ptrdiff_t>(faces.size() / 2));
+      high.assign(faces.begin() + static_cast<std::ptrdiff_t>(faces.size() / 2), faces.end());
+    }
+    split_event_count += 1;
+    parameterize_recursive(low, depth + 1, out);
+    parameterize_recursive(high, depth + 1, out);
+  }
+};
+
 nb::object make_int64_vector(std::vector<int64_t> values) {
   auto owner = new std::vector<int64_t>(std::move(values));
   nb::capsule capsule(owner, [](void *ptr) noexcept {
@@ -2092,6 +2907,130 @@ nb::dict grow_uv_charts(
   // contribute exactly 0 on welded indexed input (no seams exist).
   result["normal_seam_weight"] = normal_seam_weight;
   result["texture_seam_weight"] = texture_seam_weight;
+  return result;
+}
+
+nb::dict parameterize_uv_charts(
+    nb::object vertices,
+    nb::object faces,
+    nb::object chart_ids,
+    double projection_linf_threshold,
+    int64_t max_split_depth,
+    int64_t lscm_iteration_factor) {
+  const mesh_common::MeshData mesh = mesh_common::load_mesh(vertices, faces);
+  const int64_t face_count = static_cast<int64_t>(mesh.faces.size());
+  if (!std::isfinite(projection_linf_threshold) || projection_linf_threshold <= 0.0) {
+    throw nb::value_error("projection_linf_threshold must be finite and positive");
+  }
+  if (max_split_depth < 0) {
+    throw nb::value_error("max_split_depth must be non-negative");
+  }
+  if (lscm_iteration_factor <= 0) {
+    throw nb::value_error("lscm_iteration_factor must be positive");
+  }
+  if (chart_ids.is_none()) {
+    throw nb::value_error("chart_ids is required (stage-B output)");
+  }
+  const auto ndim = nb::cast<int64_t>(nb::getattr(chart_ids, "ndim"));
+  if (ndim != 1) {
+    throw nb::value_error("chart_ids must have rank 1");
+  }
+  if (mesh_common::dtype_name(chart_ids, "chart_ids") != "int64") {
+    throw nb::value_error("chart_ids must have dtype int64");
+  }
+  if (mesh_common::dimension(chart_ids, "chart_ids", 0) != face_count) {
+    std::ostringstream message;
+    message << "chart_ids must have shape (" << face_count << ",)";
+    throw nb::value_error(message.str().c_str());
+  }
+  std::vector<int64_t> input_ids(static_cast<size_t>(face_count), 0);
+  int64_t input_chart_count = 0;
+  {
+    mesh_common::BufferView chart_buffer(chart_ids.ptr(), "chart_ids");
+    const Py_buffer &view = chart_buffer.get();
+    const auto *base = static_cast<const char *>(view.buf);
+    const Py_ssize_t stride = view.strides != nullptr ? view.strides[0] : view.itemsize;
+    for (int64_t row = 0; row < face_count; ++row) {
+      int64_t value = 0;
+      std::memcpy(&value, base + row * stride, sizeof(int64_t));
+      if (value < 0) {
+        throw nb::value_error("chart_ids must be non-negative (dense stage-B ids)");
+      }
+      input_ids[static_cast<size_t>(row)] = value;
+      input_chart_count = std::max(input_chart_count, value + 1);
+    }
+  }
+  std::vector<std::vector<int64_t>> chart_faces(static_cast<size_t>(input_chart_count));
+  for (int64_t f = 0; f < face_count; ++f) {
+    chart_faces[static_cast<size_t>(input_ids[static_cast<size_t>(f)])].push_back(f);
+  }
+
+  uv_unwrap::ParamOptions options;
+  options.projection_linf_threshold = projection_linf_threshold;
+  options.max_split_depth = max_split_depth;
+  options.lscm_iteration_factor = lscm_iteration_factor;
+  uv_unwrap::ChartParameterizer parameterizer(mesh, options);
+  std::vector<uv_unwrap::ParamChartOut> outs;
+  for (const auto &faces_of_chart : chart_faces) {
+    if (!faces_of_chart.empty()) {
+      parameterizer.parameterize(faces_of_chart, outs);
+    }
+  }
+
+  std::vector<int64_t> out_ids(static_cast<size_t>(face_count), -1);
+  std::vector<double> corner_uvs(static_cast<size_t>(face_count) * 6, 0.0);
+  std::vector<int64_t> face_counts;
+  std::vector<double> stretch_l2;
+  std::vector<double> stretch_linf;
+  std::vector<int64_t> methods;
+  face_counts.reserve(outs.size());
+  for (size_t chart_index = 0; chart_index < outs.size(); ++chart_index) {
+    const uv_unwrap::ParamChartOut &chart = outs[chart_index];
+    for (size_t i = 0; i < chart.faces.size(); ++i) {
+      const int64_t f = chart.faces[i];
+      out_ids[static_cast<size_t>(f)] = static_cast<int64_t>(chart_index);
+      for (int corner = 0; corner < 3; ++corner) {
+        const uv_unwrap::Vec2d &uv = chart.corner_uvs[i * 3 + static_cast<size_t>(corner)];
+        corner_uvs[(static_cast<size_t>(f) * 3 + static_cast<size_t>(corner)) * 2] = uv.u;
+        corner_uvs[(static_cast<size_t>(f) * 3 + static_cast<size_t>(corner)) * 2 + 1] = uv.v;
+      }
+    }
+    face_counts.push_back(static_cast<int64_t>(chart.faces.size()));
+    stretch_l2.push_back(chart.stretch_l2);
+    stretch_linf.push_back(chart.stretch_linf);
+    methods.push_back(chart.method);
+  }
+  // Invariant recount (do not trust construction): flipped corners triples.
+  int64_t flipped = 0;
+  for (int64_t f = 0; f < face_count; ++f) {
+    const double au = corner_uvs[(static_cast<size_t>(f) * 3) * 2];
+    const double av = corner_uvs[(static_cast<size_t>(f) * 3) * 2 + 1];
+    const double bu = corner_uvs[(static_cast<size_t>(f) * 3 + 1) * 2];
+    const double bv = corner_uvs[(static_cast<size_t>(f) * 3 + 1) * 2 + 1];
+    const double cu = corner_uvs[(static_cast<size_t>(f) * 3 + 2) * 2];
+    const double cv = corner_uvs[(static_cast<size_t>(f) * 3 + 2) * 2 + 1];
+    if (0.5 * ((bu - au) * (cv - av) - (cu - au) * (bv - av)) < -1e-12) {
+      flipped += 1;
+    }
+  }
+
+  nb::dict result;
+  result["chart_ids"] = uv_unwrap::make_int64_vector(std::move(out_ids));
+  result["chart_count"] = static_cast<int64_t>(outs.size());
+  result["input_chart_count"] = input_chart_count;
+  result["corner_uvs"] = uv_unwrap::make_float64_matrix(
+      std::move(corner_uvs), static_cast<size_t>(face_count) * 3, 2);
+  result["chart_face_counts"] = uv_unwrap::make_int64_vector(std::move(face_counts));
+  result["chart_stretch_l2"] = uv_unwrap::make_float64_vector(std::move(stretch_l2));
+  result["chart_stretch_linf"] = uv_unwrap::make_float64_vector(std::move(stretch_linf));
+  result["chart_method"] = uv_unwrap::make_int64_vector(std::move(methods));
+  result["projected_chart_count"] = parameterizer.projected_chart_count;
+  result["projection_fallback_chart_count"] = parameterizer.projection_fallback_chart_count;
+  result["lscm_chart_count"] = parameterizer.lscm_chart_count;
+  result["shattered_face_chart_count"] = parameterizer.shattered_face_chart_count;
+  result["split_event_count"] = parameterizer.split_event_count;
+  result["lscm_unconverged_count"] = parameterizer.lscm_unconverged_count;
+  result["uv_flipped_count"] = flipped;
   return result;
 }
 

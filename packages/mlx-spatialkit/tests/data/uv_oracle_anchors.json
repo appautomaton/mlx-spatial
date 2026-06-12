@@ -7,6 +7,13 @@
         "atlas_utilization": 0.7212530374526978,
         "atlas_width": 1238,
         "chart_count": 5166,
+        "chart_stretch_l2_normalized_summary": {
+          "max": 13.761696442455927,
+          "mean": 1.3260072597053052,
+          "measured_chart_count": 2539,
+          "p95": 3.056349258990123,
+          "total_chart_count": 5166
+        },
         "chart_stretch_l2_summary": {
           "max": 20.761592677543057,
           "mean": 10.168086525864021,
@@ -40,6 +47,13 @@
         "atlas_utilization": 0.7540735602378845,
         "atlas_width": 1203,
         "chart_count": 5130,
+        "chart_stretch_l2_normalized_summary": {
+          "max": 14.02721156495498,
+          "mean": 1.3320396645451074,
+          "measured_chart_count": 2555,
+          "p95": 3.1050787567559697,
+          "total_chart_count": 5130
+        },
         "chart_stretch_l2_summary": {
           "max": 68.5718685578483,
           "mean": 9.933730250995207,
@@ -74,6 +88,13 @@
         "atlas_utilization": 0.7446149587631226,
         "atlas_width": 1157,
         "chart_count": 2527,
+        "chart_stretch_l2_normalized_summary": {
+          "max": 6.032804185362589,
+          "mean": 1.1742322142406982,
+          "measured_chart_count": 1279,
+          "p95": 1.9666495535774289,
+          "total_chart_count": 2527
+        },
         "chart_stretch_l2_summary": {
           "max": 29.583495432013663,
           "mean": 6.190636209770967,
@@ -107,6 +128,13 @@
         "atlas_utilization": 0.769874632358551,
         "atlas_width": 1129,
         "chart_count": 2422,
+        "chart_stretch_l2_normalized_summary": {
+          "max": 6.032561554820784,
+          "mean": 1.1631676092310153,
+          "measured_chart_count": 1221,
+          "p95": 1.964712871959029,
+          "total_chart_count": 2422
+        },
         "chart_stretch_l2_summary": {
           "max": 35.841456569374365,
           "mean": 6.059268668045438,
@@ -137,7 +165,7 @@
   },
   "generated_with": {
     "command": ".venv/bin/python tests/tools/gen_uv_oracle_anchors.py",
-    "generated_at": "2026-06-12T05:47:12.775236+00:00",
+    "generated_at": "2026-06-12T19:50:42.491844+00:00",
     "numpy_version_oracle": "2.4.6",
     "numpy_version_project": "2.4.6",
     "option_mapping": {

@@ -2044,3 +2044,164 @@ def test_cone_cluster_nonzero_refine_scales_with_early_exit() -> None:
     assert (chart_ids >= 0).all()
     assert chart_ids.max() < result["chart_count"]
     _assert_cone_cluster_valid(vertices, faces, result, math.radians(90.0))
+
+
+# ---------------------------------------------------------------------------
+# Stage-B parameterization (parameterize_uv_charts): LSCM for charts that fail
+# projection acceptance, bounded targeted-split/shatter repair, zero-flip and
+# zero-intra-chart-overlap invariant (slice 5). Cross-checked against
+# uv_quality_metrics, never trusted from the builder's own counters alone.
+# ---------------------------------------------------------------------------
+
+from mlx_spatialkit._native import parameterize_uv_charts
+
+
+def _hemisphere_cap() -> tuple[np.ndarray, np.ndarray]:
+    vertices, faces = _icosphere(3)
+    keep = (vertices[faces][:, :, 2] > 0.05).all(axis=1)
+    return vertices, np.ascontiguousarray(faces[keep])
+
+
+def _param_metrics(vertices: np.ndarray, faces: np.ndarray, result: dict) -> dict:
+    corner_positions = vertices[faces].reshape(-1, 3).astype(np.float32)
+    corner_faces = np.arange(faces.shape[0] * 3, dtype=np.int64).reshape(-1, 3)
+    corner_uvs = np.ascontiguousarray(np.asarray(result["corner_uvs"]), dtype=np.float32)
+    chart_ids = np.ascontiguousarray(np.asarray(result["chart_ids"]), dtype=np.int64)
+    return uv_quality_metrics(corner_positions, corner_faces, corner_uvs, chart_ids=chart_ids)
+
+
+def _smooth_hemisphere_cap() -> tuple[np.ndarray, np.ndarray]:
+    """Unit-sphere cap (subdivided octahedron, every vertex normalized).
+
+    Unlike _icosphere (a lumpy icosahedron subdivision, radius up to ~1.9),
+    this is genuinely smooth — the surface where conformal flattening must
+    beat a planar projection.
+    """
+    points = [np.array(p, dtype=np.float64) for p in
+              [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]]
+    tris = [(0, 2, 4), (2, 1, 4), (1, 3, 4), (3, 0, 4),
+            (2, 0, 5), (1, 2, 5), (3, 1, 5), (0, 3, 5)]
+    for _ in range(4):
+        cache: dict[tuple[int, int], int] = {}
+        next_tris = []
+
+        def midpoint(a: int, b: int) -> int:
+            key = (min(a, b), max(a, b))
+            if key not in cache:
+                mid = points[a] + points[b]
+                mid /= np.linalg.norm(mid)
+                cache[key] = len(points)
+                points.append(mid)
+            return cache[key]
+
+        for a, b, c in tris:
+            ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+            next_tris += [(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)]
+        tris = next_tris
+    vertices = np.array(points, dtype=np.float32)
+    faces = np.array(tris, dtype=np.int64)
+    keep = (vertices[faces][:, :, 2] > 0.05).all(axis=1)
+    return vertices, np.ascontiguousarray(faces[keep])
+
+
+def test_lscm_hemisphere_valid_and_better_than_projection() -> None:
+    # Lumpy cap (the _icosphere is an unnormalized icosahedron subdivision):
+    # its LSCM linf (~43) exceeds the fallback cap, so the chart legitimately
+    # splits — assert the invariant holds across the split results.
+    vertices, faces = _hemisphere_cap()
+    chart_ids = np.zeros(faces.shape[0], dtype=np.int64)
+    lscm = parameterize_uv_charts(vertices, faces, chart_ids)
+    assert lscm["chart_count"] >= 1
+    assert (np.asarray(lscm["chart_ids"]) >= 0).all()
+    assert lscm["uv_flipped_count"] == 0
+    assert lscm["lscm_unconverged_count"] == 0
+    out_ids = np.asarray(lscm["chart_ids"])
+    out_uvs = np.asarray(lscm["corner_uvs"]).reshape(faces.shape[0], 3, 2)
+    for chart in range(lscm["chart_count"]):
+        mask = out_ids == chart
+        sub_faces = faces[mask]
+        sub_uvs = out_uvs[mask] - out_uvs[mask].reshape(-1, 2).mean(axis=0)
+        metrics = uv_quality_metrics(
+            vertices[sub_faces].reshape(-1, 3).astype(np.float32),
+            np.arange(sub_faces.shape[0] * 3, dtype=np.int64).reshape(-1, 3),
+            np.ascontiguousarray(sub_uvs.reshape(-1, 2), dtype=np.float32),
+        )
+        assert metrics["uv_overlap_count"] == 0, f"chart {chart}"
+        assert metrics["uv_flipped_count"] == 0, f"chart {chart}"
+    # LSCM strictly beats the (valid but stretchy) orthographic projection on
+    # a genuinely smooth curved chart (UVU-04 mechanism: conformal flattening,
+    # not just projection). Scale-free comparison: l2 * sqrt(Auv/A3d).
+    sv, sf = _smooth_hemisphere_cap()
+    smooth_ids = np.zeros(sf.shape[0], dtype=np.int64)
+    smooth_lscm = parameterize_uv_charts(sv, sf, smooth_ids)
+    assert smooth_lscm["lscm_chart_count"] == 1
+    smooth_projection = parameterize_uv_charts(
+        sv, sf, smooth_ids, projection_linf_threshold=1e9)
+    assert smooth_projection["projected_chart_count"] == 1
+
+    def _normalized_l2(result: dict) -> float:
+        l2 = float(np.asarray(result["chart_stretch_l2"])[0])
+        tri = np.asarray(result["corner_uvs"]).reshape(-1, 3, 2)
+        signed = 0.5 * (
+            (tri[:, 1, 0] - tri[:, 0, 0]) * (tri[:, 2, 1] - tri[:, 0, 1])
+            - (tri[:, 2, 0] - tri[:, 0, 0]) * (tri[:, 1, 1] - tri[:, 0, 1])
+        )
+        p = sv[sf]
+        a3d = 0.5 * np.linalg.norm(
+            np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]), axis=1)
+        return l2 * float(np.sqrt(np.abs(signed).sum() / a3d.sum()))
+
+    assert _normalized_l2(smooth_lscm) < _normalized_l2(smooth_projection)
+
+
+def test_lscm_flat_grid_keeps_projection() -> None:
+    vertices, faces = _flat_grid(5)
+    result = parameterize_uv_charts(vertices, faces, np.zeros(faces.shape[0], dtype=np.int64))
+    assert result["projected_chart_count"] == 1
+    assert result["lscm_chart_count"] == 0
+    assert result["chart_count"] == 1
+    np.testing.assert_allclose(np.asarray(result["chart_stretch_l2"]), 1.0, rtol=1e-9)
+
+
+def test_lscm_open_boundary_mesh_parameterizes_clean() -> None:
+    # SPEC input condition: charts with open boundaries (the fixtures carry
+    # 5-7 residual loops) must parameterize without flips or overlap blowup.
+    vertices, faces = _icosphere_with_small_hole()
+    grown = grow_uv_charts(vertices, faces)
+    result = parameterize_uv_charts(
+        vertices, faces, np.ascontiguousarray(np.asarray(grown["chart_ids"])))
+    chart_ids = np.asarray(result["chart_ids"])
+    assert (chart_ids >= 0).all()
+    assert result["uv_flipped_count"] == 0
+    metrics = _param_metrics(vertices, faces, result)
+    assert metrics["uv_flipped_count"] == 0
+
+
+def test_lscm_deterministic_repeat() -> None:
+    vertices, faces = _hemisphere_cap()
+    chart_ids = np.zeros(faces.shape[0], dtype=np.int64)
+    first = parameterize_uv_charts(vertices, faces, chart_ids)
+    second = parameterize_uv_charts(vertices, faces, chart_ids)
+    np.testing.assert_array_equal(
+        np.asarray(first["corner_uvs"]), np.asarray(second["corner_uvs"]))
+    np.testing.assert_array_equal(
+        np.asarray(first["chart_ids"]), np.asarray(second["chart_ids"]))
+
+
+def test_lscm_rejects_invalid_arguments() -> None:
+    vertices, faces = _unit_cube()
+    good_ids = np.zeros(faces.shape[0], dtype=np.int64)
+    with pytest.raises((TypeError, ValueError)):
+        # nanobind rejects None before the binding's own is_none guard fires.
+        parameterize_uv_charts(vertices, faces, None)
+    with pytest.raises(ValueError):
+        parameterize_uv_charts(vertices, faces, good_ids, projection_linf_threshold=0.0)
+    with pytest.raises(ValueError):
+        parameterize_uv_charts(vertices, faces, good_ids, max_split_depth=-1)
+    with pytest.raises(ValueError):
+        parameterize_uv_charts(vertices, faces, good_ids, lscm_iteration_factor=0)
+    with pytest.raises(ValueError):
+        parameterize_uv_charts(vertices, faces, np.zeros(3, dtype=np.int64))
+    with pytest.raises(ValueError):
+        parameterize_uv_charts(
+            vertices, faces, np.full(faces.shape[0], -1, dtype=np.int64))

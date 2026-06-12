@@ -124,6 +124,18 @@ NB_MODULE(_native, module) {
              "Grow xatlas-equivalent UV charts within stage-A clusters, with "
              "orthographic-projection baseline UVs and per-chart acceptance.");
 
+  module.def("parameterize_uv_charts",
+             &mlx_spatialkit::parameterize_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("chart_ids"),
+             nb::arg("projection_linf_threshold") = 1.25,
+             nb::arg("max_split_depth") = 3,
+             nb::arg("lscm_iteration_factor") = 5,
+             "Final per-chart UVs: projection where acceptable, LSCM otherwise, "
+             "with bounded split/shatter repair (zero flips, zero intra-chart "
+             "overlaps).");
+
   module.def("uv_quality_metrics",
              &mlx_spatialkit::uv_quality_metrics,
              nb::arg("vertices"),
