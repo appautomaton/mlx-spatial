@@ -1884,3 +1884,163 @@ def test_cone_cluster_scaling_80k_faces_within_time_budget() -> None:
     assert chart_ids.shape == (faces.shape[0],)
     assert result["chart_count"] >= 1
     assert chart_ids.max() < result["chart_count"]
+
+
+# ---------------------------------------------------------------------------
+# Stage-B chart growth (grow_uv_charts): xatlas-equivalent seed/grow/fill/merge
+# within stage-A clusters plus the orthographic-projection baseline (slice 4).
+# Charts whose projection fails the flip/stretch acceptance are routed to LSCM
+# (slice 5) via chart_needs_lscm; the zero-flip invariant after orientation
+# normalization is cross-checked with uv_quality_metrics, not trusted.
+# ---------------------------------------------------------------------------
+
+from mlx_spatialkit._native import grow_uv_charts, uv_quality_metrics
+
+
+def _flat_grid(n: int = 5) -> tuple[np.ndarray, np.ndarray]:
+    """Flat (z=0) n x n vertex grid triangulated into 2*(n-1)^2 faces."""
+    xs, ys = np.meshgrid(np.linspace(0.0, 1.0, n), np.linspace(0.0, 1.0, n))
+    vertices = np.stack([xs.ravel(), ys.ravel(), np.zeros(n * n)], axis=1).astype(np.float32)
+    triangles = []
+    for i in range(n - 1):
+        for j in range(n - 1):
+            a = i * n + j
+            b = a + 1
+            c = a + n
+            d = c + 1
+            triangles += [[a, b, c], [b, d, c]]
+    return vertices, np.array(triangles, dtype=np.int64)
+
+
+def _chart_growth_uv_metrics(vertices: np.ndarray, faces: np.ndarray, grown: dict) -> dict:
+    """Run uv_quality_metrics on grow_uv_charts output (corner-indexed layout)."""
+    corner_positions = vertices[faces].reshape(-1, 3).astype(np.float32)
+    corner_faces = np.arange(faces.shape[0] * 3, dtype=np.int64).reshape(-1, 3)
+    corner_uvs = np.ascontiguousarray(np.asarray(grown["corner_uvs"]), dtype=np.float32)
+    chart_ids = np.ascontiguousarray(np.asarray(grown["chart_ids"]), dtype=np.int64)
+    return uv_quality_metrics(corner_positions, corner_faces, corner_uvs, chart_ids=chart_ids)
+
+
+def test_chart_growth_cube_six_planar_charts_isometric() -> None:
+    vertices, faces = _unit_cube()
+    grown = grow_uv_charts(vertices, faces)
+    assert grown["planar_region_count"] == 6
+    assert grown["chart_count"] == 6
+    chart_ids = np.asarray(grown["chart_ids"])
+    assert chart_ids.shape == (faces.shape[0],)
+    assert set(chart_ids.tolist()) == set(range(6))
+    face_counts = np.asarray(grown["chart_face_counts"])
+    assert face_counts.tolist() == [2] * 6
+    # Planar projection of a planar chart is isometric.
+    linf = np.asarray(grown["chart_stretch_linf"])
+    np.testing.assert_allclose(linf, 1.0, rtol=1e-9)
+    assert grown["accepted_chart_count"] == 6
+    assert grown["lscm_pending_chart_count"] == 0
+
+
+def test_chart_growth_flat_grid_single_accepted_chart() -> None:
+    vertices, faces = _flat_grid(5)
+    grown = grow_uv_charts(vertices, faces)
+    assert grown["chart_count"] == 1
+    assert grown["accepted_chart_count"] == 1
+    np.testing.assert_allclose(np.asarray(grown["chart_stretch_linf"]), 1.0, rtol=1e-9)
+    corner_uvs = np.asarray(grown["corner_uvs"])
+    assert corner_uvs.shape == (faces.shape[0] * 3, 2)
+    assert np.isfinite(corner_uvs).all()
+
+
+def test_chart_growth_never_crosses_cluster_boundaries() -> None:
+    vertices, faces = _flat_grid(5)
+    # Split the flat grid into two stage-A "clusters" by x: one planar surface
+    # that growth would otherwise unify into a single chart.
+    cluster_ids = (faces[:, 0] % 5 >= 2).astype(np.int64)
+    grown = grow_uv_charts(vertices, faces, cluster_ids=np.ascontiguousarray(cluster_ids))
+    chart_ids = np.asarray(grown["chart_ids"])
+    assert grown["chart_count"] == 2
+    for chart in range(grown["chart_count"]):
+        clusters_in_chart = set(cluster_ids[chart_ids == chart].tolist())
+        assert len(clusters_in_chart) == 1, (
+            f"chart {chart} spans clusters {sorted(clusters_in_chart)}"
+        )
+
+
+def test_chart_growth_sphere_zero_flips_and_lscm_routing() -> None:
+    vertices, faces = _icosphere(3)
+    grown = grow_uv_charts(vertices, faces, projection_linf_threshold=1.01)
+    chart_ids = np.asarray(grown["chart_ids"])
+    # Every face assigned, ids dense.
+    assert (chart_ids >= 0).all()
+    assert chart_ids.max() == grown["chart_count"] - 1
+    assert grown["accepted_chart_count"] + grown["lscm_pending_chart_count"] == grown["chart_count"]
+    # Curved charts cannot project at Linf <= 1.01: some must be LSCM-pending.
+    assert grown["lscm_pending_chart_count"] > 0
+    # Zero-flip invariant after orientation normalization (machine-checked via
+    # the slice-1 metrics, not the builder's own counters).
+    metrics = _chart_growth_uv_metrics(vertices, faces, grown)
+    assert metrics["uv_flipped_count"] == 0
+    assert metrics["uv_degenerate_count"] == 0
+
+
+def test_chart_growth_max_cost_monotone_without_merge() -> None:
+    # max_iterations=0 stops after seed placement (threshold = max_cost * 0.5)
+    # with no merge phase, so chart count responds directly to max_cost; the
+    # full pipeline's merge phase is validity-bounded, not cost-bounded.
+    vertices, faces = _icosphere(3)
+    tight = grow_uv_charts(vertices, faces, max_cost=0.25, max_iterations=0)
+    loose = grow_uv_charts(vertices, faces, max_cost=2.0, max_iterations=0)
+    assert tight["chart_count"] >= loose["chart_count"]
+    assert tight["chart_count"] > 1
+
+
+def test_chart_growth_deterministic_repeat() -> None:
+    vertices, faces = _icosphere(3)
+    first = grow_uv_charts(vertices, faces)
+    second = grow_uv_charts(vertices, faces)
+    np.testing.assert_array_equal(np.asarray(first["chart_ids"]), np.asarray(second["chart_ids"]))
+    np.testing.assert_array_equal(
+        np.asarray(first["corner_uvs"]), np.asarray(second["corner_uvs"]))
+    assert first["chart_count"] == second["chart_count"]
+    assert first["accepted_chart_count"] == second["accepted_chart_count"]
+
+
+def test_chart_growth_rejects_invalid_arguments() -> None:
+    vertices, faces = _unit_cube()
+    with pytest.raises(ValueError):
+        grow_uv_charts(vertices, faces, max_cost=0.0)
+    with pytest.raises(ValueError):
+        grow_uv_charts(vertices, faces, max_iterations=-1)
+    with pytest.raises(ValueError):
+        grow_uv_charts(vertices, faces, projection_linf_threshold=0.0)
+    with pytest.raises(ValueError):
+        grow_uv_charts(vertices, faces, cluster_ids=np.zeros(3, dtype=np.int64))
+    with pytest.raises(ValueError):
+        grow_uv_charts(
+            vertices, faces, cluster_ids=np.zeros(faces.shape[0], dtype=np.int32))
+    with pytest.raises(ValueError):
+        grow_uv_charts(
+            vertices, faces, cluster_ids=np.full(faces.shape[0], -1, dtype=np.int64))
+
+
+def test_cone_cluster_nonzero_refine_scales_with_early_exit() -> None:
+    # Slice-2 quality-review obligation: the refine path (previously
+    # unbenchmarked at scale) must stay tractable at nonzero refine_iterations.
+    # The fixpoint early-exit makes converged passes free; the neighbor-table
+    # precompute removes per-pass map lookups.
+    vertices, faces = _icosphere(7)  # 81920 faces
+    start = time.perf_counter()
+    result = compute_uv_charts(
+        vertices,
+        faces,
+        threshold_cone_half_angle_rad=math.radians(90.0),
+        refine_iterations=4,
+        global_iterations=1,
+        smooth_strength=1.0,
+        area_penalty_weight=0.1,
+        perimeter_area_ratio_weight=0.0001,
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 15.0, f"80k-face refine clustering took {elapsed:.2f}s (budget 15s)"
+    chart_ids = np.asarray(result["chart_ids"])
+    assert (chart_ids >= 0).all()
+    assert chart_ids.max() < result["chart_count"]
+    _assert_cone_cluster_valid(vertices, faces, result, math.radians(90.0))

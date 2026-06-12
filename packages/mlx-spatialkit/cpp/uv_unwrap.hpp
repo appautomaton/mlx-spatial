@@ -30,4 +30,30 @@ nanobind::dict compute_uv_charts(
     double area_penalty_weight,
     double perimeter_area_ratio_weight);
 
+// Stage B: ChartBuilder — xatlas-equivalent chart growth within stage-A
+// clusters (behavior port of the vendored reference ClusteredCharts:
+// /tmp/CuMesh/third_party/xatlas/xatlas.cpp), plus the orthographic-projection
+// parameterization baseline. Returns a dict with at least:
+//   chart_ids ([F] int64, dense), chart_count, corner_uvs ([F*3, 2] float64,
+//   chart-local projected UVs in corner order), chart_accepted /
+//   chart_needs_lscm ([C] int64 masks), chart_stretch_l2 / chart_stretch_linf
+//   ([C] float64), accepted_chart_count, lscm_pending_chart_count,
+//   planar_region_count, growth merge/fill/relocation counters.
+// cluster_ids may be None (whole mesh treated as one cluster); chart growth
+// never crosses a cluster boundary.
+nanobind::dict grow_uv_charts(
+    nanobind::object vertices,
+    nanobind::object faces,
+    nanobind::object cluster_ids,
+    double max_cost,
+    double normal_deviation_weight,
+    double roundness_weight,
+    double straightness_weight,
+    double normal_seam_weight,
+    double texture_seam_weight,
+    int64_t max_iterations,
+    double projection_linf_threshold,
+    double max_chart_area,
+    double max_boundary_length);
+
 }  // namespace mlx_spatialkit

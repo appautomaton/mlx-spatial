@@ -104,6 +104,26 @@ NB_MODULE(_native, module) {
              nb::arg("perimeter_area_ratio_weight") = 0.0001,
              "Cluster faces into UV charts via cone-bounded cost-ordered agglomeration.");
 
+  module.def("grow_uv_charts",
+             &mlx_spatialkit::grow_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("cluster_ids") = nb::none(),
+             // Defaults mirror xatlas ChartOptions (the reference stage-B
+             // engine CuMesh.uv_unwrap runs per stage-A cluster).
+             nb::arg("max_cost") = 2.0,
+             nb::arg("normal_deviation_weight") = 2.0,
+             nb::arg("roundness_weight") = 0.01,
+             nb::arg("straightness_weight") = 6.0,
+             nb::arg("normal_seam_weight") = 4.0,
+             nb::arg("texture_seam_weight") = 0.5,
+             nb::arg("max_iterations") = 1,
+             nb::arg("projection_linf_threshold") = 1.25,
+             nb::arg("max_chart_area") = 0.0,
+             nb::arg("max_boundary_length") = 0.0,
+             "Grow xatlas-equivalent UV charts within stage-A clusters, with "
+             "orthographic-projection baseline UVs and per-chart acceptance.");
+
   module.def("uv_quality_metrics",
              &mlx_spatialkit::uv_quality_metrics,
              nb::arg("vertices"),

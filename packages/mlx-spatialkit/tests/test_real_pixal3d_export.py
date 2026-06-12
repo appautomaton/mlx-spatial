@@ -2432,3 +2432,113 @@ def test_export_pixal3d_glb_qem_two_fixture_violin_manifold_and_beats_clustering
         f"  geo_error_mean={proof['qem_geometric_error_mean']:.3e}  "
         f"geo_error_max={proof['qem_geometric_error_max']:.3e}"
     )
+
+
+def _assert_chart_growth_parity_against_oracle(fixture: Path, anchor_name: str) -> dict:
+    """Slice-4 stage-B parity: native cone-cluster + chart growth vs pip-xatlas anchors.
+
+    Rebuilds the fixture's QEM 50k mesh with the exact anchor recipe
+    (tests/tools/gen_uv_oracle_anchors.py), then:
+      1. stage A at the pinned production knobs must reproduce the anchors'
+         stage_a_cluster_count EXACTLY (same code, deterministic);
+      2. stage B at reference defaults must land within the stated chart-count
+         band of the per-cluster pip-xatlas composition anchor.
+
+    Band: ours/oracle in [0.60, 1.50]. Measured 2026-06-12 (Apple Silicon):
+    main 4007/5166 = 0.776, violin_bow 1677/2527 = 0.664. We sit on the low
+    side: the double-precision validity test (flip consistency + boundary
+    self-intersection) fails less often than xatlas's float32 one, so growth
+    and merging keep slightly larger charts. Chart count is the coarse
+    structural parity signal; binding quality gates are overlap/stretch
+    (slices 5-6).
+    """
+    import json
+    import math as _math
+
+    from mlx_spatialkit._native import compute_uv_charts, grow_uv_charts
+
+    anchors_path = Path(__file__).resolve().parent / "data" / "uv_oracle_anchors.json"
+    anchors = json.loads(anchors_path.read_text())
+    oracle = anchors["fixtures"][anchor_name]
+
+    remesh_v, remesh_f = _load_remeshed_mesh_from_fixture(fixture)
+    simplified, stats = simplify_mesh(
+        remesh_v,
+        remesh_f,
+        target_faces=50_000,
+        min_component_faces=32,
+        backend="qem",
+    )
+    assert stats["backend"] == "qem"
+    vertices = np.ascontiguousarray(simplified.vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(simplified.faces, dtype=np.int64)
+
+    stage_a = compute_uv_charts(
+        vertices,
+        faces,
+        threshold_cone_half_angle_rad=_math.radians(90.0),
+        refine_iterations=0,
+        global_iterations=1,
+        smooth_strength=1.0,
+        area_penalty_weight=0.1,
+        perimeter_area_ratio_weight=0.0001,
+    )
+    assert stage_a["chart_count"] == oracle["stage_a_cluster_count"], (
+        f"[{anchor_name}] stage-A cluster count {stage_a['chart_count']} != anchor "
+        f"{oracle['stage_a_cluster_count']} (same code+knobs must reproduce exactly)"
+    )
+
+    grown = grow_uv_charts(
+        vertices,
+        faces,
+        cluster_ids=np.ascontiguousarray(np.asarray(stage_a["chart_ids"]), dtype=np.int64),
+    )
+    chart_ids = np.asarray(grown["chart_ids"])
+    assert (chart_ids >= 0).all(), f"[{anchor_name}] unassigned faces after growth"
+    assert chart_ids.max() == grown["chart_count"] - 1
+    assert (
+        grown["accepted_chart_count"] + grown["lscm_pending_chart_count"]
+        == grown["chart_count"]
+    )
+
+    oracle_charts = oracle["per_cluster_composition"]["chart_count"]
+    ratio = grown["chart_count"] / oracle_charts
+    assert 0.60 <= ratio <= 1.50, (
+        f"[{anchor_name}] stage-B chart count {grown['chart_count']} vs oracle "
+        f"{oracle_charts} -> ratio {ratio:.3f} outside [0.60, 1.50]"
+    )
+    return {
+        "stage_a_clusters": stage_a["chart_count"],
+        "chart_count": grown["chart_count"],
+        "oracle_chart_count": oracle_charts,
+        "ratio": ratio,
+        "accepted": grown["accepted_chart_count"],
+        "lscm_pending": grown["lscm_pending_chart_count"],
+    }
+
+
+@pytest.mark.heavy
+def test_reference_uv_chart_growth_parity_main_fixture() -> None:
+    """Slice-4 heavy: stage-B chart-count parity vs pip-xatlas oracle (main)."""
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"main Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_chart_growth_parity_against_oracle(fixture, "main")
+    print(f"\n[main chart-growth parity] {summary}")
+
+
+@pytest.mark.heavy
+def test_reference_uv_chart_growth_parity_violin_fixture() -> None:
+    """Slice-4 heavy: stage-B chart-count parity vs pip-xatlas oracle (violin-bow)."""
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = (
+        _repo_root() / "inputs" / "mlx-spatialkit" / "violin-bow"
+        / "pixal3d-1024-cascade-decoded-pbr"
+    )
+    if not fixture.exists():
+        pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_chart_growth_parity_against_oracle(fixture, "violin_bow")
+    print(f"\n[violin chart-growth parity] {summary}")

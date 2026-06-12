@@ -44,11 +44,14 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <numeric>
 #include <queue>
 #include <set>
+#include <sstream>
+#include <utility>
 #include <vector>
 
 #include "mesh_common.hpp"
@@ -229,7 +232,12 @@ class ConeClusterer {
         while (run_merge_round() > 0) {
         }
         for (int64_t r = 0; r < refine_iterations_; ++r) {
-          refine_pass();
+          // Fixpoint early-exit: a pass that reassigns nothing is a fixpoint
+          // (no cone widens, compress/recompute are idempotent), so the
+          // remaining passes would be identical no-ops.
+          if (!refine_pass()) {
+            break;
+          }
         }
         split_disconnected_charts();
       }
@@ -276,6 +284,15 @@ class ConeClusterer {
   // All faces incident to each mesh edge (ascending face ids) — the refine
   // candidate source (atlas.cu edge2face).
   std::map<mesh_common::EdgeKey, std::vector<int64_t>, EdgeKeyLess> edge_faces_;
+  // Flattened per-face refine neighbors (CSR), precomputed once: entries in
+  // corner order then ascending incident-face order — the exact iteration
+  // order refine_face previously derived from edge_faces_ lookups per pass.
+  struct RefineNeighbor {
+    int64_t face = 0;
+    double edge_length = 0.0;
+  };
+  std::vector<RefineNeighbor> face_neighbors_;
+  std::vector<int64_t> face_neighbor_offsets_;
 
   // Chart state with dense ids in [0, chart_count_).
   std::vector<int64_t> chart_of_face_;
@@ -328,6 +345,27 @@ class ConeClusterer {
       }
       face_adjacency_.push_back(AdjacencyPair{
           incident[0], incident[1], edge_length(mesh_, key.a, key.b)});
+    }
+    // Precompute the refine neighbor table (was three edge_faces_ map lookups
+    // plus three sqrt edge lengths per face per refine pass).
+    const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
+    face_neighbor_offsets_.assign(static_cast<size_t>(face_count) + 1, 0);
+    for (int64_t fi = 0; fi < face_count; ++fi) {
+      const auto &face = mesh_.faces[static_cast<size_t>(fi)];
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t v0 = face[static_cast<size_t>(corner)];
+        const int64_t v1 = face[static_cast<size_t>((corner + 1) % 3)];
+        const double length = edge_length(mesh_, v0, v1);
+        const auto &incident = edge_faces_.at(mesh_common::edge_key(v0, v1));
+        for (const int64_t neighbor : incident) {
+          if (neighbor == fi) {
+            continue;
+          }
+          face_neighbors_.push_back(RefineNeighbor{neighbor, length});
+        }
+      }
+      face_neighbor_offsets_[static_cast<size_t>(fi) + 1] =
+          static_cast<int64_t>(face_neighbors_.size());
     }
   }
 
@@ -554,11 +592,15 @@ class ConeClusterer {
 
   // ---- refine phase ------------------------------------------------------
 
-  void refine_pass() {
+  // Returns false when the pass reassigned nothing (fixpoint).
+  bool refine_pass() {
     const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
     std::vector<int64_t> next_ids(static_cast<size_t>(face_count));
     for (int64_t f = 0; f < face_count; ++f) {
       next_ids[static_cast<size_t>(f)] = refine_face(f);
+    }
+    if (next_ids == chart_of_face_) {
+      return false;
     }
     // Ping-pong apply (reference double-buffers), widening target cones so the
     // cone invariant survives reassignment (deviation 2 in the header note).
@@ -574,6 +616,7 @@ class ConeClusterer {
     }
     chart_of_face_ = std::move(next_ids);
     compress_chart_labels();
+    return true;
   }
 
   int64_t refine_face(int64_t f) const {
@@ -585,16 +628,13 @@ class ConeClusterer {
     std::array<double, 4> smooth_scores{0.0, 0.0, 0.0, 0.0};
     int candidate_count = 1;
 
-    const auto &face = mesh_.faces[static_cast<size_t>(f)];
-    for (int corner = 0; corner < 3; ++corner) {
-      const int64_t v0 = face[static_cast<size_t>(corner)];
-      const int64_t v1 = face[static_cast<size_t>((corner + 1) % 3)];
-      const double length = edge_length(mesh_, v0, v1);
-      const auto &incident = edge_faces_.at(mesh_common::edge_key(v0, v1));
-      for (const int64_t neighbor : incident) {
-        if (neighbor == f) {
-          continue;
-        }
+    const int64_t begin = face_neighbor_offsets_[static_cast<size_t>(f)];
+    const int64_t end = face_neighbor_offsets_[static_cast<size_t>(f) + 1];
+    for (int64_t n = begin; n < end; ++n) {
+      const RefineNeighbor &entry = face_neighbors_[static_cast<size_t>(n)];
+      const int64_t neighbor = entry.face;
+      const double length = entry.edge_length;
+      {
         const int64_t chart = chart_of_face_[static_cast<size_t>(neighbor)];
         int index = -1;
         for (int k = 0; k < candidate_count; ++k) {
@@ -723,6 +763,1147 @@ class ConeClusterer {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Stage B: ChartBuilder — behavior port of the vendored reference xatlas
+// ClusteredCharts (/tmp/CuMesh/third_party/xatlas/xatlas.cpp:5320-6300), the
+// engine CuMesh.uv_unwrap runs per stage-A cluster. Running it once over the
+// whole mesh with cluster-filtered adjacency is equivalent to per-cluster
+// runs: growth, holes, and merges never cross a cluster boundary, and phases
+// only interleave clusters without changing within-cluster decisions.
+//
+// Documented deviations from the reference (behavior-only port):
+//  1. Welded indexed input means xatlas isSeam() is always false, so the
+//     normal-seam and texture-seam metrics contribute exactly 0; the weights
+//     are accepted and echoed for contract completeness.
+//  2. Basis fitting implements the reference least-squares path only; the
+//     eigen fallback (degenerate covariance) fails the face add instead.
+//  3. Boundary self-intersection uses exact pairwise segment tests with a
+//     bbox cull instead of the reference's uniform grid — same predicate,
+//     different acceleration; chart boundaries are small.
+//  4. Equal-cost candidate ordering matches the reference's insertion-order
+//     stable queue; the global growth scan breaks ties toward the
+//     lowest-indexed chart (the reference's strict '<' scan does the same).
+//  5. CostQueue per-merge stats and the merged chart's boundary bookkeeping
+//     follow the reference exactly, including its one-shared-length merge
+//     update (mergeChart: bl_owner += bl_2 - shared, not the geometric 2x).
+// ---------------------------------------------------------------------------
+
+constexpr double kPlanarNormalEpsilon = 0.001;       // xatlas kNormalEpsilon
+constexpr double kMergeMinNormalDot = 0.5;           // XA_MERGE_CHARTS_MIN_NORMAL_DEVIATION
+constexpr double kXatlasEpsilon = 0.0001;            // xatlas kEpsilon
+constexpr double kNormalDeviationCutoff = 0.707;     // computeCost hard reject (~75 deg)
+constexpr double kBoundaryIntersectEpsilon = 1.192092896e-07;  // xatlas mesh epsilon
+constexpr double kUvAreaEpsilon = 1e-12;
+
+struct Vec2d {
+  double u = 0.0;
+  double v = 0.0;
+};
+
+struct Basis {
+  Vec3 normal{0.0, 0.0, 0.0};
+  Vec3 tangent{0.0, 0.0, 0.0};
+  Vec3 bitangent{0.0, 0.0, 0.0};
+};
+
+Vec3 vec_sub(const Vec3 &a, const Vec3 &b) {
+  return Vec3{a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+Vec3 vec_cross(const Vec3 &a, const Vec3 &b) {
+  return Vec3{
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+  };
+}
+
+// xatlas Basis::computeTangent: minimum axis, orthogonalized.
+Vec3 compute_tangent(const Vec3 &normal) {
+  Vec3 tangent{0.0, 0.0, 0.0};
+  if (std::fabs(normal[0]) < std::fabs(normal[1]) &&
+      std::fabs(normal[0]) < std::fabs(normal[2])) {
+    tangent = Vec3{1.0, 0.0, 0.0};
+  } else if (std::fabs(normal[1]) < std::fabs(normal[2])) {
+    tangent = Vec3{0.0, 1.0, 0.0};
+  } else {
+    tangent = Vec3{0.0, 0.0, 1.0};
+  }
+  const double d = dot(normal, tangent);
+  tangent = Vec3{tangent[0] - normal[0] * d, tangent[1] - normal[1] * d,
+                 tangent[2] - normal[2] * d};
+  return normalized_or_zero(tangent);
+}
+
+// xatlas Fit::computeLeastSquaresNormal + tangent/bitangent (deviation 2: no
+// eigen fallback).
+bool least_squares_basis(const std::vector<Vec3> &points, Basis *basis) {
+  if (points.size() < 3) {
+    return false;
+  }
+  Vec3 normal{0.0, 0.0, 0.0};
+  if (points.size() == 3) {
+    normal = normalized_or_zero(
+        vec_cross(vec_sub(points[2], points[0]), vec_sub(points[1], points[0])));
+  } else {
+    const double inv_n = 1.0 / static_cast<double>(points.size());
+    Vec3 centroid{0.0, 0.0, 0.0};
+    for (const Vec3 &p : points) {
+      centroid[0] += p[0];
+      centroid[1] += p[1];
+      centroid[2] += p[2];
+    }
+    centroid = Vec3{centroid[0] * inv_n, centroid[1] * inv_n, centroid[2] * inv_n};
+    double xx = 0.0, xy = 0.0, xz = 0.0, yy = 0.0, yz = 0.0, zz = 0.0;
+    for (const Vec3 &p : points) {
+      const Vec3 r = vec_sub(p, centroid);
+      xx += r[0] * r[0];
+      xy += r[0] * r[1];
+      xz += r[0] * r[2];
+      yy += r[1] * r[1];
+      yz += r[1] * r[2];
+      zz += r[2] * r[2];
+    }
+    const double det_x = yy * zz - yz * yz;
+    const double det_y = xx * zz - xz * xz;
+    const double det_z = xx * yy - xy * xy;
+    const double det_max = std::max(det_x, std::max(det_y, det_z));
+    if (det_max <= 0.0) {
+      return false;
+    }
+    Vec3 dir{0.0, 0.0, 0.0};
+    if (det_max == det_x) {
+      dir = Vec3{det_x, xz * yz - xy * zz, xy * yz - xz * yy};
+    } else if (det_max == det_y) {
+      dir = Vec3{xz * yz - xy * zz, det_y, xy * xz - yz * xx};
+    } else {
+      dir = Vec3{xy * yz - xz * yy, xy * xz - yz * xx, det_z};
+    }
+    normal = normalized_or_zero(dir);
+  }
+  if (norm(normal) < 0.5) {
+    return false;
+  }
+  basis->normal = normal;
+  basis->tangent = compute_tangent(normal);
+  if (norm(basis->tangent) < 0.5) {
+    return false;
+  }
+  basis->bitangent = vec_cross(normal, basis->tangent);
+  return true;
+}
+
+struct GrowthOptions {
+  double max_cost = 2.0;
+  double normal_deviation_weight = 2.0;
+  double roundness_weight = 0.01;
+  double straightness_weight = 6.0;
+  double normal_seam_weight = 4.0;   // deviation 1: zero contribution
+  double texture_seam_weight = 0.5;  // deviation 1: zero contribution
+  int64_t max_iterations = 1;
+  double projection_linf_threshold = 1.25;
+  double max_chart_area = 0.0;
+  double max_boundary_length = 0.0;
+};
+
+// xatlas CostQueue: array sorted descending by cost (back = best/lowest);
+// insertion-order stable for equal costs; bounded queues drop the worst.
+class GrowthCostQueue {
+ public:
+  explicit GrowthCostQueue(size_t max_size = std::numeric_limits<size_t>::max())
+      : max_size_(max_size) {}
+
+  bool empty() const { return pairs_.empty(); }
+  size_t count() const { return pairs_.size(); }
+  double peek_cost() const { return pairs_.back().cost; }
+  int64_t peek_face() const { return pairs_.back().face; }
+  void clear() { pairs_.clear(); }
+
+  void push(double cost, int64_t face) {
+    const Pair pair{cost, face};
+    if (pairs_.empty() || cost < peek_cost()) {
+      pairs_.push_back(pair);
+      return;
+    }
+    size_t i = 0;
+    for (; i < pairs_.size(); ++i) {
+      if (pairs_[i].cost < cost) {
+        break;
+      }
+    }
+    pairs_.insert(pairs_.begin() + static_cast<std::ptrdiff_t>(i), pair);
+    if (pairs_.size() > max_size_) {
+      pairs_.erase(pairs_.begin());
+    }
+  }
+
+  int64_t pop() {
+    const int64_t face = pairs_.back().face;
+    pairs_.pop_back();
+    return face;
+  }
+
+ private:
+  struct Pair {
+    double cost = 0.0;
+    int64_t face = 0;
+  };
+  std::vector<Pair> pairs_;
+  size_t max_size_;
+};
+
+struct ChartBuildResult {
+  std::vector<int64_t> chart_ids;
+  std::vector<double> corner_uvs;  // [F*3, 2] flattened
+  int64_t chart_count = 0;
+  std::vector<int64_t> chart_face_counts;
+  std::vector<double> chart_stretch_l2;
+  std::vector<double> chart_stretch_linf;
+  std::vector<int64_t> chart_accepted;
+  std::vector<int64_t> chart_needs_lscm;
+  int64_t accepted_chart_count = 0;
+  int64_t lscm_pending_chart_count = 0;
+  int64_t planar_region_count = 0;
+  int64_t place_seed_chart_count = 0;
+  int64_t fill_hole_chart_count = 0;
+  int64_t growth_merge_count = 0;
+  int64_t seed_relocation_count = 0;
+  int64_t failed_add_count = 0;
+  int64_t mirrored_chart_normalized_count = 0;
+};
+
+class ChartBuilder {
+ public:
+  ChartBuilder(
+      const mesh_common::MeshData &mesh,
+      const std::vector<int64_t> &cluster_ids,
+      const GrowthOptions &options)
+      : mesh_(mesh), cluster_ids_(cluster_ids), options_(options) {
+    build_topology();
+    build_planar_regions();
+  }
+
+  ChartBuildResult run() {
+    const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
+    face_chart_.assign(static_cast<size_t>(face_count), -1);
+    corner_uvs_.assign(static_cast<size_t>(face_count) * 3, Vec2d{});
+    faces_left_ = face_count;
+
+    // Reference ClusteredCharts::compute().
+    place_seeds(options_.max_cost * 0.5);
+    place_seed_chart_count_ = static_cast<int64_t>(charts_.size());
+    if (options_.max_iterations > 0) {
+      relocate_seeds();
+      reset_charts();
+      int64_t iteration = 0;
+      for (;;) {
+        grow_charts(options_.max_cost);
+        const int64_t before_fill = static_cast<int64_t>(charts_.size());
+        fill_holes(options_.max_cost * 0.5);
+        fill_hole_chart_count_ += static_cast<int64_t>(charts_.size()) - before_fill;
+        merge_charts();
+        if (++iteration == options_.max_iterations) {
+          break;
+        }
+        if (!relocate_seeds()) {
+          break;
+        }
+        reset_charts();
+      }
+    }
+    return finalize();
+  }
+
+ private:
+  struct Chart {
+    Basis basis;
+    double area = 0.0;
+    double boundary_length = 0.0;
+    Vec3 centroid_sum{0.0, 0.0, 0.0};
+    Vec3 centroid{0.0, 0.0, 0.0};
+    std::vector<int64_t> faces;
+    GrowthCostQueue candidates;
+    std::set<int64_t> failed_regions;
+    int64_t seed = 0;
+    bool alive = true;
+  };
+
+  const mesh_common::MeshData &mesh_;
+  const std::vector<int64_t> &cluster_ids_;
+  const GrowthOptions options_;
+
+  // Static topology (cluster-filtered manifold adjacency).
+  std::vector<Vec3> face_normals_;
+  std::vector<double> face_areas_;
+  std::vector<std::array<int64_t, 3>> opposite_face_;  // -1: boundary/non-manifold/cross-cluster
+  std::vector<std::array<double, 3>> corner_edge_lengths_;
+
+  // Planar regions (xatlas PlanarCharts): connected same-cluster faces whose
+  // normals are componentwise equal within kPlanarNormalEpsilon.
+  std::vector<int64_t> region_of_face_;
+  std::vector<std::vector<int64_t>> region_faces_;  // ascending face ids
+  std::vector<double> region_areas_;
+
+  // Growth state.
+  std::vector<Chart> charts_;
+  std::vector<int64_t> face_chart_;
+  std::vector<Vec2d> corner_uvs_;
+  int64_t faces_left_ = 0;
+
+  int64_t place_seed_chart_count_ = 0;
+  int64_t fill_hole_chart_count_ = 0;
+  int64_t growth_merge_count_ = 0;
+  int64_t seed_relocation_count_ = 0;
+  int64_t failed_add_count_ = 0;
+  int64_t mirrored_chart_normalized_count_ = 0;
+
+  void build_topology() {
+    const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
+    face_normals_.reserve(static_cast<size_t>(face_count));
+    face_areas_.reserve(static_cast<size_t>(face_count));
+    opposite_face_.assign(static_cast<size_t>(face_count), {-1, -1, -1});
+    corner_edge_lengths_.assign(static_cast<size_t>(face_count), {0.0, 0.0, 0.0});
+    for (int64_t fi = 0; fi < face_count; ++fi) {
+      const auto &face = mesh_.faces[static_cast<size_t>(fi)];
+      const Vec3 a = vertex_position(mesh_, face[0]);
+      const Vec3 b = vertex_position(mesh_, face[1]);
+      const Vec3 c = vertex_position(mesh_, face[2]);
+      const Vec3 cross = vec_cross(vec_sub(b, a), vec_sub(c, a));
+      face_normals_.push_back(normalized_or_zero(cross));
+      const double cross_norm = norm(cross);
+      face_areas_.push_back(std::isfinite(cross_norm) ? 0.5 * cross_norm : 0.0);
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t v0 = face[static_cast<size_t>(corner)];
+        const int64_t v1 = face[static_cast<size_t>((corner + 1) % 3)];
+        corner_edge_lengths_[static_cast<size_t>(fi)][static_cast<size_t>(corner)] =
+            edge_length(mesh_, v0, v1);
+      }
+    }
+    // Edge map -> (face, corner) incidences; opposite only for manifold
+    // same-cluster pairs.
+    std::map<mesh_common::EdgeKey, std::vector<std::pair<int64_t, int>>, EdgeKeyLess> edge_map;
+    for (int64_t fi = 0; fi < face_count; ++fi) {
+      const auto &face = mesh_.faces[static_cast<size_t>(fi)];
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t v0 = face[static_cast<size_t>(corner)];
+        const int64_t v1 = face[static_cast<size_t>((corner + 1) % 3)];
+        edge_map[mesh_common::edge_key(v0, v1)].emplace_back(fi, corner);
+      }
+    }
+    for (const auto &[key, incidences] : edge_map) {
+      if (incidences.size() != 2) {
+        continue;
+      }
+      const auto &[f0, c0] = incidences[0];
+      const auto &[f1, c1] = incidences[1];
+      if (cluster_ids_[static_cast<size_t>(f0)] != cluster_ids_[static_cast<size_t>(f1)]) {
+        continue;
+      }
+      opposite_face_[static_cast<size_t>(f0)][static_cast<size_t>(c0)] = f1;
+      opposite_face_[static_cast<size_t>(f1)][static_cast<size_t>(c1)] = f0;
+    }
+  }
+
+  static bool normals_equal(const Vec3 &a, const Vec3 &b) {
+    return std::fabs(a[0] - b[0]) <= kPlanarNormalEpsilon &&
+        std::fabs(a[1] - b[1]) <= kPlanarNormalEpsilon &&
+        std::fabs(a[2] - b[2]) <= kPlanarNormalEpsilon;
+  }
+
+  void build_planar_regions() {
+    const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
+    mesh_common::UnionFind regions(static_cast<size_t>(face_count));
+    for (int64_t fi = 0; fi < face_count; ++fi) {
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t of = opposite_face_[static_cast<size_t>(fi)][static_cast<size_t>(corner)];
+        if (of < 0 || of <= fi) {
+          continue;
+        }
+        if (normals_equal(
+                face_normals_[static_cast<size_t>(fi)], face_normals_[static_cast<size_t>(of)])) {
+          regions.unite(static_cast<size_t>(fi), static_cast<size_t>(of));
+        }
+      }
+    }
+    region_of_face_.assign(static_cast<size_t>(face_count), -1);
+    std::map<int64_t, int64_t> root_to_region;
+    for (int64_t fi = 0; fi < face_count; ++fi) {
+      const int64_t root = static_cast<int64_t>(regions.find(static_cast<size_t>(fi)));
+      auto found = root_to_region.find(root);
+      if (found == root_to_region.end()) {
+        found = root_to_region.emplace(root, static_cast<int64_t>(region_faces_.size())).first;
+        region_faces_.emplace_back();
+        region_areas_.push_back(0.0);
+      }
+      region_of_face_[static_cast<size_t>(fi)] = found->second;
+      region_faces_[static_cast<size_t>(found->second)].push_back(fi);
+      region_areas_[static_cast<size_t>(found->second)] += face_areas_[static_cast<size_t>(fi)];
+    }
+  }
+
+  // ---- metrics (computeCost family) --------------------------------------
+
+  double compute_area(const Chart &chart, int64_t first_face) const {
+    double area = chart.area;
+    for (const int64_t f : region_faces_[static_cast<size_t>(region_of_face_[static_cast<size_t>(first_face)])]) {
+      area += face_areas_[static_cast<size_t>(f)];
+    }
+    return area;
+  }
+
+  double compute_boundary_length(const Chart &chart, int64_t first_face, int64_t chart_index) const {
+    double boundary_length = chart.boundary_length;
+    const int64_t region = region_of_face_[static_cast<size_t>(first_face)];
+    for (const int64_t f : region_faces_[static_cast<size_t>(region)]) {
+      for (int corner = 0; corner < 3; ++corner) {
+        const double l = corner_edge_lengths_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        const int64_t of = opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        if (of < 0) {
+          boundary_length += l;
+        } else if (region_of_face_[static_cast<size_t>(of)] != region) {
+          if (face_chart_[static_cast<size_t>(of)] != chart_index) {
+            boundary_length += l;
+          } else {
+            boundary_length -= l;
+          }
+        }
+      }
+    }
+    return std::max(0.0, boundary_length);
+  }
+
+  double normal_deviation_metric(const Chart &chart, int64_t face) const {
+    return std::min(1.0 - dot(face_normals_[static_cast<size_t>(face)], chart.basis.normal), 1.0);
+  }
+
+  double straightness_metric(const Chart &chart, int64_t first_face, int64_t chart_index) const {
+    double l_out = 0.0;
+    double l_in = 0.0;
+    const int64_t region = region_of_face_[static_cast<size_t>(first_face)];
+    for (const int64_t f : region_faces_[static_cast<size_t>(region)]) {
+      for (int corner = 0; corner < 3; ++corner) {
+        const double l = corner_edge_lengths_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        const int64_t of = opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        if (of < 0) {
+          l_out += l;
+        } else if (region_of_face_[static_cast<size_t>(of)] != region) {
+          if (face_chart_[static_cast<size_t>(of)] != chart_index) {
+            l_out += l;
+          } else {
+            l_in += l;
+          }
+        }
+      }
+    }
+    const double total = l_out + l_in;
+    if (total <= 0.0) {
+      return 0.0;
+    }
+    return std::min((l_out - l_in) / total, 0.0);
+  }
+
+  double compute_cost(const Chart &chart, int64_t chart_index, int64_t face) const {
+    const double new_area = compute_area(chart, face);
+    const double new_boundary = compute_boundary_length(chart, face, chart_index);
+    if (options_.max_chart_area > 0.0 && new_area > options_.max_chart_area) {
+      return std::numeric_limits<double>::infinity();
+    }
+    if (options_.max_boundary_length > 0.0 && new_boundary > options_.max_boundary_length) {
+      return std::numeric_limits<double>::infinity();
+    }
+    const double normal_deviation = normal_deviation_metric(chart, face);
+    if (normal_deviation >= kNormalDeviationCutoff) {
+      return std::numeric_limits<double>::infinity();
+    }
+    double cost = options_.normal_deviation_weight * normal_deviation;
+    // Deviation 1: seam metrics are exactly 0 on welded indexed input.
+    const double old_roundness =
+        chart.boundary_length * chart.boundary_length / std::max(chart.area, 1e-300);
+    const double new_roundness = new_boundary * new_boundary / std::max(new_area, 1e-300);
+    cost += options_.roundness_weight * (1.0 - old_roundness / std::max(new_roundness, 1e-300));
+    cost += options_.straightness_weight * straightness_metric(chart, face, chart_index);
+    if (!std::isfinite(cost)) {
+      return std::numeric_limits<double>::infinity();
+    }
+    return cost;
+  }
+
+  // ---- parameterization + validity ----------------------------------------
+
+  void parameterize_chart(const Chart &chart) {
+    for (const int64_t f : chart.faces) {
+      const auto &face = mesh_.faces[static_cast<size_t>(f)];
+      for (int corner = 0; corner < 3; ++corner) {
+        const Vec3 p = vertex_position(mesh_, face[static_cast<size_t>(corner)]);
+        corner_uvs_[static_cast<size_t>(f) * 3 + static_cast<size_t>(corner)] =
+            Vec2d{dot(chart.basis.tangent, p), dot(chart.basis.bitangent, p)};
+      }
+    }
+  }
+
+  double signed_uv_area(int64_t face) const {
+    const Vec2d &a = corner_uvs_[static_cast<size_t>(face) * 3 + 0];
+    const Vec2d &b = corner_uvs_[static_cast<size_t>(face) * 3 + 1];
+    const Vec2d &c = corner_uvs_[static_cast<size_t>(face) * 3 + 2];
+    return 0.5 * ((b.u - a.u) * (c.v - a.v) - (c.u - a.u) * (b.v - a.v));
+  }
+
+  static bool segments_intersect(
+      const Vec2d &a0, const Vec2d &a1, const Vec2d &b0, const Vec2d &b1) {
+    const double eps = kBoundaryIntersectEpsilon;
+    const double min_ax = std::min(a0.u, a1.u), max_ax = std::max(a0.u, a1.u);
+    const double min_ay = std::min(a0.v, a1.v), max_ay = std::max(a0.v, a1.v);
+    const double min_bx = std::min(b0.u, b1.u), max_bx = std::max(b0.u, b1.u);
+    const double min_by = std::min(b0.v, b1.v), max_by = std::max(b0.v, b1.v);
+    if (min_ax > max_bx + eps || min_bx > max_ax + eps ||
+        min_ay > max_by + eps || min_by > max_ay + eps) {
+      return false;
+    }
+    const auto orient = [](const Vec2d &p, const Vec2d &q, const Vec2d &r) {
+      return (q.u - p.u) * (r.v - p.v) - (q.v - p.v) * (r.u - p.u);
+    };
+    const double o1 = orient(a0, a1, b0);
+    const double o2 = orient(a0, a1, b1);
+    const double o3 = orient(b0, b1, a0);
+    const double o4 = orient(b0, b1, a1);
+    // Strict interior crossing; eps-touching does not count.
+    return ((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)) &&
+        ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps));
+  }
+
+  bool chart_parameterization_valid(const Chart &chart, int64_t chart_index) const {
+    // Flips: OK only when none or all faces are flipped (mirrored chart).
+    int64_t flipped = 0;
+    for (const int64_t f : chart.faces) {
+      if (signed_uv_area(f) < 0.0) {
+        flipped += 1;
+      }
+    }
+    if (flipped != 0 && flipped != static_cast<int64_t>(chart.faces.size())) {
+      return false;
+    }
+    // Boundary self-intersection (deviation 3: pairwise with bbox cull).
+    struct BoundaryEdge {
+      Vec2d p0, p1;
+      int64_t v0 = 0, v1 = 0;
+    };
+    std::vector<BoundaryEdge> boundary;
+    for (const int64_t f : chart.faces) {
+      const auto &face = mesh_.faces[static_cast<size_t>(f)];
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t of = opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        if (of >= 0 && face_chart_[static_cast<size_t>(of)] == chart_index) {
+          continue;
+        }
+        boundary.push_back(BoundaryEdge{
+            corner_uvs_[static_cast<size_t>(f) * 3 + static_cast<size_t>(corner)],
+            corner_uvs_[static_cast<size_t>(f) * 3 + static_cast<size_t>((corner + 1) % 3)],
+            face[static_cast<size_t>(corner)],
+            face[static_cast<size_t>((corner + 1) % 3)]});
+      }
+    }
+    for (size_t i = 0; i < boundary.size(); ++i) {
+      for (size_t j = i + 1; j < boundary.size(); ++j) {
+        const BoundaryEdge &a = boundary[i];
+        const BoundaryEdge &b = boundary[j];
+        if (a.v0 == b.v0 || a.v0 == b.v1 || a.v1 == b.v0 || a.v1 == b.v1) {
+          continue;  // edges sharing a mesh vertex never count
+        }
+        if (segments_intersect(a.p0, a.p1, b.p0, b.p1)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // ---- chart growth (reference addFaceToChart) -----------------------------
+
+  bool add_face_to_chart(int64_t chart_index, int64_t face) {
+    Chart &chart = charts_[static_cast<size_t>(chart_index)];
+    const size_t old_count = chart.faces.size();
+    const bool first_face = old_count == 0;
+    // Append the face's whole planar region, rotated to start at `face`.
+    const auto &region =
+        region_faces_[static_cast<size_t>(region_of_face_[static_cast<size_t>(face)])];
+    const auto start = std::find(region.begin(), region.end(), face);
+    chart.faces.insert(chart.faces.end(), start, region.end());
+    chart.faces.insert(chart.faces.end(), region.begin(), start);
+    const size_t face_count = chart.faces.size();
+
+    Basis basis;
+    if (first_face) {
+      basis.normal = face_normals_[static_cast<size_t>(face)];
+      const auto &fv = mesh_.faces[static_cast<size_t>(face)];
+      basis.tangent = normalized_or_zero(
+          vec_sub(vertex_position(mesh_, fv[0]), vertex_position(mesh_, fv[1])));
+      basis.bitangent = vec_cross(basis.normal, basis.tangent);
+      if (norm(basis.normal) < 0.5 || norm(basis.tangent) < 0.5) {
+        chart.faces.resize(old_count);
+        return false;
+      }
+    } else {
+      std::vector<Vec3> points;
+      points.reserve(face_count * 3);
+      for (const int64_t f : chart.faces) {
+        const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+        points.push_back(vertex_position(mesh_, fv[0]));
+        points.push_back(vertex_position(mesh_, fv[1]));
+        points.push_back(vertex_position(mesh_, fv[2]));
+      }
+      if (!least_squares_basis(points, &basis)) {
+        chart.faces.resize(old_count);
+        return false;
+      }
+      if (dot(basis.normal, face_normals_[static_cast<size_t>(face)]) < 0.0) {
+        basis.normal = Vec3{-basis.normal[0], -basis.normal[1], -basis.normal[2]};
+      }
+    }
+    if (!first_face) {
+      const Basis saved = chart.basis;
+      chart.basis = basis;
+      parameterize_chart(chart);
+      for (size_t i = old_count; i < face_count; ++i) {
+        face_chart_[static_cast<size_t>(chart.faces[i])] = chart_index;
+      }
+      if (!chart_parameterization_valid(chart, chart_index)) {
+        for (size_t i = old_count; i < face_count; ++i) {
+          face_chart_[static_cast<size_t>(chart.faces[i])] = -1;
+        }
+        chart.faces.resize(old_count);
+        chart.basis = saved;
+        return false;
+      }
+    }
+    chart.basis = basis;
+    chart.area = compute_area_pre_add(chart, old_count);
+    chart.boundary_length = compute_boundary_pre_add(chart, old_count, chart_index, first_face);
+    for (size_t i = old_count; i < face_count; ++i) {
+      const int64_t f = chart.faces[i];
+      face_chart_[static_cast<size_t>(f)] = chart_index;
+      faces_left_ -= 1;
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      const Vec3 center{
+          (vertex_position(mesh_, fv[0])[0] + vertex_position(mesh_, fv[1])[0] +
+           vertex_position(mesh_, fv[2])[0]) / 3.0,
+          (vertex_position(mesh_, fv[0])[1] + vertex_position(mesh_, fv[1])[1] +
+           vertex_position(mesh_, fv[2])[1]) / 3.0,
+          (vertex_position(mesh_, fv[0])[2] + vertex_position(mesh_, fv[1])[2] +
+           vertex_position(mesh_, fv[2])[2]) / 3.0,
+      };
+      chart.centroid_sum[0] += center[0];
+      chart.centroid_sum[1] += center[1];
+      chart.centroid_sum[2] += center[2];
+    }
+    const double inv = 1.0 / static_cast<double>(chart.faces.size());
+    chart.centroid = Vec3{
+        chart.centroid_sum[0] * inv, chart.centroid_sum[1] * inv, chart.centroid_sum[2] * inv};
+    refresh_candidates(chart_index);
+    return true;
+  }
+
+  // chart.area/boundary updates must mirror computeArea/computeBoundaryLength
+  // exactly: both are evaluated as if the region were not yet added, which is
+  // why the snapshot happens against old_count state below.
+  double compute_area_pre_add(const Chart &chart, size_t old_count) const {
+    double area = 0.0;
+    for (size_t i = 0; i < old_count; ++i) {
+      area += face_areas_[static_cast<size_t>(chart.faces[i])];
+    }
+    for (size_t i = old_count; i < chart.faces.size(); ++i) {
+      area += face_areas_[static_cast<size_t>(chart.faces[i])];
+    }
+    return area;
+  }
+
+  double compute_boundary_pre_add(
+      const Chart &chart, size_t old_count, int64_t chart_index, bool first_face) const {
+    (void)first_face;
+    // Recompute the chart boundary from scratch over current membership
+    // (face_chart_ already set for old faces; new faces counted via region
+    // walk like the reference incremental form). Chart sizes are small.
+    double boundary = 0.0;
+    for (const int64_t f : chart.faces) {
+      for (int corner = 0; corner < 3; ++corner) {
+        const double l = corner_edge_lengths_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        const int64_t of = opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        bool inside = false;
+        if (of >= 0) {
+          if (face_chart_[static_cast<size_t>(of)] == chart_index) {
+            inside = true;
+          } else {
+            for (size_t i = old_count; i < chart.faces.size() && !inside; ++i) {
+              inside = chart.faces[i] == of;
+            }
+          }
+        }
+        if (!inside) {
+          boundary += l;
+        }
+      }
+    }
+    return boundary;
+  }
+
+  void refresh_candidates(int64_t chart_index) {
+    Chart &chart = charts_[static_cast<size_t>(chart_index)];
+    chart.candidates.clear();
+    for (const int64_t f : chart.faces) {
+      for (int corner = 0; corner < 3; ++corner) {
+        const int64_t of = opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+        if (of < 0 || face_chart_[static_cast<size_t>(of)] >= 0) {
+          continue;
+        }
+        if (chart.failed_regions.count(region_of_face_[static_cast<size_t>(of)]) > 0) {
+          continue;
+        }
+        const double cost = compute_cost(chart, chart_index, of);
+        if (std::isfinite(cost)) {
+          chart.candidates.push(cost, of);
+        }
+      }
+    }
+  }
+
+  // ---- growth phases -------------------------------------------------------
+
+  void create_chart(double threshold) {
+    const int64_t chart_index = static_cast<int64_t>(charts_.size());
+    charts_.emplace_back();
+    Chart &chart = charts_.back();
+    // Seed: first unassigned face of the largest-area planar region (strict >
+    // scan in ascending face order, as the reference).
+    chart.seed = 0;
+    double largest_area = 0.0;
+    for (int64_t f = 0; f < static_cast<int64_t>(mesh_.faces.size()); ++f) {
+      if (face_chart_[static_cast<size_t>(f)] >= 0) {
+        continue;
+      }
+      const double area = region_areas_[static_cast<size_t>(region_of_face_[static_cast<size_t>(f)])];
+      if (area > largest_area) {
+        largest_area = area;
+        chart.seed = f;
+      }
+    }
+    if (!add_face_to_chart(chart_index, chart.seed)) {
+      // Degenerate seed rescue (no reference analog: xatlas asserts instead).
+      // Force-assign the seed's whole region with zero UVs so place_seeds /
+      // fill_holes cannot loop forever; the chart fails acceptance and is
+      // routed to LSCM. Deterministic and bounded.
+      failed_add_count_ += 1;
+      Chart &failed = charts_[static_cast<size_t>(chart_index)];
+      const auto &region =
+          region_faces_[static_cast<size_t>(region_of_face_[static_cast<size_t>(failed.seed)])];
+      for (const int64_t f : region) {
+        if (face_chart_[static_cast<size_t>(f)] < 0) {
+          failed.faces.push_back(f);
+          face_chart_[static_cast<size_t>(f)] = chart_index;
+          faces_left_ -= 1;
+        }
+      }
+      return;
+    }
+    for (;;) {
+      Chart &current = charts_[static_cast<size_t>(chart_index)];
+      if (current.candidates.empty() || current.candidates.peek_cost() > threshold) {
+        break;
+      }
+      const int64_t f = current.candidates.pop();
+      if (face_chart_[static_cast<size_t>(f)] >= 0) {
+        continue;
+      }
+      if (!add_face_to_chart(chart_index, f)) {
+        failed_add_count_ += 1;
+        charts_[static_cast<size_t>(chart_index)].failed_regions.insert(
+            region_of_face_[static_cast<size_t>(f)]);
+        continue;
+      }
+    }
+  }
+
+  void place_seeds(double threshold) {
+    while (faces_left_ > 0) {
+      create_chart(threshold);
+    }
+  }
+
+  void fill_holes(double threshold) {
+    while (faces_left_ > 0) {
+      create_chart(threshold);
+    }
+  }
+
+  bool relocate_seed(Chart &chart) {
+    GrowthCostQueue best_triangles(10);
+    for (const int64_t f : chart.faces) {
+      best_triangles.push(normal_deviation_metric(chart, f), f);
+    }
+    int64_t most_central = chart.faces.empty() ? chart.seed : chart.faces[0];
+    double min_distance = std::numeric_limits<double>::max();
+    while (best_triangles.count() > 0) {
+      const int64_t face = best_triangles.pop();
+      const auto &fv = mesh_.faces[static_cast<size_t>(face)];
+      const Vec3 center{
+          (vertex_position(mesh_, fv[0])[0] + vertex_position(mesh_, fv[1])[0] +
+           vertex_position(mesh_, fv[2])[0]) / 3.0,
+          (vertex_position(mesh_, fv[0])[1] + vertex_position(mesh_, fv[1])[1] +
+           vertex_position(mesh_, fv[2])[1]) / 3.0,
+          (vertex_position(mesh_, fv[0])[2] + vertex_position(mesh_, fv[1])[2] +
+           vertex_position(mesh_, fv[2])[2]) / 3.0,
+      };
+      const Vec3 diff = vec_sub(chart.centroid, center);
+      const double distance = norm(diff);
+      if (distance < min_distance) {
+        min_distance = distance;
+        most_central = face;
+      }
+    }
+    if (most_central == chart.seed) {
+      return false;
+    }
+    chart.seed = most_central;
+    return true;
+  }
+
+  bool relocate_seeds() {
+    bool any = false;
+    for (Chart &chart : charts_) {
+      if (chart.alive && relocate_seed(chart)) {
+        any = true;
+        seed_relocation_count_ += 1;
+      }
+    }
+    return any;
+  }
+
+  void reset_charts() {
+    const int64_t face_count = static_cast<int64_t>(mesh_.faces.size());
+    face_chart_.assign(static_cast<size_t>(face_count), -1);
+    faces_left_ = face_count;
+    for (int64_t i = 0; i < static_cast<int64_t>(charts_.size()); ++i) {
+      Chart &chart = charts_[static_cast<size_t>(i)];
+      if (!chart.alive) {
+        continue;  // merged away (reference removes these before any reset)
+      }
+      chart.area = 0.0;
+      chart.boundary_length = 0.0;
+      chart.basis = Basis{};
+      chart.centroid_sum = Vec3{0.0, 0.0, 0.0};
+      chart.centroid = Vec3{0.0, 0.0, 0.0};
+      chart.faces.clear();
+      chart.candidates.clear();
+      chart.failed_regions.clear();
+      if (!add_face_to_chart(i, chart.seed)) {
+        failed_add_count_ += 1;
+      }
+    }
+  }
+
+  void grow_charts(double threshold) {
+    for (;;) {
+      if (faces_left_ == 0) {
+        break;
+      }
+      int64_t best_face = -1;
+      int64_t best_chart = -1;
+      double lowest_cost = std::numeric_limits<double>::max();
+      for (int64_t i = 0; i < static_cast<int64_t>(charts_.size()); ++i) {
+        Chart &chart = charts_[static_cast<size_t>(i)];
+        int64_t face = -1;
+        double cost = std::numeric_limits<double>::max();
+        for (;;) {
+          if (chart.candidates.count() == 0) {
+            break;
+          }
+          cost = chart.candidates.peek_cost();
+          face = chart.candidates.peek_face();
+          if (face_chart_[static_cast<size_t>(face)] < 0) {
+            break;
+          }
+          chart.candidates.pop();  // claimed by another chart
+          face = -1;
+        }
+        if (face < 0) {
+          continue;
+        }
+        if (cost < lowest_cost) {
+          lowest_cost = cost;
+          best_face = face;
+          best_chart = i;
+        }
+      }
+      if (best_face < 0 || lowest_cost > threshold) {
+        break;
+      }
+      charts_[static_cast<size_t>(best_chart)].candidates.pop();
+      if (!add_face_to_chart(best_chart, best_face)) {
+        failed_add_count_ += 1;
+        charts_[static_cast<size_t>(best_chart)].failed_regions.insert(
+            region_of_face_[static_cast<size_t>(best_face)]);
+      }
+    }
+  }
+
+  // ---- merge phase (reference mergeCharts) ---------------------------------
+
+  bool merge_chart(int64_t owner_index, int64_t other_index, double shared_length) {
+    Chart &owner = charts_[static_cast<size_t>(owner_index)];
+    Chart &other = charts_[static_cast<size_t>(other_index)];
+    const size_t old_count = owner.faces.size();
+    owner.faces.insert(owner.faces.end(), other.faces.begin(), other.faces.end());
+    for (const int64_t f : other.faces) {
+      face_chart_[static_cast<size_t>(f)] = owner_index;
+    }
+    Basis basis;
+    std::vector<Vec3> points;
+    points.reserve(owner.faces.size() * 3);
+    for (const int64_t f : owner.faces) {
+      const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+      points.push_back(vertex_position(mesh_, fv[0]));
+      points.push_back(vertex_position(mesh_, fv[1]));
+      points.push_back(vertex_position(mesh_, fv[2]));
+    }
+    const auto revert = [&]() {
+      owner.faces.resize(old_count);
+      for (const int64_t f : other.faces) {
+        face_chart_[static_cast<size_t>(f)] = other_index;
+      }
+    };
+    if (!least_squares_basis(points, &basis)) {
+      revert();
+      return false;
+    }
+    if (dot(basis.normal, face_normals_[static_cast<size_t>(owner.faces[0])]) < 0.0) {
+      basis.normal = Vec3{-basis.normal[0], -basis.normal[1], -basis.normal[2]};
+    }
+    const Basis saved = owner.basis;
+    owner.basis = basis;
+    parameterize_chart(owner);
+    if (!chart_parameterization_valid(owner, owner_index)) {
+      owner.basis = saved;
+      revert();
+      return false;
+    }
+    for (const int64_t region : other.failed_regions) {
+      owner.failed_regions.insert(region);
+    }
+    owner.area += other.area;
+    // Reference mergeChart bookkeeping (deviation 5): minus ONE shared length.
+    owner.boundary_length += other.boundary_length - shared_length;
+    owner.centroid_sum[0] += other.centroid_sum[0];
+    owner.centroid_sum[1] += other.centroid_sum[1];
+    owner.centroid_sum[2] += other.centroid_sum[2];
+    const double inv = 1.0 / static_cast<double>(owner.faces.size());
+    owner.centroid = Vec3{
+        owner.centroid_sum[0] * inv, owner.centroid_sum[1] * inv, owner.centroid_sum[2] * inv};
+    other.alive = false;
+    other.faces.clear();
+    growth_merge_count_ += 1;
+    return true;
+  }
+
+  void merge_charts() {
+    const int64_t chart_count = static_cast<int64_t>(charts_.size());
+    for (;;) {
+      bool merged = false;
+      for (int64_t c = chart_count - 1; c >= 0; --c) {
+        Chart &chart = charts_[static_cast<size_t>(c)];
+        if (!chart.alive) {
+          continue;
+        }
+        double external_boundary = 0.0;
+        std::vector<double> shared(static_cast<size_t>(chart_count), 0.0);
+        std::vector<int64_t> shared_edge_count(static_cast<size_t>(chart_count), 0);
+        for (const int64_t f : chart.faces) {
+          for (int corner = 0; corner < 3; ++corner) {
+            const double l =
+                corner_edge_lengths_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+            const int64_t of =
+                opposite_face_[static_cast<size_t>(f)][static_cast<size_t>(corner)];
+            if (of < 0) {
+              external_boundary += l;
+              continue;
+            }
+            const int64_t neighbor = face_chart_[static_cast<size_t>(of)];
+            if (neighbor < 0) {
+              external_boundary += l;
+            } else if (neighbor != c) {
+              // Welded input: no seams, so shared == sharedNoSeams.
+              shared[static_cast<size_t>(neighbor)] += l;
+              shared_edge_count[static_cast<size_t>(neighbor)] += 1;
+            }
+          }
+        }
+        for (int64_t cc = chart_count - 1; cc >= 0; --cc) {
+          if (cc == c) {
+            continue;
+          }
+          Chart &other = charts_[static_cast<size_t>(cc)];
+          if (!other.alive || shared[static_cast<size_t>(cc)] <= 0.0) {
+            continue;
+          }
+          if (dot(other.basis.normal, chart.basis.normal) < kMergeMinNormalDot) {
+            continue;
+          }
+          if (options_.max_chart_area > 0.0 &&
+              chart.area + other.area > options_.max_chart_area) {
+            continue;
+          }
+          if (options_.max_boundary_length > 0.0 &&
+              chart.boundary_length + other.boundary_length - shared[static_cast<size_t>(cc)] >
+                  options_.max_boundary_length) {
+            continue;
+          }
+          const double s = shared[static_cast<size_t>(cc)];
+          const bool rule_single = chart.faces.size() > 1 && other.faces.size() == 1 &&
+              other.area <= chart.area * 0.1;
+          const bool rule_quad =
+              other.faces.size() == 2 && shared_edge_count[static_cast<size_t>(cc)] >= 2;
+          const bool rule_inside = std::fabs(s - other.boundary_length) <= kXatlasEpsilon;
+          const bool rule_fraction =
+              s > 0.2 * std::max(0.0, chart.boundary_length - external_boundary) ||
+              s > 0.75 * other.boundary_length;
+          if (!(rule_single || rule_quad || rule_inside || rule_fraction)) {
+            continue;
+          }
+          if (!merge_chart(c, cc, s)) {
+            continue;
+          }
+          merged = true;
+          break;
+        }
+        if (merged) {
+          break;
+        }
+      }
+      if (!merged) {
+        break;
+      }
+    }
+  }
+
+  // ---- finalize ------------------------------------------------------------
+
+  ChartBuildResult finalize() {
+    // Compact alive charts in ascending index order (reference removeAt).
+    std::vector<int64_t> dense(charts_.size(), -1);
+    std::vector<int64_t> alive_indices;
+    for (size_t i = 0; i < charts_.size(); ++i) {
+      if (charts_[i].alive && !charts_[i].faces.empty()) {
+        dense[i] = static_cast<int64_t>(alive_indices.size());
+        alive_indices.push_back(static_cast<int64_t>(i));
+      }
+    }
+    ChartBuildResult result;
+    result.chart_count = static_cast<int64_t>(alive_indices.size());
+    result.chart_ids.assign(mesh_.faces.size(), -1);
+    for (size_t f = 0; f < mesh_.faces.size(); ++f) {
+      const int64_t raw = face_chart_[f];
+      result.chart_ids[f] = raw >= 0 ? dense[static_cast<size_t>(raw)] : -1;
+    }
+
+    result.chart_face_counts.assign(static_cast<size_t>(result.chart_count), 0);
+    result.chart_stretch_l2.assign(static_cast<size_t>(result.chart_count), 0.0);
+    result.chart_stretch_linf.assign(static_cast<size_t>(result.chart_count), 0.0);
+    result.chart_accepted.assign(static_cast<size_t>(result.chart_count), 0);
+    result.chart_needs_lscm.assign(static_cast<size_t>(result.chart_count), 0);
+
+    for (size_t out = 0; out < alive_indices.size(); ++out) {
+      Chart &chart = charts_[static_cast<size_t>(alive_indices[out])];
+      // Final projection with the final basis (growth texcoords are scratch).
+      parameterize_chart(chart);
+      // Orientation normalization: a fully mirrored chart (xatlas validity
+      // allows all-flipped) is unmirrored by negating u — our zero-flip
+      // output invariant, unlike the reference (anchors record ~50% mirrored
+      // reference charts; mirroring carries no parity signal).
+      int64_t flipped = 0;
+      int64_t measurable = 0;
+      for (const int64_t f : chart.faces) {
+        const double area = signed_uv_area(f);
+        if (std::fabs(area) > kUvAreaEpsilon) {
+          measurable += 1;
+          if (area < 0.0) {
+            flipped += 1;
+          }
+        }
+      }
+      if (measurable > 0 && flipped == measurable) {
+        for (const int64_t f : chart.faces) {
+          for (int corner = 0; corner < 3; ++corner) {
+            corner_uvs_[static_cast<size_t>(f) * 3 + static_cast<size_t>(corner)].u *= -1.0;
+          }
+        }
+        flipped = 0;
+        mirrored_chart_normalized_count_ += 1;
+      }
+      // Sander stretch (uv -> 3D), 3D-area weighted, skipping degenerates.
+      double weighted_l2_sq = 0.0;
+      double total_area3d = 0.0;
+      double linf = 0.0;
+      for (const int64_t f : chart.faces) {
+        const double uv_area = signed_uv_area(f);
+        const double area3d = face_areas_[static_cast<size_t>(f)];
+        if (std::fabs(uv_area) <= kUvAreaEpsilon || area3d <= 0.0 || uv_area < 0.0) {
+          continue;
+        }
+        const auto &fv = mesh_.faces[static_cast<size_t>(f)];
+        const Vec3 q0 = vertex_position(mesh_, fv[0]);
+        const Vec3 q1 = vertex_position(mesh_, fv[1]);
+        const Vec3 q2 = vertex_position(mesh_, fv[2]);
+        const Vec2d &t0 = corner_uvs_[static_cast<size_t>(f) * 3 + 0];
+        const Vec2d &t1 = corner_uvs_[static_cast<size_t>(f) * 3 + 1];
+        const Vec2d &t2 = corner_uvs_[static_cast<size_t>(f) * 3 + 2];
+        const double inv2a = 1.0 / (2.0 * uv_area);
+        Vec3 ss{0.0, 0.0, 0.0};
+        Vec3 st{0.0, 0.0, 0.0};
+        for (int axis = 0; axis < 3; ++axis) {
+          ss[static_cast<size_t>(axis)] = (q0[static_cast<size_t>(axis)] * (t1.v - t2.v) +
+                                           q1[static_cast<size_t>(axis)] * (t2.v - t0.v) +
+                                           q2[static_cast<size_t>(axis)] * (t0.v - t1.v)) * inv2a;
+          st[static_cast<size_t>(axis)] = (q0[static_cast<size_t>(axis)] * (t2.u - t1.u) +
+                                           q1[static_cast<size_t>(axis)] * (t0.u - t2.u) +
+                                           q2[static_cast<size_t>(axis)] * (t1.u - t0.u)) * inv2a;
+        }
+        const double a = dot(ss, ss);
+        const double b = dot(ss, st);
+        const double c2 = dot(st, st);
+        const double disc = std::sqrt(std::max(0.0, (a - c2) * (a - c2) + 4.0 * b * b));
+        const double gamma = std::sqrt(std::max(0.0, ((a + c2) + disc) * 0.5));
+        weighted_l2_sq += ((a + c2) * 0.5) * area3d;
+        total_area3d += area3d;
+        linf = std::max(linf, gamma);
+      }
+      const double l2 = total_area3d > 0.0 ? std::sqrt(weighted_l2_sq / total_area3d) : 0.0;
+      result.chart_face_counts[out] = static_cast<int64_t>(chart.faces.size());
+      result.chart_stretch_l2[out] = l2;
+      result.chart_stretch_linf[out] = linf;
+      const bool accepted = total_area3d > 0.0 && flipped == 0 && std::isfinite(linf) &&
+          linf <= options_.projection_linf_threshold;
+      result.chart_accepted[out] = accepted ? 1 : 0;
+      result.chart_needs_lscm[out] = accepted ? 0 : 1;
+      if (accepted) {
+        result.accepted_chart_count += 1;
+      } else {
+        result.lscm_pending_chart_count += 1;
+      }
+    }
+
+    result.corner_uvs.reserve(corner_uvs_.size() * 2);
+    for (const Vec2d &uv : corner_uvs_) {
+      result.corner_uvs.push_back(uv.u);
+      result.corner_uvs.push_back(uv.v);
+    }
+    result.planar_region_count = static_cast<int64_t>(region_faces_.size());
+    result.place_seed_chart_count = place_seed_chart_count_;
+    result.fill_hole_chart_count = fill_hole_chart_count_;
+    result.growth_merge_count = growth_merge_count_;
+    result.seed_relocation_count = seed_relocation_count_;
+    result.failed_add_count = failed_add_count_;
+    result.mirrored_chart_normalized_count = mirrored_chart_normalized_count_;
+    return result;
+  }
+};
+
 nb::object make_int64_vector(std::vector<int64_t> values) {
   auto owner = new std::vector<int64_t>(std::move(values));
   nb::capsule capsule(owner, [](void *ptr) noexcept {
@@ -807,6 +1988,110 @@ nb::dict compute_uv_charts(
   result["chart_cone_axes"] = uv_unwrap::make_float64_matrix(
       std::move(axes), clusters.chart_cones.size(), 3);
   result["chart_cone_half_angles"] = uv_unwrap::make_float64_vector(std::move(half_angles));
+  return result;
+}
+
+nb::dict grow_uv_charts(
+    nb::object vertices,
+    nb::object faces,
+    nb::object cluster_ids,
+    double max_cost,
+    double normal_deviation_weight,
+    double roundness_weight,
+    double straightness_weight,
+    double normal_seam_weight,
+    double texture_seam_weight,
+    int64_t max_iterations,
+    double projection_linf_threshold,
+    double max_chart_area,
+    double max_boundary_length) {
+  const mesh_common::MeshData mesh = mesh_common::load_mesh(vertices, faces);
+  const int64_t face_count = static_cast<int64_t>(mesh.faces.size());
+  for (const double knob :
+       {max_cost, normal_deviation_weight, roundness_weight, straightness_weight,
+        normal_seam_weight, texture_seam_weight, projection_linf_threshold, max_chart_area,
+        max_boundary_length}) {
+    if (!std::isfinite(knob)) {
+      throw nb::value_error("grow_uv_charts weights/limits must be finite");
+    }
+  }
+  if (max_cost <= 0.0) {
+    throw nb::value_error("max_cost must be positive");
+  }
+  if (max_iterations < 0) {
+    throw nb::value_error("max_iterations must be non-negative");
+  }
+  if (projection_linf_threshold <= 0.0) {
+    throw nb::value_error("projection_linf_threshold must be positive");
+  }
+
+  std::vector<int64_t> clusters(static_cast<size_t>(face_count), 0);
+  if (!cluster_ids.is_none()) {
+    const auto ndim = nb::cast<int64_t>(nb::getattr(cluster_ids, "ndim"));
+    if (ndim != 1) {
+      throw nb::value_error("cluster_ids must have rank 1");
+    }
+    if (mesh_common::dtype_name(cluster_ids, "cluster_ids") != "int64") {
+      throw nb::value_error("cluster_ids must have dtype int64");
+    }
+    if (mesh_common::dimension(cluster_ids, "cluster_ids", 0) != face_count) {
+      std::ostringstream message;
+      message << "cluster_ids must have shape (" << face_count << ",)";
+      throw nb::value_error(message.str().c_str());
+    }
+    mesh_common::BufferView cluster_buffer(cluster_ids.ptr(), "cluster_ids");
+    const Py_buffer &view = cluster_buffer.get();
+    const auto *base = static_cast<const char *>(view.buf);
+    const Py_ssize_t stride = view.strides != nullptr ? view.strides[0] : view.itemsize;
+    for (int64_t row = 0; row < face_count; ++row) {
+      int64_t value = 0;
+      std::memcpy(&value, base + row * stride, sizeof(int64_t));
+      if (value < 0) {
+        throw nb::value_error("cluster_ids must be non-negative");
+      }
+      clusters[static_cast<size_t>(row)] = value;
+    }
+  }
+
+  uv_unwrap::GrowthOptions options;
+  options.max_cost = max_cost;
+  options.normal_deviation_weight = normal_deviation_weight;
+  options.roundness_weight = roundness_weight;
+  options.straightness_weight = straightness_weight;
+  options.normal_seam_weight = normal_seam_weight;
+  options.texture_seam_weight = texture_seam_weight;
+  options.max_iterations = max_iterations;
+  options.projection_linf_threshold = projection_linf_threshold;
+  options.max_chart_area = max_chart_area;
+  options.max_boundary_length = max_boundary_length;
+
+  uv_unwrap::ChartBuildResult built =
+      uv_unwrap::ChartBuilder(mesh, clusters, options).run();
+
+  nb::dict result;
+  result["chart_ids"] = uv_unwrap::make_int64_vector(std::move(built.chart_ids));
+  result["chart_count"] = built.chart_count;
+  result["corner_uvs"] = uv_unwrap::make_float64_matrix(
+      std::move(built.corner_uvs), static_cast<size_t>(face_count) * 3, 2);
+  result["chart_face_counts"] = uv_unwrap::make_int64_vector(std::move(built.chart_face_counts));
+  result["chart_stretch_l2"] = uv_unwrap::make_float64_vector(std::move(built.chart_stretch_l2));
+  result["chart_stretch_linf"] =
+      uv_unwrap::make_float64_vector(std::move(built.chart_stretch_linf));
+  result["chart_accepted"] = uv_unwrap::make_int64_vector(std::move(built.chart_accepted));
+  result["chart_needs_lscm"] = uv_unwrap::make_int64_vector(std::move(built.chart_needs_lscm));
+  result["accepted_chart_count"] = built.accepted_chart_count;
+  result["lscm_pending_chart_count"] = built.lscm_pending_chart_count;
+  result["planar_region_count"] = built.planar_region_count;
+  result["place_seed_chart_count"] = built.place_seed_chart_count;
+  result["fill_hole_chart_count"] = built.fill_hole_chart_count;
+  result["growth_merge_count"] = built.growth_merge_count;
+  result["seed_relocation_count"] = built.seed_relocation_count;
+  result["failed_add_count"] = built.failed_add_count;
+  result["mirrored_chart_normalized_count"] = built.mirrored_chart_normalized_count;
+  // Deviation 1: seam weights are accepted for contract completeness but
+  // contribute exactly 0 on welded indexed input (no seams exist).
+  result["normal_seam_weight"] = normal_seam_weight;
+  result["texture_seam_weight"] = texture_seam_weight;
   return result;
 }
 
