@@ -11,11 +11,9 @@
 3. `.agent/steering/REQUIREMENTS.md`
    Durable commitments. This captures what must stay true, what the repo already constrains, and what is explicitly out of scope.
 4. `.agent/steering/ROADMAP.md`
-   Ordered next phases. This turns imported truth into a near-term sequence of work.
-5. `.agent/steering/STATUS.md`
-   Current bootstrap pointer and next action. This stays short and operational.
+   Roadmap decision surface. It stays short on first-time onboarding; refreshes need strong roadmap evidence and user confirmation.
 
-The sequence should read like `why -> what must stay true -> what to do next`.
+The sequence should read like `why -> what must stay true -> what may come next`.
 
 ## Writing Standard
 
@@ -25,9 +23,12 @@ The sequence should read like `why -> what must stay true -> what to do next`.
 - Prefer tables and compact lists when the source material is scan-heavy.
 - Separate `Observed`, `Inferred`, and `Needs Confirmation` when certainty differs.
 - When a user follow-up is needed, ask a bounded decision question instead of outsourcing discovery.
-- Keep roadmap items evidence-backed and near-term. Do not invent distant strategy.
+- Do not use durable artifacts as scratchpads for speculative questions, confidence labels, or routing chatter.
+- Keep ROADMAP.md compact by default. Do not create phases on first-time onboarding, and do not promote candidate phases during refresh without user confirmation.
+- Keep roadmap items evidence-backed and near-term when phases are confirmed. Do not invent distant strategy.
 - Name concrete files, packages, and commands whenever they anchor the truth.
 - Do not let one artifact duplicate the full content of another. Each artifact should narrow the surface area.
+- Do not duplicate canonical artifact paths across steering files. `current.json`, SPEC.md, and PLAN.md own active work pointers.
 
 ## Confidence Model
 
@@ -41,40 +42,37 @@ The sequence should read like `why -> what must stay true -> what to do next`.
 
 - capture what was read and why it matters
 - explain the repo shape in one pass
-- preserve sources, commands, and unresolved ambiguity
+- preserve sources, commands, and only steering-blocking ambiguity
 - make it easy for later skills to avoid re-scanning the whole repo
+- do not include `Open Questions`, `Import Verdict`, steering confidence, or recommended next skill sections
+- put routing and next-action guidance in the chat report, not in `REPO-MAP.md`
 
 ### `PROJECT.md`
 
 - why the repo exists
-- who or what it serves
-- primary runtime surfaces
-- stack and key commands
-- visible decision principles already encoded in the repo
+- owned runtime surfaces
+- stack and key observed commands
+- visible decision principles already encoded in the repo that affect future changes
+- omit user/operator, dependency, or command sections when REPO-MAP.md already holds the detail and no downstream decision changes
 
 ### `REQUIREMENTS.md`
 
-- accepted product and technical constraints
-- invariants already encoded in the repo
+- durable product and technical constraints
+- invariants already encoded in the repo that future changes must preserve
 - quality and operational expectations that later plans must respect
 - non-goals that the current system clearly rejects
-- unknowns that still need confirmation
+- only unknowns that block framing, planning, or verification
+- do not carry generic unknowns such as missing CI preference, typecheck preference, or "is this user-facing?" unless the answer changes the active change
 
 ### `ROADMAP.md`
 
-- 3 to 6 ordered phases when repo evidence supports multiple independent phases; leave the scaffold placeholder otherwise
-- each phase must include `status: pending` and an empty `change:` field; see `references/ROADMAP-CONTRACT.md` for the full format
-- each phase should have an objective, why now, likely outputs, and an exit signal
-- phases should reflect the current repo, not generic best practices
-- phases should be sequenced so later skills can turn them into specific changes
-
-### `STATUS.md`
-
-- set `bootstrap` and the current stage unless a more specific active change already exists
-- summarize what is now true after onboarding
-- point to one concrete next skill
-- stay operational, not essay-like
-- do not duplicate canonical artifact paths from `current.json`, `SPEC.md`, or `PLAN.md`; name artifact roles instead
+- default first-time onboarding to the lightweight placeholder
+- never write phases during first-time onboarding
+- on refresher runs, write 3 to 6 ordered `pending` phases only when strong repo evidence shows an existing or ongoing roadmap and the user confirms importing or refreshing it in chat
+- on refresher runs, if strong roadmap evidence exists but confirmation is missing, ask one bounded follow-up before writing phases
+- each confirmed phase must include `status: pending` and an empty `change:` field; auto-onboard never writes `status: active`; see `.agent/.automaton/references/ROADMAP-CONTRACT.md` for the full format
+- each confirmed phase should have an objective, why now, likely outputs, and an exit signal
+- confirmed phases should reflect the current repo, not generic best practices
 
 ## Work Artifact Integrity
 

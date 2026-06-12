@@ -32,7 +32,7 @@ Allowed active-change layout:
 - Execute and verify load only detail files linked to the active slice or requirement IDs.
 - Execute writes slice evidence in place: inline slices update `PLAN.md`; linked detail slices update `slices/slice-NNN.md`; `orchestration/*.md` is supporting evidence, not the default write target.
 - Split a change only for independent outcomes. Do not split or narrow one coherent outcome solely because the spec or plan has many files, gaps, constraints, or scenarios.
-- If a skill narrows the user's stated scope, it must name the narrowing, explain why, and record the deferred scope in `.agent/steering/ROADMAP.md` following the format in `ROADMAP-CONTRACT.md`, or ask for confirmation.
+- If a skill narrows the user's stated scope, it must name the narrowing, explain why, and then widen the scope, ask the user to confirm, or record the deferred scope as a `Deferred / Not in scope` note inside the current change's SPEC. A narrowed scope must not be promoted into a `ROADMAP.md` phase: roadmap phases come only from a user-approved `auto-office-hours` decomposition, never as a side effect of a skill writing a smaller spec.
 
 ## Stage Handoffs
 
@@ -75,6 +75,26 @@ Each handoff carries five durable elements:
 - **`human-action`** — valid only when progress requires an external action the agent cannot perform, such as 2FA, account approval, or off-machine access.
 
 Verification findings, implementation caveats, downstream consequences, and recommendations for an already-approved next slice are not checkpoints. Record them as slice evidence or risks and continue.
+
+## Git Rhythm
+
+Per-slice commits are owned by `auto-execute`. This reference pins the contract so the skill prompts cannot drift.
+
+**Single owner.** `auto-execute` runs every `git commit` Automaton produces. `auto-verify` never invokes any git write command — its read-only-on-code gate extends to git history. Subagents on the implementer route never invoke any git command; the orchestrator owns history.
+
+**Trigger.** The rhythm is active when, at execute-stage entry, the working directory is a git repo, the run has no "skip git" instruction, and the repo is not in an interrupted state (mid-rebase, mid-merge, mid-cherry-pick, mid-bisect, or detached HEAD). When active, a commit fires after each slice's verification passes — the verification gate is the authorization, no separate prompt.
+
+**Commit shape.** `git add -A` followed by `git commit -m "slice N: <objective>"` for fresh slices, or `slice N gap-fix: <fix objective>` for gap-fix slices re-entered after `auto-verify` FAIL. Add scope defers to the user's `.gitignore`; the harness does not curate paths.
+
+**Strictly additive.** `git commit` only. Never `amend`, `reset`, `rebase`, `branch`, `checkout`, or `push`. The harness never rewrites history a user might already have inspected.
+
+**Pre-existing dirt.** If the working tree is already dirty at execute-stage entry, `auto-execute` announces once that slice 1's commit will sweep in the pre-existing changes, then proceeds. No question is asked; recovery (`git reset HEAD~`) is in the user's normal toolkit.
+
+**auto-verify leftovers.** Markdown writes from `auto-verify` are not committed by the producing skill. `VERIFY-GAP` blocks added to PLAN.md on FAIL fold into the next `auto-execute` gap-fix commit on re-entry. The one-line ROADMAP phase update on PASS sits in the working tree as a terminal-state note; the user closes it in their own cadence.
+
+**Rhythm STOP conditions.** Commit failure (pre-commit hook rejection, signing failure, etc.) or the repo entering an interrupted state mid-run is STOP-and-surface. The agent does not silently skip the rhythm to keep going, and does not retry with workarounds.
+
+Validation tier: L3 (prompt prose plus `tests/skills.test.mjs` regression). No runtime enforcement; the rhythm is portable across hosts because it lives entirely in skill prompts.
 
 ## Review Verdict Routing
 
