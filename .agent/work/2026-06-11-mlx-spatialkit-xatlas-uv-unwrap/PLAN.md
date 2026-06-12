@@ -34,6 +34,10 @@ Required:
 **Depends on:** none
 **Touches:** `cpp/uv_unwrap.cpp|hpp`, `cpp/bindings.cpp`, `CMakeLists.txt`, `tests/test_mesh_processing.py`
 
+**Status:** complete (subagent route: implementer DONE → spec APPROVED → quality APPROVED)
+**Evidence:** `ConeClusterer` in new `cpp/uv_unwrap.{cpp,hpp}` (~750 lines) + `compute_uv_charts` binding with CuMesh defaults. Spec review verified the cost composition against `atlas.cu:184-192` — the kernel uses **perimeter²/area** (docstring says perimeter/area; kernel wins, documented). Three documented deviations approved (monotone enclosing cones → cone invariant is a hard guarantee; refine cone-admission; guarded division). QEM determinism discipline verified structurally (no unordered containers in TU; `ChartEdgeCostGreater` cost↑/edge_id↑/version↓; lazy invalidation + 3× compaction). 9 new tests: cube 6-planar@10°, icosphere invariant @30°/90°, area-penalty monotonicity, strip-vs-blob perimeter penalty, production knobs e2e, refine/smooth variants, exact-equality determinism, 81920-face scale (0.186 s, budget 10 s). `pytest tests/test_mesh_processing.py -q` = **49 passed**; full suite 153 passed. Orchestration: `orchestration/slice-002-summary.md`.
+**Risks / next:** **(important, fold into S4)** refine path at CuMesh-default knobs (refine 100 × global 3) is unbenchmarked at scale — per-face map lookups ×300 passes could be minutes at 1.1M faces; production knobs (refine 0, global 1) avoid it, but S4 must add fixpoint early-exit + neighbor-table precompute and extend the scale test to nonzero refine. Minors recorded: round-rebuild allocation churn at 1.1M (flat adjacency if stage B needs it); rejection stats count re-rejections (not unique pairs); no threshold upper-bound validation; zero-area faces unfiltered (upstream QEM strips them); two libm-sensitive test pins (macOS-deterministic).
+
 ### Slice 3: Oracle anchors (dev-time pip xatlas)
 
 Required:

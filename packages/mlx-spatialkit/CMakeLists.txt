@@ -76,6 +76,7 @@ nanobind_add_module(
   cpp/simplify.cpp
   cpp/remesh.cpp
   cpp/uv_metrics.cpp
+  cpp/uv_unwrap.cpp
   metal/texture_bake.mm
 )
 

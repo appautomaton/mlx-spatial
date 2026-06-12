@@ -9,6 +9,7 @@
 #include "remesh.hpp"
 #include "texture_bake.hpp"
 #include "uv_metrics.hpp"
+#include "uv_unwrap.hpp"
 
 namespace nb = nanobind;
 
@@ -89,6 +90,19 @@ NB_MODULE(_native, module) {
              nb::arg("chart_angle_degrees") = 45.0,
              nb::arg("tile_padding") = 0.04,
              "Create a deterministic native chart UV mesh.");
+
+  module.def("compute_uv_charts",
+             &mlx_spatialkit::compute_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             // Defaults mirror CuMesh compute_charts (cumesh.py).
+             nb::arg("threshold_cone_half_angle_rad") = 1.5707963267948966,
+             nb::arg("refine_iterations") = 100,
+             nb::arg("global_iterations") = 3,
+             nb::arg("smooth_strength") = 1.0,
+             nb::arg("area_penalty_weight") = 0.1,
+             nb::arg("perimeter_area_ratio_weight") = 0.0001,
+             "Cluster faces into UV charts via cone-bounded cost-ordered agglomeration.");
 
   module.def("uv_quality_metrics",
              &mlx_spatialkit::uv_quality_metrics,

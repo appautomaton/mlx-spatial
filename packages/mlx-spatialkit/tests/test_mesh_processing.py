@@ -1568,3 +1568,319 @@ def test_qem_cross_process_determinism_invariant_under_hash_seed() -> None:
         f"  seed=0 sha256: {hash_seed0}\n"
         f"  seed=1 sha256: {hash_seed1}"
     )
+
+
+# ---------------------------------------------------------------------------
+# UV unwrap stage A: ConeClusterer (compute_uv_charts)
+#
+# Cost-ordered chart agglomeration bounded by a normal-cone half-angle, the
+# native counterpart of CuMesh compute_charts. The cone invariant is checked
+# against the cones the native side reports (chart_cone_axes), which the
+# implementation maintains as monotone enclosing cones precisely so that
+# "every face normal within threshold of its chart axis" is a hard guarantee.
+# ---------------------------------------------------------------------------
+
+import math
+import time
+
+from mlx_spatialkit._native import compute_uv_charts
+
+
+def _unit_cube() -> tuple[np.ndarray, np.ndarray]:
+    """Closed unit cube: 8 vertices, 12 triangles, outward CCW winding."""
+    vertices = np.array(
+        [
+            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [
+            [0, 2, 1], [0, 3, 2],  # bottom (-z)
+            [4, 5, 6], [4, 6, 7],  # top (+z)
+            [0, 1, 5], [0, 5, 4],  # front (-y)
+            [2, 3, 7], [2, 7, 6],  # back (+y)
+            [0, 4, 7], [0, 7, 3],  # left (-x)
+            [1, 2, 6], [1, 6, 5],  # right (+x)
+        ],
+        dtype=np.int64,
+    )
+    return vertices, faces
+
+
+def _closed_box_grid(
+    size: tuple[float, float, float], divisions: tuple[int, int, int]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Closed manifold axis-aligned box with grid-subdivided sides.
+
+    Vertices are welded on a shared integer lattice so face borders reuse the
+    same vertex ids (no cracks). Outward CCW winding on every side.
+    """
+    sx, sy, sz = size
+    nx, ny, nz = divisions
+    verts: list[list[float]] = []
+    index: dict[tuple[int, int, int], int] = {}
+
+    def vid(i: int, j: int, k: int) -> int:
+        key = (i, j, k)
+        if key not in index:
+            index[key] = len(verts)
+            verts.append([sx * i / nx, sy * j / ny, sz * k / nz])
+        return index[key]
+
+    faces: list[list[int]] = []
+
+    def quad(a: int, b: int, c: int, d: int) -> None:
+        faces.append([a, b, c])
+        faces.append([a, c, d])
+
+    for i in range(nx):
+        for j in range(ny):
+            a, b = vid(i, j, 0), vid(i + 1, j, 0)
+            c, d = vid(i + 1, j + 1, 0), vid(i, j + 1, 0)
+            quad(a, d, c, b)  # -z
+            a, b = vid(i, j, nz), vid(i + 1, j, nz)
+            c, d = vid(i + 1, j + 1, nz), vid(i, j + 1, nz)
+            quad(a, b, c, d)  # +z
+    for i in range(nx):
+        for k in range(nz):
+            a, b = vid(i, 0, k), vid(i + 1, 0, k)
+            c, d = vid(i + 1, 0, k + 1), vid(i, 0, k + 1)
+            quad(a, b, c, d)  # -y
+            a, b = vid(i, ny, k), vid(i + 1, ny, k)
+            c, d = vid(i + 1, ny, k + 1), vid(i, ny, k + 1)
+            quad(a, d, c, b)  # +y
+    for j in range(ny):
+        for k in range(nz):
+            a, b = vid(0, j, k), vid(0, j + 1, k)
+            c, d = vid(0, j + 1, k + 1), vid(0, j, k + 1)
+            quad(a, d, c, b)  # -x
+            a, b = vid(nx, j, k), vid(nx, j + 1, k)
+            c, d = vid(nx, j + 1, k + 1), vid(nx, j, k + 1)
+            quad(a, b, c, d)  # +x
+    return np.array(verts, dtype=np.float32), np.array(faces, dtype=np.int64)
+
+
+def _face_unit_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    a = vertices[faces[:, 0]].astype(np.float64)
+    b = vertices[faces[:, 1]].astype(np.float64)
+    c = vertices[faces[:, 2]].astype(np.float64)
+    normals = np.cross(b - a, c - a)
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    return normals / np.maximum(lengths, 1e-30)
+
+
+def _face_areas(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    a = vertices[faces[:, 0]].astype(np.float64)
+    b = vertices[faces[:, 1]].astype(np.float64)
+    c = vertices[faces[:, 2]].astype(np.float64)
+    return 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+
+
+def _assert_cone_cluster_valid(
+    vertices: np.ndarray, faces: np.ndarray, result: dict, threshold: float
+) -> None:
+    """All faces assigned to dense chart ids and the cone invariant holds:
+    angle(face_normal, chart cone axis) <= threshold + 1e-6 for every face."""
+    chart_ids = np.asarray(result["chart_ids"])
+    chart_count = result["chart_count"]
+    assert chart_ids.dtype == np.int64
+    assert chart_ids.shape == (faces.shape[0],)
+    assert chart_count >= 1
+    assert chart_ids.min() >= 0
+    assert chart_ids.max() < chart_count
+    sizes = np.bincount(chart_ids, minlength=chart_count)
+    assert sizes.sum() == faces.shape[0]
+    assert result["largest_chart_faces"] == sizes.max()
+
+    normals = _face_unit_normals(vertices, faces)
+    axes = np.asarray(result["chart_cone_axes"])
+    assert axes.shape == (chart_count, 3)
+    cosines = np.clip(np.einsum("ij,ij->i", normals, axes[chart_ids]), -1.0, 1.0)
+    angles = np.arccos(cosines)
+    assert float(angles.max()) <= threshold + 1e-6
+
+
+def test_cone_cluster_unit_cube_six_planar_clusters_at_small_threshold() -> None:
+    vertices, faces = _unit_cube()
+    threshold = math.radians(10)
+    result = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=threshold,
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    _assert_cone_cluster_valid(vertices, faces, result, threshold)
+    # Six coplanar pairs; cross-plane merges (45 degree merged cones) are
+    # rejected by the cone bound.
+    assert result["chart_count"] == 6
+    assert result["largest_chart_faces"] == 2
+    assert result["merge_count"] == 6
+    assert result["cone_rejected_merge_count"] > 0
+
+
+def test_cone_cluster_icosphere_cone_invariant_at_30_and_90_degrees() -> None:
+    vertices, faces = _icosphere(3)
+    for threshold in (math.radians(30), math.radians(90)):
+        result = compute_uv_charts(
+            vertices, faces,
+            threshold_cone_half_angle_rad=threshold,
+            refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+            area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+        )
+        _assert_cone_cluster_valid(vertices, faces, result, threshold)
+        assert result["merge_count"] > 0
+    # The tighter cone admits fewer merges, so 30 degrees yields more charts.
+    narrow = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=math.radians(30),
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    wide = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=math.radians(90),
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    assert narrow["chart_count"] > wide["chart_count"]
+
+
+def test_cone_cluster_area_penalty_weight_bounds_max_cluster_area() -> None:
+    vertices, faces = _icosphere(3)
+    areas = _face_areas(vertices, faces)
+
+    def max_cluster_area(weight: float) -> float:
+        result = compute_uv_charts(
+            vertices, faces,
+            threshold_cone_half_angle_rad=math.radians(90),
+            refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+            area_penalty_weight=weight, perimeter_area_ratio_weight=0.0001,
+        )
+        chart_ids = np.asarray(result["chart_ids"])
+        cluster_areas = np.bincount(
+            chart_ids, weights=areas, minlength=result["chart_count"]
+        )
+        return float(cluster_areas.max())
+
+    # Raising the area penalty must not increase the largest cluster area.
+    assert max_cluster_area(10.0) <= max_cluster_area(0.1) + 1e-12
+
+
+def test_cone_cluster_perimeter_area_ratio_weight_discourages_strip_merges() -> None:
+    # Long thin closed box (strip) vs compact closed box (blob). With the
+    # perimeter/area penalty off, both agglomerate freely under the cone
+    # bound; with it on, strip-shaped charts (high perimeter^2/area) become
+    # expensive and the strip fragments while the compact blob does not.
+    def chart_count(mesh: tuple[np.ndarray, np.ndarray], weight: float) -> int:
+        vertices, faces = mesh
+        result = compute_uv_charts(
+            vertices, faces,
+            threshold_cone_half_angle_rad=math.radians(60),
+            refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+            area_penalty_weight=0.0, perimeter_area_ratio_weight=weight,
+        )
+        _assert_cone_cluster_valid(vertices, faces, result, math.radians(60))
+        return result["chart_count"]
+
+    strip = _closed_box_grid((4.0, 0.1, 0.1), (40, 1, 1))
+    blob = _closed_box_grid((0.7, 0.7, 0.7), (4, 4, 4))
+
+    strip_unpenalized = chart_count(strip, 0.0)
+    strip_penalized = chart_count(strip, 0.01)
+    assert strip_penalized > strip_unpenalized
+
+    blob_unpenalized = chart_count(blob, 0.0)
+    blob_penalized = chart_count(blob, 0.01)
+    assert blob_penalized == blob_unpenalized
+
+
+def test_cone_cluster_production_knobs_run_end_to_end() -> None:
+    vertices, faces = _icosphere(3)
+    threshold = math.radians(90)
+    result = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=threshold,
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    for key in (
+        "chart_ids", "chart_count", "largest_chart_faces",
+        "cone_rejected_merge_count", "merge_count",
+    ):
+        assert key in result
+    _assert_cone_cluster_valid(vertices, faces, result, threshold)
+    assert result["chart_count"] >= 1
+    assert result["merge_count"] > 0
+    assert result["cone_rejected_merge_count"] >= 0
+
+
+def test_cone_cluster_refine_iterations_keep_invariant_and_determinism() -> None:
+    vertices, faces = _icosphere(2)
+    threshold = math.radians(30)
+    kwargs = dict(
+        threshold_cone_half_angle_rad=threshold,
+        refine_iterations=4, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    first = compute_uv_charts(vertices, faces, **kwargs)
+    second = compute_uv_charts(vertices, faces, **kwargs)
+    # Refinement reassigns boundary faces but must not break the cone
+    # invariant (reassignment is cone-admitted) nor determinism.
+    _assert_cone_cluster_valid(vertices, faces, first, threshold)
+    np.testing.assert_array_equal(
+        np.asarray(first["chart_ids"]), np.asarray(second["chart_ids"])
+    )
+    assert first["chart_count"] == second["chart_count"]
+
+
+def test_cone_cluster_smooth_strength_variants_stay_valid_and_deterministic() -> None:
+    vertices, faces = _icosphere(2)
+    threshold = math.radians(30)
+    for smooth in (0.0, 4.0):
+        kwargs = dict(
+            threshold_cone_half_angle_rad=threshold,
+            refine_iterations=2, global_iterations=1, smooth_strength=smooth,
+            area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+        )
+        first = compute_uv_charts(vertices, faces, **kwargs)
+        second = compute_uv_charts(vertices, faces, **kwargs)
+        _assert_cone_cluster_valid(vertices, faces, first, threshold)
+        np.testing.assert_array_equal(
+            np.asarray(first["chart_ids"]), np.asarray(second["chart_ids"])
+        )
+
+
+def test_cone_cluster_is_deterministic_across_repeated_calls() -> None:
+    vertices, faces = _icosphere(3)
+    # CuMesh defaults: radians(90), refine 100, global 3, smooth 1.0,
+    # area 0.1, perimeter/area 0.0001 — exercised via binding defaults.
+    first = compute_uv_charts(vertices, faces)
+    second = compute_uv_charts(vertices, faces)
+    np.testing.assert_array_equal(
+        np.asarray(first["chart_ids"]), np.asarray(second["chart_ids"])
+    )
+    assert first["chart_count"] == second["chart_count"]
+    assert first["merge_count"] == second["merge_count"]
+    _assert_cone_cluster_valid(vertices, faces, first, math.radians(90))
+
+
+def test_cone_cluster_scaling_80k_faces_within_time_budget() -> None:
+    # Generous wall-clock bound to catch O(F^2) regressions (an 80k-face
+    # quadratic clustering takes minutes; the heap-driven path takes seconds).
+    vertices, faces = _icosphere(6)
+    assert faces.shape[0] == 81920
+    started = time.perf_counter()
+    result = compute_uv_charts(
+        vertices, faces,
+        threshold_cone_half_angle_rad=math.radians(90),
+        refine_iterations=0, global_iterations=1, smooth_strength=1.0,
+        area_penalty_weight=0.1, perimeter_area_ratio_weight=0.0001,
+    )
+    elapsed = time.perf_counter() - started
+    assert elapsed < 10.0, f"80k-face clustering took {elapsed:.2f}s (budget 10s)"
+    chart_ids = np.asarray(result["chart_ids"])
+    assert chart_ids.shape == (faces.shape[0],)
+    assert result["chart_count"] >= 1
+    assert chart_ids.max() < result["chart_count"]
