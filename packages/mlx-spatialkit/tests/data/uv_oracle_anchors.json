@@ -1,0 +1,220 @@
+{
+  "fixtures": {
+    "main": {
+      "fixture_path": "inputs/mlx-spatialkit/pixal3d-1024-cascade-decoded-pbr",
+      "per_cluster_composition": {
+        "atlas_height": 1240,
+        "atlas_utilization": 0.7212530374526978,
+        "atlas_width": 1238,
+        "chart_count": 5166,
+        "chart_stretch_l2_summary": {
+          "max": 20.761592677543057,
+          "mean": 10.168086525864021,
+          "measured_chart_count": 2539,
+          "p95": 12.205873029112698,
+          "total_chart_count": 5166
+        },
+        "chart_stretch_linf_summary": {
+          "max": 1442.2280650816801,
+          "mean": 15.585398190073517,
+          "measured_chart_count": 2539,
+          "p95": 25.02120365186271,
+          "total_chart_count": 5166
+        },
+        "degenerate_unassigned_faces": 269,
+        "duplicated_vertex_ratio": 2.0170829912825927,
+        "output_vertices": 51599,
+        "uv_bbox_utilization": 0.5338095259824235,
+        "uv_degenerate_count": 271,
+        "uv_flipped_count": 25206,
+        "uv_overlap_count": 368,
+        "uv_stretch_l2": 12.203563212123793,
+        "uv_stretch_linf": 1442.2280650816801,
+        "uv_total_area": 0.533378771780574
+      },
+      "source_faces": 50000,
+      "source_vertices": 25581,
+      "stage_a_cluster_count": 1844,
+      "whole_mesh": {
+        "atlas_height": 1203,
+        "atlas_utilization": 0.7540735602378845,
+        "atlas_width": 1203,
+        "chart_count": 5130,
+        "chart_stretch_l2_summary": {
+          "max": 68.5718685578483,
+          "mean": 9.933730250995207,
+          "measured_chart_count": 2555,
+          "p95": 11.873264366499534,
+          "total_chart_count": 5130
+        },
+        "chart_stretch_linf_summary": {
+          "max": 2683.1469415522574,
+          "mean": 16.71907205754428,
+          "measured_chart_count": 2555,
+          "p95": 26.846167227531534,
+          "total_chart_count": 5130
+        },
+        "degenerate_unassigned_faces": 269,
+        "duplicated_vertex_ratio": 1.98279973417771,
+        "output_vertices": 50722,
+        "parametrize_matches_atlas": true,
+        "uv_bbox_utilization": 0.5661996244897973,
+        "uv_degenerate_count": 269,
+        "uv_flipped_count": 23228,
+        "uv_overlap_count": 388,
+        "uv_stretch_l2": 12.459017398071786,
+        "uv_stretch_linf": 2683.1469415522574,
+        "uv_total_area": 0.5657290709106411
+      }
+    },
+    "violin_bow": {
+      "fixture_path": "inputs/mlx-spatialkit/violin-bow/pixal3d-1024-cascade-decoded-pbr",
+      "per_cluster_composition": {
+        "atlas_height": 1153,
+        "atlas_utilization": 0.7446149587631226,
+        "atlas_width": 1157,
+        "chart_count": 2527,
+        "chart_stretch_l2_summary": {
+          "max": 29.583495432013663,
+          "mean": 6.190636209770967,
+          "measured_chart_count": 1279,
+          "p95": 7.29257159445141,
+          "total_chart_count": 2527
+        },
+        "chart_stretch_linf_summary": {
+          "max": 317.0171170952334,
+          "mean": 8.12514565032783,
+          "measured_chart_count": 1279,
+          "p95": 11.72142665574518,
+          "total_chart_count": 2527
+        },
+        "degenerate_unassigned_faces": 85,
+        "duplicated_vertex_ratio": 1.636435769261287,
+        "output_vertices": 41248,
+        "uv_bbox_utilization": 0.6040912140943769,
+        "uv_degenerate_count": 85,
+        "uv_flipped_count": 23227,
+        "uv_overlap_count": 147,
+        "uv_stretch_l2": 7.418395751963682,
+        "uv_stretch_linf": 317.0171170952334,
+        "uv_total_area": 0.6035683308127059
+      },
+      "source_faces": 50000,
+      "source_vertices": 25206,
+      "stage_a_cluster_count": 704,
+      "whole_mesh": {
+        "atlas_height": 1125,
+        "atlas_utilization": 0.769874632358551,
+        "atlas_width": 1129,
+        "chart_count": 2422,
+        "chart_stretch_l2_summary": {
+          "max": 35.841456569374365,
+          "mean": 6.059268668045438,
+          "measured_chart_count": 1221,
+          "p95": 7.103120764934013,
+          "total_chart_count": 2422
+        },
+        "chart_stretch_linf_summary": {
+          "max": 5648.543803952832,
+          "mean": 12.594694312542869,
+          "measured_chart_count": 1221,
+          "p95": 11.266841662798642,
+          "total_chart_count": 2422
+        },
+        "degenerate_unassigned_faces": 85,
+        "duplicated_vertex_ratio": 1.5913274617154645,
+        "output_vertices": 40111,
+        "parametrize_matches_atlas": true,
+        "uv_bbox_utilization": 0.6345821564227632,
+        "uv_degenerate_count": 85,
+        "uv_flipped_count": 28149,
+        "uv_overlap_count": 160,
+        "uv_stretch_l2": 8.070815775916394,
+        "uv_stretch_linf": 5648.543803952832,
+        "uv_total_area": 0.6340191947906177
+      }
+    }
+  },
+  "generated_with": {
+    "command": ".venv/bin/python tests/tools/gen_uv_oracle_anchors.py",
+    "generated_at": "2026-06-12T05:47:12.775236+00:00",
+    "numpy_version_oracle": "2.4.6",
+    "numpy_version_project": "2.4.6",
+    "option_mapping": {
+      "chart_options": {
+        "max_cost": {
+          "pip_attr": "max_cost",
+          "value": 2.0
+        },
+        "max_iterations": {
+          "pip_attr": "max_iterations",
+          "value": 1
+        },
+        "normal_deviation_weight": {
+          "pip_attr": "normal_deviation_weight",
+          "value": 2.0
+        },
+        "normal_seam": {
+          "pip_attr": "normal_seam_weight",
+          "value": 4.0
+        },
+        "roundness": {
+          "pip_attr": "roundness_weight",
+          "value": 0.01
+        },
+        "straightness": {
+          "pip_attr": "straightness_weight",
+          "value": 6.0
+        },
+        "texture_seam": {
+          "pip_attr": "texture_seam_weight",
+          "value": 0.5
+        }
+      },
+      "notes": [
+        "CuMesh uv_unwrap wrapper defaults equal xatlas defaults; options are set explicitly anyway.",
+        "whole_mesh run uses xatlas.Atlas.generate with the reference options instead of xatlas.parametrize so chart_count/utilization are obtainable; parametrize is a default-options Atlas wrapper, and the run also executes xatlas.parametrize and records parametrize_matches_atlas (uvs allclose) as proof of equivalence.",
+        "pip xatlas get_mesh/parametrize return uvs already normalized to [0,1] atlas space.",
+        "uv_flipped_count is genuinely large for real xatlas output: xatlas mirrors roughly half its charts (verified per-chart: every chart is internally orientation-consistent, ~50/50 all-positive vs all-negative UV signed area, even on a winding-consistent cube).",
+        "xatlas assigns zero-area degenerate faces to no chart and gives them zero uvs; these are recorded per block as degenerate_unassigned_faces and excluded from the per-chart stretch summaries.",
+        "uv_quality_metrics reports an exact 0.0 stretch sentinel for any chart with no measurable face (all faces degenerate or flipped; fully mirrored charts are ~half of real xatlas output), meaning 'no measurable faces', not 'zero distortion'. The per-chart stretch summaries exclude those sentinels as well; measured_chart_count vs total_chart_count records how many charts were actually measured."
+      ],
+      "pack_options": {
+        "bilinear": {
+          "pip_attr": "bilinear",
+          "value": true
+        },
+        "brute_force": {
+          "pip_attr": "bruteForce",
+          "value": false
+        },
+        "padding": {
+          "pip_attr": "padding",
+          "value": 0
+        },
+        "rotate_charts": {
+          "pip_attr": "rotate_charts",
+          "value": true
+        }
+      }
+    },
+    "oracle_python": "/tmp/uvoracle-venv/bin/python",
+    "qem_pipeline": {
+      "grid_size": 256,
+      "min_component_faces": 32,
+      "remesh_repair_nonmanifold": true,
+      "remesh_resolution": 256,
+      "simplify_backend": "qem",
+      "target_faces": 50000
+    },
+    "stage_a_knobs": {
+      "area_penalty_weight": 0.1,
+      "global_iterations": 1,
+      "perimeter_area_ratio_weight": 0.0001,
+      "refine_iterations": 0,
+      "smooth_strength": 1.0,
+      "threshold_cone_half_angle_rad": 1.5707963267948966
+    },
+    "xatlas_version": "0.0.11"
+  }
+}

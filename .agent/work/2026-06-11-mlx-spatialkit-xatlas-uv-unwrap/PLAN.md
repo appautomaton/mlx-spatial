@@ -51,6 +51,10 @@ Required:
 **Depends on:** S1, S2
 **Touches:** `tests/tools/gen_uv_oracle_anchors.py`, `tests/data/uv_oracle_anchors.json`, `tests/test_glb_writer.py`
 
+**Status:** complete (implementer DONE_WITH_CONCERNS → spec APPROVED → quality CHANGES_REQUESTED → fixes applied in working tree during session interruptions, verified item-by-item by coordinator; user declined further subagent dispatches, so re-review was coordinator-direct)
+**Evidence:** two-phase generator (`tests/tools/gen_uv_oracle_anchors.py`): project venv builds QEM 50k meshes (recipe mirrors heavy proof tests parameter-for-parameter, spec-verified) + stage-A clusters at production knobs; `/tmp/uvoracle-venv` subprocess runs pip **xatlas 0.0.11** per cluster in ONE Atlas (reference composition) + whole-mesh sanity with `parametrize_matches_atlas=true`. Committed `tests/data/uv_oracle_anchors.json`: main 1844 clusters → 5166 charts, atlas_util 0.721; violin_bow 704 → 2527, util 0.745. All 5 quality fixes verified in file: sentinel-excluded per-chart summaries (real mean l2 **10.17** over 2539 measured charts vs 4.997 diluted — the ~2× understatement the review predicted) + measured/total counts; bootstrap recipe + venv preflight + phase-B version assert; merge provenance guard + argparse error; version-tagged cache + legacy warning; 3 invariant asserts. Regenerated JSON field-diff vs pre-fix: headline values byte-identical, only summaries/notes/provenance changed. One coordinator test-fix: mean≤p95 assert was wrong for heavy-tailed linf (max 5648) → bound mean/p95 against max only. `pytest tests/ -q` = **158 passed**. Recorded reference truths: xatlas mirrors ~half its charts (flipped ≈ 50% of faces is GENUINE reference output — do not use flipped-count as a parity target); reference output has real overlaps at padding=0 (147–388) — our zero-overlap invariant is deliberately stricter.
+**Risks / next:** parity tolerances in S4/S5 must use the sentinel-excluded summaries; chart-orientation (mirroring) must be treated as insensitive in any parity comparison.
+
 ### Slice 4: Stage-B chart growth + projection baseline
 
 Required:

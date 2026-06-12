@@ -867,3 +867,137 @@ def test_uv_metrics_repeat_calls_are_deterministic() -> None:
     chart_first = uv_quality_metrics(chart_vertices, chart_faces, chart_uvs, chart_ids=chart_ids)
     chart_second = uv_quality_metrics(chart_vertices, chart_faces, chart_uvs, chart_ids=chart_ids)
     assert chart_first == chart_second
+
+
+# ---------------------------------------------------------------------------
+# UV-parity oracle anchors (tests/data/uv_oracle_anchors.json)
+#
+# Version-pinned reference values produced by pip xatlas 0.0.11 (the CuMesh
+# uv_unwrap reference composition) on both cached fixtures' QEM-decimated 50k
+# meshes, via tests/tools/gen_uv_oracle_anchors.py.  These tests read the
+# committed anchors only; xatlas itself must NOT be importable here.
+# ---------------------------------------------------------------------------
+
+import importlib.util
+import math as _math
+from pathlib import Path as _Path
+
+_UV_ORACLE_ANCHORS_PATH = _Path(__file__).resolve().parent / "data" / "uv_oracle_anchors.json"
+_UV_ORACLE_FIXTURE_NAMES = ("main", "violin_bow")
+_UV_ORACLE_BLOCK_KEYS = (
+    "chart_count",
+    "atlas_utilization",
+    "uv_overlap_count",
+    "uv_flipped_count",
+    "uv_stretch_l2",
+    "uv_stretch_linf",
+    "uv_bbox_utilization",
+    "uv_total_area",
+    "output_vertices",
+    "duplicated_vertex_ratio",
+)
+
+
+def _load_uv_oracle_anchors() -> dict:
+    return json.loads(_UV_ORACLE_ANCHORS_PATH.read_text())
+
+
+def test_uv_oracle_anchors_file_exists_and_parses() -> None:
+    assert _UV_ORACLE_ANCHORS_PATH.exists(), (
+        f"missing committed oracle anchors: {_UV_ORACLE_ANCHORS_PATH} "
+        "(regenerate with .venv/bin/python tests/tools/gen_uv_oracle_anchors.py)"
+    )
+    anchors = _load_uv_oracle_anchors()
+    assert isinstance(anchors, dict)
+    assert "generated_with" in anchors
+    assert "fixtures" in anchors
+
+
+def test_uv_oracle_anchors_pinned_xatlas_version_and_option_mapping() -> None:
+    generated_with = _load_uv_oracle_anchors()["generated_with"]
+    assert generated_with["xatlas_version"] == "0.0.11"
+    option_mapping = generated_with["option_mapping"]
+    # Every CuMesh reference option must be mapped to a pip attribute (or "n/a").
+    chart_options = option_mapping["chart_options"]
+    for cumesh_name in (
+        "max_cost",
+        "normal_deviation_weight",
+        "roundness",
+        "straightness",
+        "normal_seam",
+        "texture_seam",
+        "max_iterations",
+    ):
+        assert chart_options[cumesh_name]["pip_attr"]
+    pack_options = option_mapping["pack_options"]
+    for cumesh_name in ("padding", "bilinear", "rotate_charts", "brute_force"):
+        assert pack_options[cumesh_name]["pip_attr"]
+
+
+def test_uv_oracle_anchors_have_both_fixtures_with_required_keys() -> None:
+    fixtures = _load_uv_oracle_anchors()["fixtures"]
+    for name in _UV_ORACLE_FIXTURE_NAMES:
+        record = fixtures[name]
+        assert record["source_faces"] > 0
+        assert record["source_vertices"] > 0
+        assert record["stage_a_cluster_count"] >= 1
+        for block_name in ("per_cluster_composition", "whole_mesh"):
+            block = record[block_name]
+            for key in _UV_ORACLE_BLOCK_KEYS:
+                assert key in block, f"{name}.{block_name} missing {key}"
+
+
+def test_uv_oracle_anchors_values_sane() -> None:
+    fixtures = _load_uv_oracle_anchors()["fixtures"]
+    for name in _UV_ORACLE_FIXTURE_NAMES:
+        record = fixtures[name]
+        cluster_count = record["stage_a_cluster_count"]
+        assert cluster_count >= 1
+        composition = record["per_cluster_composition"]
+        # xatlas re-splits clusters but never merges across add_mesh calls,
+        # so the composition has at least one chart per stage-A cluster.
+        assert composition["chart_count"] >= cluster_count
+        for block_name in ("per_cluster_composition", "whole_mesh"):
+            block = record[block_name]
+            label = f"{name}.{block_name}"
+            assert block["chart_count"] >= 1, label
+            assert 0.0 < block["atlas_utilization"] <= 1.0, label
+            assert 0.0 < block["uv_bbox_utilization"] <= 1.0, label
+            for stretch_key in ("uv_stretch_l2", "uv_stretch_linf"):
+                stretch = block[stretch_key]
+                assert _math.isfinite(stretch), f"{label}.{stretch_key}"
+                assert stretch >= 0.5, f"{label}.{stretch_key}"
+            assert block["uv_stretch_linf"] >= block["uv_stretch_l2"], label
+            # Overlap/flip counts from real xatlas are RECORDED, not judged:
+            # padding=0 packing and xatlas's mirrored charts make small
+            # overlap counts and large flip counts genuine reference output.
+            assert isinstance(block["uv_overlap_count"], int), label
+            assert block["uv_overlap_count"] >= 0, label
+            assert isinstance(block["uv_flipped_count"], int), label
+            assert block["uv_flipped_count"] >= 0, label
+            assert 0.0 < block["uv_total_area"] <= 1.0, label
+            assert block["output_vertices"] >= record["source_vertices"], label
+            assert block["duplicated_vertex_ratio"] >= 1.0, label
+            # Per-chart stretch summaries exclude the 0.0 "no measurable
+            # faces" sentinel (fully mirrored charts, ~half of real xatlas
+            # output); measured vs total chart counts record the split.
+            for summary_key in ("chart_stretch_l2_summary", "chart_stretch_linf_summary"):
+                summary = block[summary_key]
+                slabel = f"{label}.{summary_key}"
+                assert 1 <= summary["measured_chart_count"] <= summary["total_chart_count"], slabel
+                assert summary["total_chart_count"] == block["chart_count"], slabel
+                # Heavy-tailed distributions can put the mean above p95
+                # (linf outliers reach thousands), so bound each against
+                # max only.
+                assert 0.0 < summary["mean"] <= summary["max"], slabel
+                assert 0.0 < summary["p95"] <= summary["max"], slabel
+        assert record["whole_mesh"]["parametrize_matches_atlas"] is True
+
+
+def test_uv_oracle_xatlas_not_importable_in_project_venv() -> None:
+    # The oracle dependency lives ONLY in the throwaway oracle venv; the
+    # project venv (and therefore src/ and tests/) must never import xatlas.
+    assert importlib.util.find_spec("xatlas") is None, (
+        "xatlas must NOT be installed in the project venv; anchors are "
+        "regenerated via the oracle venv (see tests/tools/gen_uv_oracle_anchors.py)"
+    )
