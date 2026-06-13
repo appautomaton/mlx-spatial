@@ -141,6 +141,23 @@ Required:
 **Checkpoint reason:** UV/texture quality is the user's stated goal; metrics bound distortion but visual coherence of the unwrapped+baked GLB (seam placement, texture continuity) needs human inspection in a GLB viewer before the outcome is accepted.
 **Touches:** `tests/test_real_pixal3d_export.py`, `src/mlx_spatialkit/export.py` (diagnostics only if gaps found)
 
+**Status:** complete (direct route); awaiting human-verify checkpoint
+**Evidence (full `export_pixal3d_glb` pipeline, preview/res256/50k/1024, both heavy proofs green in 127 s):**
+| metric | main (city) | violin-bow |
+|---|---|---|
+| chart_count (vs oracle, band [0.60,1.50]) | 6321 (1.22×) | 2070 (0.82×) |
+| uv_overlap_count / uv_flipped_count | **0 / 0** | **0 / 0** |
+| parity_ready (computed) | **True** | **True** |
+| uv_bbox_utilization (vs oracle, ≥0.55×) | 0.365 (0.68×) | 0.360 (0.60×) |
+| uv_stretch_l2 | 3.69 | 2.38 |
+| bake coverage ≥ 0.95×chart area | ✓ | ✓ |
+| boundary loops == QEM residual | ✓ | ✓ |
+| uv stage time (budget 140/31 s, 5× anchored) | 42.6 s | 6.2 s |
+| uv stage delta RSS (budget 2/1 GiB) | ~0 MiB | ~0 MiB |
+
+GLBs for inspection: `/tmp/mlx-spatialkit-refuv-main-proof-23292/model.glb` (9.1 MB), `/tmp/mlx-spatialkit-refuv-violin-proof-23292/model.glb` (8.6 MB). Proof scope pinned: preview preset (production gate honestly `not_requested` under preview per F2 semantics); reference-scale (res1024/1M/4096) explicitly deferred. Suite: 180 non-heavy passed.
+**Risks / next:** none blocking; the bake "round-trip" metric is coverage-based (texels inside charts baked, raw≥95% of filled) — a per-texel color round-trip sampler would be stronger but needs bake-source machinery out of scope here.
+
 ### Slice 9: Regression, cross-process determinism & dependency-light wrap
 
 Required:

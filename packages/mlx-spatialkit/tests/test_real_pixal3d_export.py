@@ -2858,3 +2858,165 @@ def test_reference_stage_contract_unwrap_gate_requires_measured_invariants() -> 
             simplify_stats, {"backend": legacy}, texture_stats, None,
             quality_preset="reference-target")
         assert quarantined["stages"]["xatlas_unwrap"]["status"] == "heuristic_quarantined"
+
+
+def _assert_reference_uv_e2e_proof(
+    fixture: Path,
+    output_dir: Path,
+    anchor_name: str,
+    *,
+    uv_timing_budget_s: float,
+    uv_memory_delta_budget_bytes: int,
+    label: str,
+) -> dict:
+    """Slice-8 heavy: full-pipeline reference-unwrap proof (UVU-07/09).
+
+    cached NPZ -> remesh(res256, repair) -> QEM(preview 50k) -> reference
+    unwrap (xatlas-equivalent-native) -> bake -> GLB under /tmp.
+
+    PROOF SCOPE: preview preset / res256 / 50k target / 1024 texture.
+    Reference-scale (res1024 / 1M faces / 4096 texture) is DEFERRED per SPEC.
+    """
+    import math as _math
+
+    result = export_pixal3d_glb(
+        fixture,
+        output_dir,
+        quality_preset="preview",
+        remesh=True,
+        remesh_resolution=256,
+        remesh_repair_nonmanifold=True,
+        simplify_backend="qem",
+        min_component_faces=32,
+        uv_backend="xatlas-equivalent-native",
+    )
+    assert result.glb.path.read_bytes()[:4] == b"glTF", f"[{label}] GLB header corrupt"
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+
+    # 1. Backend selected end-to-end.
+    assert diagnostics["settings"]["uv_backend"] == "xatlas-equivalent-native", label
+    uv_stats = diagnostics["stages"]["uv"]["stats"]
+    assert uv_stats["backend"] == "xatlas-equivalent-native", label
+
+    # 2. Zero-overlap / zero-flip invariants in the final packed atlas (UVU-04/07).
+    assert uv_stats["uv_overlap_count"] == 0, f"[{label}] packed atlas has UV overlaps"
+    assert uv_stats["uv_flipped_count"] == 0, f"[{label}] packed atlas has flipped faces"
+    assert uv_stats["lscm_unconverged_count"] == 0, label
+
+    # 3. Honest gate: computed parity verdict + every named check (UVU-06 at runtime).
+    parity = diagnostics["quality"]["xatlas_chart_parity"]
+    assert parity["status"] == "reference_parity_measured", f"[{label}] {parity['status']}"
+    assert parity["parity_ready"] is True, f"[{label}] parity_ready not computed True"
+    assert all(check["passed"] for check in parity["checks"].values()), label
+
+    # 4. Anchor tolerances (UVU-03/05 at e2e scope).
+    anchors_path = Path(__file__).resolve().parent / "data" / "uv_oracle_anchors.json"
+    oracle = json.loads(anchors_path.read_text())["fixtures"][anchor_name]["per_cluster_composition"]
+    chart_ratio = uv_stats["chart_count"] / oracle["chart_count"]
+    assert 0.60 <= chart_ratio <= 1.50, (
+        f"[{label}] chart count {uv_stats['chart_count']} vs oracle {oracle['chart_count']} "
+        f"-> ratio {chart_ratio:.3f} outside [0.60, 1.50]"
+    )
+    util_ratio = uv_stats["uv_bbox_utilization"] / oracle["uv_bbox_utilization"]
+    assert util_ratio >= 0.55, (
+        f"[{label}] utilization {uv_stats['uv_bbox_utilization']:.3f} vs oracle "
+        f"{oracle['uv_bbox_utilization']:.3f} -> ratio {util_ratio:.3f} below 0.55"
+    )
+
+    # 5. Bake round-trip (UVU-07): the texels inside the packed charts must
+    # actually receive baked values — coverage_ratio (covered texels / atlas)
+    # must reach >= 95% of the chart area itself (uv_total_area), and the raw
+    # (pre-fill) coverage must carry >= 95% of that (no fill dependence).
+    texture_stats = diagnostics["stages"]["texture_bake"]["stats"]
+    coverage = texture_stats["coverage_ratio"]
+    raw_coverage = texture_stats["raw_coverage_ratio"]
+    assert coverage >= 0.95 * uv_stats["uv_total_area"], (
+        f"[{label}] bake coverage {coverage:.3f} below 95% of chart area "
+        f"{uv_stats['uv_total_area']:.3f}"
+    )
+    assert raw_coverage >= 0.95 * coverage, (
+        f"[{label}] raw coverage {raw_coverage:.3f} below 95% of filled {coverage:.3f}"
+    )
+
+    # 6. Boundary-seam attribution: the residual input loops are recorded and
+    # unchanged by the unwrap (charts only ADD seams, never geometry).
+    simplify_stats = diagnostics["stages"]["simplify_mesh"]["stats"]
+    export_metrics = diagnostics["stages"]["export_metrics"]["metrics"]
+    residual = simplify_stats["qem_pre_fill_residual_boundary_loops"]
+    assert export_metrics["boundary_loop_count"] == residual, label
+
+    # 7. Numeric budgets (UVU-09): wall time + DELTA peak RSS for the uv stage
+    # (delta, not absolute: suite-order-independent, the stage-2 lesson).
+    uv_seconds = diagnostics["timings_sec"]["uv"]
+    assert uv_seconds < uv_timing_budget_s, (
+        f"[{label}] uv stage took {uv_seconds:.1f}s (budget {uv_timing_budget_s}s)"
+    )
+    uv_peaks = diagnostics["memory"]["stage_peaks"]["uv"]
+    uv_delta = uv_peaks["peak_current_rss_bytes"] - uv_peaks["start_current_rss_bytes"]
+    assert uv_delta < uv_memory_delta_budget_bytes, (
+        f"[{label}] uv stage delta RSS {uv_delta / 2**20:.0f} MiB "
+        f"(budget {uv_memory_delta_budget_bytes / 2**20:.0f} MiB)"
+    )
+
+    assert _math.isfinite(uv_stats["uv_stretch_l2"])
+    return {
+        "glb": str(result.glb.path),
+        "chart_count": uv_stats["chart_count"],
+        "chart_ratio": round(chart_ratio, 3),
+        "utilization": round(uv_stats["uv_bbox_utilization"], 3),
+        "util_ratio": round(util_ratio, 3),
+        "stretch_l2": round(uv_stats["uv_stretch_l2"], 3),
+        "coverage": round(coverage, 3),
+        "uv_seconds": round(uv_seconds, 2),
+        "uv_delta_mib": round(uv_delta / 2**20, 1),
+        "residual_loops": residual,
+    }
+
+
+@pytest.mark.heavy
+def test_reference_uv_e2e_proof_main_fixture() -> None:
+    """Slice-8 heavy: full reference-unwrap e2e proof (main fixture).
+
+    Budgets anchored 5x observed (2026-06-12, Apple Silicon, res256/50k/1024):
+    uv stage ~28 s -> 140 s; uv delta RSS ~hundreds of MiB -> 2 GiB.
+    """
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"main Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_reference_uv_e2e_proof(
+        fixture,
+        Path("/tmp") / f"mlx-spatialkit-refuv-main-proof-{os.getpid()}",
+        "main",
+        uv_timing_budget_s=140.0,
+        uv_memory_delta_budget_bytes=2 * 1024**3,
+        label="main",
+    )
+    print(f"\n[main reference-uv e2e proof] {summary}")
+
+
+@pytest.mark.heavy
+def test_reference_uv_e2e_proof_violin_fixture() -> None:
+    """Slice-8 heavy: full reference-unwrap e2e proof (violin-bow fixture).
+
+    Budgets anchored 5x observed (2026-06-12, Apple Silicon, res256/50k/1024):
+    uv stage ~6.2 s -> 31 s; uv delta RSS ~34 MiB -> 1 GiB.
+    """
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = (
+        _repo_root() / "inputs" / "mlx-spatialkit" / "violin-bow"
+        / "pixal3d-1024-cascade-decoded-pbr"
+    )
+    if not fixture.exists():
+        pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
+    summary = _assert_reference_uv_e2e_proof(
+        fixture,
+        Path("/tmp") / f"mlx-spatialkit-refuv-violin-proof-{os.getpid()}",
+        "violin_bow",
+        uv_timing_budget_s=31.0,
+        uv_memory_delta_budget_bytes=1024**3,
+        label="violin",
+    )
+    print(f"\n[violin reference-uv e2e proof] {summary}")
