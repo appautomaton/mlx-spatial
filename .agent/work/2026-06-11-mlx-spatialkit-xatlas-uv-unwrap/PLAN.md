@@ -169,6 +169,10 @@ Required:
 **Verification:** clean rebuild, then `.venv/bin/pytest tests/ -q` and `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -q`; `git diff --stat pyproject.toml CMakeLists.txt` empty of new required deps.
 **Depends on:** S6, S7, S8
 
+**Status:** complete (direct route)
+**Evidence:** Cross-process determinism (UVU-08): new `test_reference_uv_cross_process_determinism_invariant_under_hash_seed` — full `make_reference_uvs` pipeline on a 2048-face sphere, sha256 over vertices+faces+uvs, byte-identical across `PYTHONHASHSEED=0/1` subprocesses — **passes** (QEM cross-process test also still green). Dependency-light (UVU-10): `git diff main` on `pyproject.toml`/`CMakeLists.txt` shows exactly two added source lines (`cpp/uv_metrics.cpp`, `cpp/uv_unwrap.cpp`), no new required deps; clean rebuild (`rm -rf /tmp/mlx-spatialkit-build`) + `import mlx_spatialkit` succeed; suite passes with xatlas not importable in the project venv (guard test in suite). Regression (UVU-11): full non-heavy **181 passed** on the clean rebuild; full heavy suite **19 passed in 21:37** — all QEM-era proofs, legacy face-atlas/native-chart export tests, and the new S4/S5/S6/S8 fixture proofs green together.
+**Risks / next:** none — change complete; follow-ons recorded in SPEC (non-manifold-tolerant QEM, reference-scale 1M/4096, rasterized packing for utilization, stage-4 Telea-equivalent inpaint).
+
 ## Execution routing and topology
 
 - **Default path:** continuation S1→S2→S3→S4→S5→S6→S7→S8; one **human-verify** checkpoint after S8; S9 resumes after.

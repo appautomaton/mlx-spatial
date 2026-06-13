@@ -2205,3 +2205,84 @@ def test_lscm_rejects_invalid_arguments() -> None:
     with pytest.raises(ValueError):
         parameterize_uv_charts(
             vertices, faces, np.full(faces.shape[0], -1, dtype=np.int64))
+
+
+# ---------------------------------------------------------------------------
+# Slice 9: cross-process determinism for the full reference UV unwrap
+# pipeline (UVU-08). Same PYTHONHASHSEED-variation technique as the QEM
+# cross-process test above: catches dict/set-iteration nondeterminism that an
+# in-process repeat cannot.
+# ---------------------------------------------------------------------------
+
+_UV_CROSS_PROCESS_SCRIPT = r"""
+import hashlib
+import sys
+
+try:
+    import numpy as np
+    from mlx_spatialkit.export import make_reference_uvs
+except Exception as exc:  # pragma: no cover
+    print(f"SKIP:{exc}")
+    sys.exit(0)
+
+points = [np.array(p, dtype=np.float64) for p in
+          [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]]
+tris = [(0, 2, 4), (2, 1, 4), (1, 3, 4), (3, 0, 4),
+        (2, 0, 5), (1, 2, 5), (3, 1, 5), (0, 3, 5)]
+for _ in range(4):
+    cache = {}
+    next_tris = []
+    def midpoint(a, b):
+        key = (min(a, b), max(a, b))
+        if key not in cache:
+            mid = points[a] + points[b]
+            mid /= np.linalg.norm(mid)
+            cache[key] = len(points)
+            points.append(mid)
+        return cache[key]
+    for a, b, c in tris:
+        ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+        next_tris += [(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)]
+    tris = next_tris
+vertices = np.array(points, dtype=np.float32)
+faces = np.array(tris, dtype=np.int64)
+
+mesh = make_reference_uvs(vertices, faces, texture_resolution=512)
+digest = hashlib.sha256()
+digest.update(np.ascontiguousarray(mesh.vertices).tobytes())
+digest.update(np.ascontiguousarray(mesh.faces).tobytes())
+digest.update(np.ascontiguousarray(mesh.uvs).tobytes())
+print(f"HASH:{digest.hexdigest()}")
+"""
+
+
+def test_reference_uv_cross_process_determinism_invariant_under_hash_seed() -> None:
+    """UVU-08: byte-identical unwrap output across PYTHONHASHSEED values."""
+    env_base = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
+    results: list[str] = []
+    for seed in ("0", "1"):
+        env = {**env_base, "PYTHONHASHSEED": seed}
+        proc = subprocess.run(
+            [sys.executable, "-c", _UV_CROSS_PROCESS_SCRIPT],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+        if proc.returncode != 0:
+            pytest.fail(
+                f"Subprocess with PYTHONHASHSEED={seed} exited {proc.returncode}:\n"
+                f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+            )
+        output = proc.stdout.strip()
+        if output.startswith("SKIP:"):
+            pytest.skip(f"Cannot import mlx_spatialkit in subprocess: {output[5:]}")
+        hash_lines = [line for line in output.splitlines() if line.startswith("HASH:")]
+        if not hash_lines:
+            pytest.fail(f"No HASH line.\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
+        results.append(hash_lines[-1][5:])
+    assert results[0] == results[1], (
+        f"Reference UV unwrap differs across PYTHONHASHSEED values.\n"
+        f"  seed=0 sha256: {results[0]}\n"
+        f"  seed=1 sha256: {results[1]}"
+    )
