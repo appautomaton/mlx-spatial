@@ -136,6 +136,20 @@ NB_MODULE(_native, module) {
              "with bounded split/shatter repair (zero flips, zero intra-chart "
              "overlaps).");
 
+  module.def("pack_uv_charts",
+             &mlx_spatialkit::pack_uv_charts,
+             nb::arg("faces"),
+             nb::arg("chart_ids"),
+             nb::arg("corner_uvs"),
+             // Reference xatlas PackOptions defaults (padding 0 + bilinear
+             // gutter, rotate to axis, no brute force).
+             nb::arg("resolution") = 1024,
+             nb::arg("padding") = 0.0,
+             nb::arg("bilinear") = true,
+             nb::arg("rotate_charts_to_axis") = true,
+             "Shelf-pack parameterized charts into a [0,1] atlas with texel "
+             "gaps (xatlas PackOptions semantics).");
+
   module.def("uv_quality_metrics",
              &mlx_spatialkit::uv_quality_metrics,
              nb::arg("vertices"),

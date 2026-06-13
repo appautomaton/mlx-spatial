@@ -327,6 +327,11 @@ nb::dict uv_quality_metrics(
     if (cell_size <= 0.0) {
       cell_size = 1.0;
     }
+    // Floor the cell size at 1/256 of the larger bbox extent: a
+    // sliver-dominated median otherwise makes ordinary triangles span
+    // hundreds of cells and pushes them into the quadratic large-triangle
+    // path (measured 167 s on a 50k-face packed atlas; ~1 s with the floor).
+    cell_size = std::max(cell_size, std::max(bbox_width, bbox_height) / 256.0);
     const int64_t cells_x = std::min(
         kMaxGridCellsPerAxis,
         std::max<int64_t>(1, static_cast<int64_t>(std::ceil(bbox_width / cell_size))));

@@ -1001,3 +1001,113 @@ def test_uv_oracle_xatlas_not_importable_in_project_venv() -> None:
         "xatlas must NOT be installed in the project venv; anchors are "
         "regenerated via the oracle venv (see tests/tools/gen_uv_oracle_anchors.py)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage-B packing + reference-backend assembly (slice 6): pack_uv_charts
+# (xatlas PackOptions semantics: texel gaps, rotate-to-axis, deterministic
+# shelf placement) and make_reference_uvs (full cluster->grow->parameterize->
+# pack pipeline emitting the NativeUvMesh contract).
+# ---------------------------------------------------------------------------
+
+from mlx_spatialkit._native import (
+    grow_uv_charts as _grow_uv_charts,
+    pack_uv_charts as _pack_uv_charts,
+    parameterize_uv_charts as _parameterize_uv_charts,
+)
+from mlx_spatialkit.export import make_reference_uvs
+
+
+def _cube_mesh() -> tuple[np.ndarray, np.ndarray]:
+    vertices = np.array(
+        [[x, y, z] for z in (0, 1) for y in (0, 1) for x in (0, 1)], dtype=np.float32)
+    faces = np.array(
+        [[0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4],
+         [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5]],
+        dtype=np.int64)
+    return vertices, faces
+
+
+def _cube_parameterized() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    vertices, faces = _cube_mesh()
+    grown = _grow_uv_charts(vertices, faces)
+    param = _parameterize_uv_charts(
+        vertices, faces, np.ascontiguousarray(np.asarray(grown["chart_ids"])))
+    chart_ids = np.ascontiguousarray(np.asarray(param["chart_ids"]), dtype=np.int64)
+    corner_uvs = np.ascontiguousarray(np.asarray(param["corner_uvs"]), dtype=np.float64)
+    return vertices, faces, chart_ids, corner_uvs
+
+
+def test_pack_uv_charts_padding_and_unit_square() -> None:
+    _, faces, chart_ids, corner_uvs = _cube_parameterized()
+    padding = 2.0
+    packed = _pack_uv_charts(
+        faces, chart_ids, corner_uvs, resolution=128, padding=padding, bilinear=True)
+    assert packed["gap_texels"] == padding + 1.0
+    uvs = np.asarray(packed["corner_uvs"])
+    assert (uvs >= 0.0).all() and (uvs <= 1.0).all()
+    # Padding honored: pairwise chart-rect gaps >= gap_texels on at least one
+    # axis (rects either share a shelf or sit on different shelves).
+    rects = np.asarray(packed["chart_rects_texels"])  # [C, 4] x, y, w, h
+    chart_count = rects.shape[0]
+    assert chart_count == int(chart_ids.max()) + 1
+    for i in range(chart_count):
+        for j in range(i + 1, chart_count):
+            xi, yi, wi, hi = rects[i]
+            xj, yj, wj, hj = rects[j]
+            gap_x = max(xj - (xi + wi), xi - (xj + wj))
+            gap_y = max(yj - (yi + hi), yi - (yj + hj))
+            assert max(gap_x, gap_y) >= packed["gap_texels"] - 1e-6, (i, j)
+
+
+def test_pack_uv_charts_deterministic_repeat() -> None:
+    _, faces, chart_ids, corner_uvs = _cube_parameterized()
+    first = _pack_uv_charts(faces, chart_ids, corner_uvs)
+    second = _pack_uv_charts(faces, chart_ids, corner_uvs)
+    np.testing.assert_array_equal(
+        np.asarray(first["corner_uvs"]), np.asarray(second["corner_uvs"]))
+    assert first["texels_per_unit"] == second["texels_per_unit"]
+
+
+def test_pack_uv_charts_rejects_invalid_arguments() -> None:
+    _, faces, chart_ids, corner_uvs = _cube_parameterized()
+    with pytest.raises(ValueError):
+        _pack_uv_charts(faces, chart_ids, corner_uvs, resolution=0)
+    with pytest.raises(ValueError):
+        _pack_uv_charts(faces, chart_ids, corner_uvs, padding=-1.0)
+    with pytest.raises(ValueError):
+        _pack_uv_charts(faces, chart_ids[:3], corner_uvs)
+    with pytest.raises(ValueError):
+        _pack_uv_charts(faces, chart_ids, corner_uvs[:5])
+
+
+def test_make_reference_uvs_contract_and_invariants() -> None:
+    vertices, faces = _cube_mesh()
+    mesh = make_reference_uvs(vertices, faces, texture_resolution=256)
+    # NativeUvMesh contract: corner positions preserved through duplication.
+    assert mesh.faces.shape == faces.shape
+    np.testing.assert_allclose(mesh.vertices[mesh.faces], vertices[faces])
+    assert mesh.uvs.shape == (mesh.vertices.shape[0], 2)
+    assert (mesh.uvs >= 0.0).all() and (mesh.uvs <= 1.0).all()
+    stats = mesh.stats
+    assert stats["backend"] == "xatlas-equivalent-native"
+    assert stats["chart_count"] == 6
+    assert stats["uv_overlap_count"] == 0
+    assert stats["uv_flipped_count"] == 0
+    assert stats["output_vertices"] == 24  # 4 per planar 2-face chart
+    assert stats["gap_texels"] == 1.0  # padding 0 + bilinear gutter
+    for key in (
+        "stage_a_cluster_count", "growth_chart_count", "projected_chart_count",
+        "lscm_chart_count", "shattered_face_chart_count", "texels_per_unit",
+        "uv_stretch_l2", "uv_bbox_utilization", "duplicated_vertex_ratio",
+    ):
+        assert key in stats, key
+
+
+def test_make_reference_uvs_deterministic() -> None:
+    vertices, faces = _cube_mesh()
+    first = make_reference_uvs(vertices, faces, texture_resolution=256)
+    second = make_reference_uvs(vertices, faces, texture_resolution=256)
+    np.testing.assert_array_equal(first.uvs, second.uvs)
+    np.testing.assert_array_equal(first.faces, second.faces)
+    np.testing.assert_array_equal(first.vertices, second.vertices)

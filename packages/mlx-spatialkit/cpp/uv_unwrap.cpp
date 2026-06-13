@@ -2719,6 +2719,212 @@ class ChartParameterizer {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Stage B packing (slice 6): rotate charts to their principal axis, scale by
+// a binary-searched texels-per-unit, shelf-pack with texel gaps, normalize to
+// [0,1]. Reference: xatlas PackOptions defaults (padding 0, bilinear true,
+// rotate_charts/rotate_charts_to_axis true, brute_force false). Documented
+// deviations:
+//  9. Rotate-to-axis uses the chart's UV PCA major axis rather than the
+//     convex-hull edge scan; packing is sorted shelf placement over chart
+//     rects rather than the reference's rasterized insertion — same
+//     semantics (gap >= padding [+1 bilinear] texels, deterministic),
+//     coarser utilization (rects, not rasterized outlines).
+// ---------------------------------------------------------------------------
+
+struct PackedChart {
+  int64_t chart = 0;
+  double width = 0.0;   // rotated UV units
+  double height = 0.0;
+  double min_u = 0.0;
+  double min_v = 0.0;
+  double cos_r = 1.0;
+  double sin_r = 0.0;
+  double x = 0.0;  // placement in texels
+  double y = 0.0;
+};
+
+struct PackResult {
+  std::vector<Vec2d> corner_uvs;  // normalized [0,1]
+  std::vector<PackedChart> charts;
+  double scale = 0.0;             // texels per UV unit
+  double packed_height_texels = 0.0;
+  int64_t shelf_count = 0;
+};
+
+// Shelf placement at a given scale; returns false when it exceeds the atlas.
+bool shelf_place(
+    std::vector<PackedChart> &charts, double scale, double resolution, double gap,
+    double *height_out, int64_t *shelf_count_out) {
+  double x = 0.0;
+  double y = 0.0;
+  double shelf_height = 0.0;
+  int64_t shelves = 1;
+  for (PackedChart &chart : charts) {
+    const double w = chart.width * scale;
+    const double h = chart.height * scale;
+    if (w > resolution) {
+      return false;
+    }
+    if (x > 0.0 && x + w > resolution) {
+      y += shelf_height + gap;
+      x = 0.0;
+      shelf_height = 0.0;
+      shelves += 1;
+    }
+    chart.x = x;
+    chart.y = y;
+    shelf_height = std::max(shelf_height, h);
+    x += w + gap;
+    if (y + shelf_height > resolution) {
+      return false;
+    }
+  }
+  *height_out = y + shelf_height;
+  *shelf_count_out = shelves;
+  return true;
+}
+
+PackResult pack_charts(
+    const std::vector<int64_t> &chart_ids,
+    const std::vector<Vec2d> &corner_uvs,
+    int64_t chart_count,
+    double resolution,
+    double padding,
+    bool bilinear,
+    bool rotate_to_axis) {
+  const size_t corner_count = corner_uvs.size();
+  PackResult result;
+  result.charts.resize(static_cast<size_t>(chart_count));
+  for (int64_t c = 0; c < chart_count; ++c) {
+    result.charts[static_cast<size_t>(c)].chart = c;
+  }
+  // Per-chart PCA rotation (deviation 9) and rotated bounds.
+  std::vector<double> sum_u(static_cast<size_t>(chart_count), 0.0);
+  std::vector<double> sum_v(static_cast<size_t>(chart_count), 0.0);
+  std::vector<int64_t> counts(static_cast<size_t>(chart_count), 0);
+  for (size_t corner = 0; corner < corner_count; ++corner) {
+    const int64_t c = chart_ids[corner / 3];
+    sum_u[static_cast<size_t>(c)] += corner_uvs[corner].u;
+    sum_v[static_cast<size_t>(c)] += corner_uvs[corner].v;
+    counts[static_cast<size_t>(c)] += 1;
+  }
+  if (rotate_to_axis) {
+    std::vector<double> cov_uu(static_cast<size_t>(chart_count), 0.0);
+    std::vector<double> cov_uv(static_cast<size_t>(chart_count), 0.0);
+    std::vector<double> cov_vv(static_cast<size_t>(chart_count), 0.0);
+    for (size_t corner = 0; corner < corner_count; ++corner) {
+      const int64_t c = chart_ids[corner / 3];
+      const double du = corner_uvs[corner].u - sum_u[static_cast<size_t>(c)] / counts[static_cast<size_t>(c)];
+      const double dv = corner_uvs[corner].v - sum_v[static_cast<size_t>(c)] / counts[static_cast<size_t>(c)];
+      cov_uu[static_cast<size_t>(c)] += du * du;
+      cov_uv[static_cast<size_t>(c)] += du * dv;
+      cov_vv[static_cast<size_t>(c)] += dv * dv;
+    }
+    for (int64_t c = 0; c < chart_count; ++c) {
+      // Major eigenvector angle of the 2x2 covariance; rotate it onto +u.
+      const double theta = 0.5 * std::atan2(
+          2.0 * cov_uv[static_cast<size_t>(c)],
+          cov_uu[static_cast<size_t>(c)] - cov_vv[static_cast<size_t>(c)]);
+      result.charts[static_cast<size_t>(c)].cos_r = std::cos(-theta);
+      result.charts[static_cast<size_t>(c)].sin_r = std::sin(-theta);
+    }
+  }
+  std::vector<double> min_u(static_cast<size_t>(chart_count), std::numeric_limits<double>::max());
+  std::vector<double> min_v(static_cast<size_t>(chart_count), std::numeric_limits<double>::max());
+  std::vector<double> max_u(static_cast<size_t>(chart_count), std::numeric_limits<double>::lowest());
+  std::vector<double> max_v(static_cast<size_t>(chart_count), std::numeric_limits<double>::lowest());
+  const auto rotated = [&](size_t corner) {
+    const int64_t c = chart_ids[corner / 3];
+    const PackedChart &chart = result.charts[static_cast<size_t>(c)];
+    const Vec2d &uv = corner_uvs[corner];
+    return Vec2d{uv.u * chart.cos_r - uv.v * chart.sin_r,
+                 uv.u * chart.sin_r + uv.v * chart.cos_r};
+  };
+  for (size_t corner = 0; corner < corner_count; ++corner) {
+    const int64_t c = chart_ids[corner / 3];
+    const Vec2d uv = rotated(corner);
+    min_u[static_cast<size_t>(c)] = std::min(min_u[static_cast<size_t>(c)], uv.u);
+    min_v[static_cast<size_t>(c)] = std::min(min_v[static_cast<size_t>(c)], uv.v);
+    max_u[static_cast<size_t>(c)] = std::max(max_u[static_cast<size_t>(c)], uv.u);
+    max_v[static_cast<size_t>(c)] = std::max(max_v[static_cast<size_t>(c)], uv.v);
+  }
+  for (int64_t c = 0; c < chart_count; ++c) {
+    PackedChart &chart = result.charts[static_cast<size_t>(c)];
+    if (counts[static_cast<size_t>(c)] == 0) {
+      chart.width = chart.height = chart.min_u = chart.min_v = 0.0;
+      continue;
+    }
+    chart.min_u = min_u[static_cast<size_t>(c)];
+    chart.min_v = min_v[static_cast<size_t>(c)];
+    chart.width = max_u[static_cast<size_t>(c)] - chart.min_u;
+    chart.height = max_v[static_cast<size_t>(c)] - chart.min_v;
+  }
+  // Sort by scaled height desc (shelf heuristic), chart id ties — restored to
+  // chart order for output via the chart field.
+  std::vector<PackedChart> order = result.charts;
+  std::sort(order.begin(), order.end(), [](const PackedChart &a, const PackedChart &b) {
+    if (a.height != b.height) {
+      return a.height > b.height;
+    }
+    return a.chart < b.chart;
+  });
+  const double gap = padding + (bilinear ? 1.0 : 0.0);
+  // Binary-search the largest scale that fits (40 iterations, matching the
+  // existing aspect-shelf packer's discipline).
+  double total_area = 0.0;
+  for (const PackedChart &chart : order) {
+    total_area += chart.width * chart.height;
+  }
+  double height = 0.0;
+  int64_t shelves = 0;
+  const auto fits = [&](double scale) {
+    double h = 0.0;
+    int64_t s = 0;
+    if (shelf_place(order, scale, resolution, gap, &h, &s)) {
+      height = h;
+      shelves = s;
+      return true;
+    }
+    return false;
+  };
+  // Bracket: halve from an optimistic guess down to a feasible scale, then
+  // bisect [feasible, first-infeasible].
+  double hi = total_area > 0.0 ? resolution / std::sqrt(total_area) * 2.0 : 1.0;
+  double lo = hi;
+  for (int k = 0; k < 60 && !fits(lo); ++k) {
+    lo *= 0.5;
+  }
+  hi = lo * 2.0;
+  for (int iteration = 0; iteration < 40; ++iteration) {
+    const double mid = 0.5 * (lo + hi);
+    if (fits(mid)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  shelf_place(order, lo, resolution, gap, &height, &shelves);
+  result.scale = lo;
+  result.packed_height_texels = height;
+  result.shelf_count = shelves;
+  for (const PackedChart &placed : order) {
+    result.charts[static_cast<size_t>(placed.chart)] = placed;
+  }
+  // Emit normalized UVs.
+  result.corner_uvs.resize(corner_count);
+  for (size_t corner = 0; corner < corner_count; ++corner) {
+    const int64_t c = chart_ids[corner / 3];
+    const PackedChart &chart = result.charts[static_cast<size_t>(c)];
+    const Vec2d uv = rotated(corner);
+    result.corner_uvs[corner] = Vec2d{
+        (chart.x + (uv.u - chart.min_u) * lo) / resolution,
+        (chart.y + (uv.v - chart.min_v) * lo) / resolution,
+    };
+  }
+  return result;
+}
+
 nb::object make_int64_vector(std::vector<int64_t> values) {
   auto owner = new std::vector<int64_t>(std::move(values));
   nb::capsule capsule(owner, [](void *ptr) noexcept {
@@ -3031,6 +3237,97 @@ nb::dict parameterize_uv_charts(
   result["split_event_count"] = parameterizer.split_event_count;
   result["lscm_unconverged_count"] = parameterizer.lscm_unconverged_count;
   result["uv_flipped_count"] = flipped;
+  return result;
+}
+
+nb::dict pack_uv_charts(
+    nb::object faces,
+    nb::object chart_ids,
+    nb::object corner_uvs,
+    int64_t resolution,
+    double padding,
+    bool bilinear,
+    bool rotate_charts_to_axis) {
+  const int64_t face_count = mesh_common::dimension(faces, "faces", 0);
+  if (resolution <= 0) {
+    throw nb::value_error("resolution must be positive");
+  }
+  if (!std::isfinite(padding) || padding < 0.0) {
+    throw nb::value_error("padding must be finite and non-negative");
+  }
+  // chart_ids: [F] int64 dense.
+  std::vector<int64_t> ids(static_cast<size_t>(face_count), 0);
+  int64_t chart_count = 0;
+  {
+    if (nb::cast<int64_t>(nb::getattr(chart_ids, "ndim")) != 1 ||
+        mesh_common::dtype_name(chart_ids, "chart_ids") != "int64" ||
+        mesh_common::dimension(chart_ids, "chart_ids", 0) != face_count) {
+      throw nb::value_error("chart_ids must be int64 with shape (F,)");
+    }
+    mesh_common::BufferView view_holder(chart_ids.ptr(), "chart_ids");
+    const Py_buffer &view = view_holder.get();
+    const auto *base = static_cast<const char *>(view.buf);
+    const Py_ssize_t stride = view.strides != nullptr ? view.strides[0] : view.itemsize;
+    for (int64_t row = 0; row < face_count; ++row) {
+      int64_t value = 0;
+      std::memcpy(&value, base + row * stride, sizeof(int64_t));
+      if (value < 0) {
+        throw nb::value_error("chart_ids must be non-negative");
+      }
+      ids[static_cast<size_t>(row)] = value;
+      chart_count = std::max(chart_count, value + 1);
+    }
+  }
+  // corner_uvs: [F*3, 2] float64.
+  std::vector<uv_unwrap::Vec2d> uvs(static_cast<size_t>(face_count) * 3);
+  {
+    mesh_common::validate_matrix(corner_uvs, "corner_uvs", 2, "float64");
+    if (mesh_common::dimension(corner_uvs, "corner_uvs", 0) != face_count * 3) {
+      throw nb::value_error("corner_uvs must have shape (F*3, 2)");
+    }
+    mesh_common::BufferView view_holder(corner_uvs.ptr(), "corner_uvs");
+    const Py_buffer &view = view_holder.get();
+    for (int64_t row = 0; row < face_count * 3; ++row) {
+      uvs[static_cast<size_t>(row)] = uv_unwrap::Vec2d{
+          mesh_common::read_matrix_value<double>(view, row, 0),
+          mesh_common::read_matrix_value<double>(view, row, 1),
+      };
+      if (!std::isfinite(uvs[static_cast<size_t>(row)].u) ||
+          !std::isfinite(uvs[static_cast<size_t>(row)].v)) {
+        throw nb::value_error("corner_uvs must contain only finite values");
+      }
+    }
+  }
+
+  const uv_unwrap::PackResult packed = uv_unwrap::pack_charts(
+      ids, uvs, chart_count, static_cast<double>(resolution), padding, bilinear,
+      rotate_charts_to_axis);
+
+  std::vector<double> out_uvs;
+  out_uvs.reserve(packed.corner_uvs.size() * 2);
+  for (const uv_unwrap::Vec2d &uv : packed.corner_uvs) {
+    out_uvs.push_back(uv.u);
+    out_uvs.push_back(uv.v);
+  }
+  std::vector<double> rects;
+  rects.reserve(static_cast<size_t>(chart_count) * 4);
+  for (const uv_unwrap::PackedChart &chart : packed.charts) {
+    rects.push_back(chart.x);
+    rects.push_back(chart.y);
+    rects.push_back(chart.width * packed.scale);
+    rects.push_back(chart.height * packed.scale);
+  }
+  nb::dict result;
+  result["corner_uvs"] = uv_unwrap::make_float64_matrix(
+      std::move(out_uvs), static_cast<size_t>(face_count) * 3, 2);
+  result["chart_rects_texels"] = uv_unwrap::make_float64_matrix(
+      std::move(rects), static_cast<size_t>(chart_count), 4);
+  result["atlas_resolution"] = resolution;
+  result["texels_per_unit"] = packed.scale;
+  result["packed_height_texels"] = packed.packed_height_texels;
+  result["shelf_count"] = packed.shelf_count;
+  result["gap_texels"] = padding + (bilinear ? 1.0 : 0.0);
+  result["rotate_charts_to_axis"] = rotate_charts_to_axis;
   return result;
 }
 

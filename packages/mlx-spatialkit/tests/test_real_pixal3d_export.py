@@ -2690,3 +2690,76 @@ def test_reference_uv_param_overlap_and_stretch_parity_violin_fixture() -> None:
         pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
     summary = _assert_parameterization_invariants_and_stretch_parity(fixture, "violin_bow")
     print(f"\n[violin parameterization invariants+parity] {summary}")
+
+
+def test_uv_backend_validator_accepts_reference_backend() -> None:
+    from mlx_spatialkit.export import _resolve_pixal3d_uv_backend, _resolve_tile_padding
+
+    assert _resolve_pixal3d_uv_backend("xatlas-equivalent-native") == "xatlas-equivalent-native"
+    assert _resolve_pixal3d_uv_backend("XATLAS_EQUIVALENT_NATIVE") == "xatlas-equivalent-native"
+    assert _resolve_pixal3d_uv_backend("face-atlas") == "face-atlas"
+    assert _resolve_pixal3d_uv_backend("native-chart") == "native-chart"
+    with pytest.raises(ValueError):
+        _resolve_pixal3d_uv_backend("xatlas")  # the real thing is not vendored
+    with pytest.raises(ValueError):
+        _resolve_pixal3d_uv_backend("not-a-backend")
+    # Reference backend packs with texel gaps; fractional tile padding is not
+    # part of its contract, so the backend default resolves to 0.
+    padding, source = _resolve_tile_padding(None, "xatlas-equivalent-native")
+    assert padding == 0.0
+    assert source == "backend_default:xatlas-equivalent-native"
+    # Existing backend defaults are untouched.
+    padding, source = _resolve_tile_padding(None, "face-atlas")
+    assert source == "backend_default:face-atlas"
+    padding, source = _resolve_tile_padding(None, "native-chart")
+    assert source == "backend_default:native-chart"
+
+
+@pytest.mark.heavy
+def test_reference_uv_packing_utilization_parity_violin_fixture() -> None:
+    """Slice-6 heavy: full reference-backend atlas on the violin fixture.
+
+    Asserts the packed-atlas invariants (zero overlaps / zero flips in the
+    FINAL [0,1] atlas) and utilization parity: our rect-shelf packing reaches
+    >= 0.55x the oracle's uv_bbox_utilization (measured 2026-06-12: ours
+    0.373 vs oracle 0.604 -> 0.62x; the gap is the documented deviation 9,
+    rect shelves vs xatlas's rasterized insertion).
+    """
+    import json
+
+    from mlx_spatialkit.export import make_reference_uvs
+
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
+    fixture = (
+        _repo_root() / "inputs" / "mlx-spatialkit" / "violin-bow"
+        / "pixal3d-1024-cascade-decoded-pbr"
+    )
+    if not fixture.exists():
+        pytest.skip(f"violin-bow Pixal3D decoded fixture not present: {fixture}")
+
+    anchors_path = Path(__file__).resolve().parent / "data" / "uv_oracle_anchors.json"
+    oracle = json.loads(anchors_path.read_text())["fixtures"]["violin_bow"]
+
+    remesh_v, remesh_f = _load_remeshed_mesh_from_fixture(fixture)
+    simplified, stats = simplify_mesh(
+        remesh_v, remesh_f, target_faces=50_000, min_component_faces=32, backend="qem")
+    assert stats["backend"] == "qem"
+
+    mesh = make_reference_uvs(simplified.vertices, simplified.faces, texture_resolution=1024)
+    s = mesh.stats
+    assert s["backend"] == "xatlas-equivalent-native"
+    assert s["uv_overlap_count"] == 0, "packed atlas must be overlap-free"
+    assert s["uv_flipped_count"] == 0
+    assert (mesh.uvs >= 0.0).all() and (mesh.uvs <= 1.0).all()
+    oracle_util = oracle["per_cluster_composition"]["uv_bbox_utilization"]
+    ratio = s["uv_bbox_utilization"] / oracle_util
+    assert ratio >= 0.55, (
+        f"utilization {s['uv_bbox_utilization']:.3f} vs oracle {oracle_util:.3f} "
+        f"-> ratio {ratio:.3f} below 0.55"
+    )
+    print(
+        f"\n[violin packing parity] charts={s['chart_count']} "
+        f"util={s['uv_bbox_utilization']:.3f} (oracle {oracle_util:.3f}, ratio {ratio:.2f}) "
+        f"tpu={s['texels_per_unit']:.1f} shelves={s['shelf_count']}"
+    )

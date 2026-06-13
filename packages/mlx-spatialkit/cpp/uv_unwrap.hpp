@@ -72,4 +72,18 @@ nanobind::dict parameterize_uv_charts(
     int64_t max_split_depth,
     int64_t lscm_iteration_factor);
 
+// Stage B packing (slice 6): rotate charts to their principal axis,
+// shelf-pack with texel gaps (gap = padding + 1 when bilinear), normalize to
+// [0,1]. Returns packed corner_uvs ([F*3, 2]), chart_rects_texels ([C, 4]
+// x/y/w/h), texels_per_unit, and shelf stats. xatlas PackOptions semantics at
+// reference defaults; see deviation 9 in uv_unwrap.cpp.
+nanobind::dict pack_uv_charts(
+    nanobind::object faces,
+    nanobind::object chart_ids,
+    nanobind::object corner_uvs,
+    int64_t resolution,
+    double padding,
+    bool bilinear,
+    bool rotate_charts_to_axis);
+
 }  // namespace mlx_spatialkit
