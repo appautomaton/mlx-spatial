@@ -1371,7 +1371,16 @@ def _pixal3d_reference_stage_contract(
         simplifier_quality == "production"
         and ("qem" in simplifier_algorithm or "edge-collapse" in simplifier_algorithm)
     )
-    unwrap_reference = uv_backend.startswith("xatlas")
+    # Honest gate: the backend name opting in is necessary but not sufficient
+    # — the measured invariants of the produced atlas must hold too, so a
+    # renamed heuristic (or a regressed reference backend) cannot flip the
+    # stage to reference_matched.
+    unwrap_reference = (
+        uv_backend.startswith("xatlas")
+        and _maybe_int(uv_stats.get("uv_overlap_count")) == 0
+        and _maybe_int(uv_stats.get("uv_flipped_count")) == 0
+        and _maybe_int(uv_stats.get("lscm_unconverged_count")) == 0
+    )
     raster_reference = bool(texture_stats.get("uv_raster_interpolate_reference"))
     projection_reference = source_projection_used is True
     sampling_reference = sampling_mode == "trilinear"
@@ -1804,6 +1813,114 @@ def _native_chart_uv_candidate_status(
     }
 
 
+# Preview-scale parity floors for the reference unwrap backend, anchored to
+# the pip-xatlas oracle (tests/data/uv_oracle_anchors.json, xatlas 0.0.11):
+# composition uv_bbox_utilization 0.534 (main) / 0.604 (violin); the floor is
+# 0.55x the lower anchor (the documented rect-shelf vs rasterized packing
+# gap). Stretch floor guards against a degenerate all-sentinel atlas.
+PIXAL3D_REFERENCE_UNWRAP_UTILIZATION_FLOOR = 0.29
+PIXAL3D_REFERENCE_UNWRAP_STRETCH_MIN = 0.5
+
+
+def _reference_unwrap_parity_summary(
+    reference: dict[str, Any] | None,
+    uv_stats: dict[str, Any],
+    uv_backend: str,
+) -> dict[str, Any]:
+    """Computed parity verdict for the xatlas-equivalent-native backend.
+
+    parity_ready is MEASURED, never assumed: the backend must identify
+    itself, the packed atlas must be overlap-free and flip-free with a
+    converged LSCM pass, and utilization/stretch must clear the recorded
+    preview-scale floors. A deliberately bad atlas keeps parity_ready False
+    regardless of the backend name (SPEC UVU-06 anti-gaming).
+    """
+
+    uv_stats_backend = str(uv_stats.get("backend", "unknown"))
+    overlap = _maybe_int(uv_stats.get("uv_overlap_count"))
+    flipped = _maybe_int(uv_stats.get("uv_flipped_count"))
+    unconverged = _maybe_int(uv_stats.get("lscm_unconverged_count"))
+    chart_count = _maybe_int(uv_stats.get("chart_count"))
+    cluster_count = _maybe_int(uv_stats.get("stage_a_cluster_count"))
+    utilization = _maybe_float(uv_stats.get("uv_bbox_utilization"))
+    stretch_l2 = _maybe_float(uv_stats.get("uv_stretch_l2"))
+    checks = {
+        "reference_unwrap_backend": {
+            "passed": uv_stats_backend == "xatlas-equivalent-native",
+            "actual": uv_stats_backend,
+            "required": "xatlas-equivalent-native",
+        },
+        "uv_overlap_free": {
+            "passed": overlap == 0,
+            "actual": overlap,
+            "required": "==0",
+        },
+        "uv_flip_free": {
+            "passed": flipped == 0,
+            "actual": flipped,
+            "required": "==0",
+        },
+        "lscm_converged": {
+            "passed": unconverged == 0,
+            "actual": unconverged,
+            "required": "==0",
+        },
+        "charts_present": {
+            "passed": chart_count is not None and chart_count > 0
+            and cluster_count is not None and cluster_count > 0,
+            "actual": {"chart_count": chart_count, "stage_a_cluster_count": cluster_count},
+            "required": ">0",
+        },
+        "utilization_floor": {
+            "passed": utilization is not None
+            and utilization >= PIXAL3D_REFERENCE_UNWRAP_UTILIZATION_FLOOR,
+            "actual": utilization,
+            "required": f">={PIXAL3D_REFERENCE_UNWRAP_UTILIZATION_FLOOR}",
+        },
+        "stretch_measured": {
+            "passed": stretch_l2 is not None
+            and math.isfinite(stretch_l2)
+            and stretch_l2 >= PIXAL3D_REFERENCE_UNWRAP_STRETCH_MIN,
+            "actual": stretch_l2,
+            "required": f"finite, >={PIXAL3D_REFERENCE_UNWRAP_STRETCH_MIN}",
+        },
+    }
+    parity_ready = all(bool(check["passed"]) for check in checks.values())
+    # Reference-trace ratios are informational only: the trace is the
+    # full-scale Pixal3D model (212k faces), not the preview-target mesh.
+    reference_info = None
+    if reference is not None:
+        reference_chart_count = _maybe_int(reference.get("unwrap_chart_count"))
+        chart_count_ratio = None
+        if chart_count is not None and reference_chart_count not in (None, 0):
+            chart_count_ratio = float(chart_count) / float(reference_chart_count)
+        reference_info = {
+            "unwrap_backend": reference.get("unwrap_backend"),
+            "unwrap_chart_count": reference_chart_count,
+            "chart_count_ratio_informational": chart_count_ratio,
+            "scale_note": "reference trace is full-scale; ratios are informational only",
+        }
+    return {
+        "status": "reference_parity_measured" if parity_ready else "reference_parity_failed",
+        "reason": "measured_invariants" if parity_ready else "measured_invariant_failed",
+        "parity_ready": parity_ready,
+        "xatlas_chart_parity": parity_ready,
+        "deferred_boundary": "not_xatlas_chart_parity",
+        "requested_uv_backend": uv_backend,
+        "native": {
+            "uv_backend": uv_stats_backend,
+            "chart_count": chart_count,
+            "stage_a_cluster_count": cluster_count,
+            "uv_bbox_utilization": utilization,
+            "uv_stretch_l2": stretch_l2,
+        },
+        "reference": reference_info,
+        "ratios": {},
+        "deficits": {},
+        "checks": checks,
+    }
+
+
 def _xatlas_chart_parity_summary(
     reference: dict[str, Any] | None,
     uv_stats: dict[str, Any],
@@ -1812,6 +1929,8 @@ def _xatlas_chart_parity_summary(
 ) -> dict[str, Any]:
     uv_stats_backend = str(uv_stats.get("backend", "unknown"))
     deferred_boundary = "not_xatlas_chart_parity"
+    if uv_backend == "xatlas-equivalent-native":
+        return _reference_unwrap_parity_summary(reference, uv_stats, uv_backend)
     if uv_backend != "native-chart":
         return {
             "status": "not_requested",

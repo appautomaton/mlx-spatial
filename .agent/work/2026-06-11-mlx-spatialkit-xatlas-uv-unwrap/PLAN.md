@@ -122,6 +122,10 @@ Required:
 **Depends on:** S6
 **Touches:** `src/mlx_spatialkit/export.py`, `tests/test_real_pixal3d_export.py`
 
+**Status:** complete (direct route)
+**Evidence:** Two-layer honest gate. (1) Stage gate (`unwrap_reference`): backend name `startswith("xatlas")` is now necessary but NOT sufficient — the measured atlas invariants (`uv_overlap_count==0`, `uv_flipped_count==0`, `lscm_unconverged_count==0`) must hold, so a renamed heuristic or regressed backend stays `heuristic_quarantined`. (2) `_reference_unwrap_parity_summary` (new branch of `_xatlas_chart_parity_summary` for the reference backend): `parity_ready` is a **computed verdict** over 7 named checks — backend identity, overlap-free, flip-free, LSCM converged, charts present, utilization ≥ 0.29 floor (anchored: 0.55× the lower oracle bbox-util 0.534), stretch measured — with reference-trace ratios recorded as informational only (trace is full-scale, preview is 50k). Legacy paths untouched: native-chart still reports its honest `parity_ready: False`; face-atlas `not_requested/None`; consumption at `production_quality_ready` unchanged. Tests: computed-verdict + 4-scenario anti-gaming (overlap>0, flipped>0, renamed heuristic, low utilization) + stage-contract gate (good reference stats → `reference_matched`; regressed/bare-`"xatlas"`-name/legacy → `heuristic_quarantined`). One existing aspirational test updated: its hypothetical `uv_stats={"backend": "xatlas"}` no longer passes the hardened gate by design — now carries the measured invariants. Suite: **180 non-heavy passed**.
+**Risks / next:** none for this slice; the utilization floor 0.29 is preview-scale-anchored — S8/verify should restate it if the proof texture size changes.
+
 ### Slice 8: Two-fixture end-to-end proof + numeric budgets
 
 Required:

@@ -1402,7 +1402,14 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
         },
         {"final_faces": 212_542, "coverage_ratio": 1.0, "raw_coverage_ratio": 0.40},
         quality_preset="reference-target",
-        uv_stats={"backend": "xatlas"},
+        # The hardened slice-7 gate: a bare "xatlas*" name is not enough, the
+        # measured atlas invariants must hold for the stage to pass.
+        uv_stats={
+            "backend": "xatlas-equivalent-native",
+            "uv_overlap_count": 0,
+            "uv_flipped_count": 0,
+            "lscm_unconverged_count": 0,
+        },
     )
     assert production["artifact_ready"] is True
     assert production["production_quality_ready"] is True
@@ -2763,3 +2770,91 @@ def test_reference_uv_packing_utilization_parity_violin_fixture() -> None:
         f"util={s['uv_bbox_utilization']:.3f} (oracle {oracle_util:.3f}, ratio {ratio:.2f}) "
         f"tpu={s['texels_per_unit']:.1f} shelves={s['shelf_count']}"
     )
+
+
+def _good_reference_unwrap_stats() -> dict:
+    return {
+        "backend": "xatlas-equivalent-native",
+        "uv_overlap_count": 0,
+        "uv_flipped_count": 0,
+        "lscm_unconverged_count": 0,
+        "chart_count": 2120,
+        "stage_a_cluster_count": 704,
+        "uv_bbox_utilization": 0.373,
+        "uv_stretch_l2": 63.7,
+    }
+
+
+def test_reference_unwrap_parity_ready_is_computed_from_measurements() -> None:
+    # Slice-7 / UVU-06: parity_ready is a computed verdict, never hardcoded.
+    summary = _xatlas_chart_parity_summary(
+        None, _good_reference_unwrap_stats(), {}, "xatlas-equivalent-native")
+    assert summary["status"] == "reference_parity_measured"
+    assert summary["parity_ready"] is True
+    assert summary["xatlas_chart_parity"] is True
+    assert all(check["passed"] for check in summary["checks"].values())
+
+
+def test_reference_unwrap_parity_anti_gaming() -> None:
+    # A deliberately bad atlas (or a renamed heuristic) must keep
+    # parity_ready False regardless of the requested backend name.
+    overlapping = _good_reference_unwrap_stats()
+    overlapping["uv_overlap_count"] = 5
+    summary = _xatlas_chart_parity_summary(None, overlapping, {}, "xatlas-equivalent-native")
+    assert summary["parity_ready"] is False
+    assert summary["checks"]["uv_overlap_free"]["passed"] is False
+
+    flipped = _good_reference_unwrap_stats()
+    flipped["uv_flipped_count"] = 3
+    assert _xatlas_chart_parity_summary(
+        None, flipped, {}, "xatlas-equivalent-native")["parity_ready"] is False
+
+    renamed_heuristic = {"backend": "native-chart-atlas"}
+    summary = _xatlas_chart_parity_summary(
+        None, renamed_heuristic, {}, "xatlas-equivalent-native")
+    assert summary["parity_ready"] is False
+    assert summary["checks"]["reference_unwrap_backend"]["passed"] is False
+
+    low_utilization = _good_reference_unwrap_stats()
+    low_utilization["uv_bbox_utilization"] = 0.1
+    assert _xatlas_chart_parity_summary(
+        None, low_utilization, {}, "xatlas-equivalent-native")["parity_ready"] is False
+
+
+def test_reference_stage_contract_unwrap_gate_requires_measured_invariants() -> None:
+    # Slice-7: the xatlas_unwrap stage flips to reference_matched only when
+    # the backend opted in AND the measured atlas invariants hold; a bare
+    # "xatlas*" name (or a regressed atlas) stays heuristic_quarantined.
+    from mlx_spatialkit.export import _pixal3d_reference_stage_contract
+
+    simplify_stats = {
+        "backend": "qem",
+        "algorithm": "native_qem_edge_collapse",
+        "quality_tier": "production",
+        "remesh_backend": "native-narrow-band-dc",
+        "small_boundary_loop_fill_algorithm": "cumesh-perimeter-centroid-fan",
+    }
+    texture_stats = {"backend": "metal-uv-binned-nearest"}
+
+    good = _pixal3d_reference_stage_contract(
+        simplify_stats, _good_reference_unwrap_stats(), texture_stats, None,
+        quality_preset="reference-target")
+    assert good["stages"]["xatlas_unwrap"]["status"] == "reference_matched"
+    assert good["stages"]["xatlas_unwrap"]["passed"] is True
+
+    bad = _good_reference_unwrap_stats()
+    bad["uv_overlap_count"] = 7
+    regressed = _pixal3d_reference_stage_contract(
+        simplify_stats, bad, texture_stats, None, quality_preset="reference-target")
+    assert regressed["stages"]["xatlas_unwrap"]["status"] == "heuristic_quarantined"
+
+    bare_name = _pixal3d_reference_stage_contract(
+        simplify_stats, {"backend": "xatlas"}, texture_stats, None,
+        quality_preset="reference-target")
+    assert bare_name["stages"]["xatlas_unwrap"]["status"] == "heuristic_quarantined"
+
+    for legacy in ("face-atlas", "native-chart-atlas"):
+        quarantined = _pixal3d_reference_stage_contract(
+            simplify_stats, {"backend": legacy}, texture_stats, None,
+            quality_preset="reference-target")
+        assert quarantined["stages"]["xatlas_unwrap"]["status"] == "heuristic_quarantined"
