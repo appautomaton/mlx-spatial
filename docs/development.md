@@ -38,6 +38,7 @@ uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
 uv run mlx-spatial-mapanything --help
+uv run mlx-spatial-pixal3d --help
 ```
 
 ## Local Assets
@@ -56,7 +57,7 @@ Tests should pass without downloading gated weights unless they are explicitly m
 ## Editing Constraints
 
 - Prefer existing module boundaries over new abstractions.
-- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, `hyworld2_*`, `lito_*`, or `mapanything_*` modules.
+- Keep model-specific behavior inside the relevant `sam3d_*`, `trellis2_*`, `hyworld2_*`, `lito_*`, `mapanything_*`, or `pixal3d_*` modules.
 - Keep shared primitives model-neutral.
 - Do not add generated outputs, converted weights, vendor checkouts, or agent state to package artifacts.
 - Use structured parsers for model metadata and safetensors; avoid ad hoc parsing when a local helper exists.

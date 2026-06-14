@@ -9,6 +9,7 @@ Start with the page that matches the job:
 | Run HY-WorldMirror scene reconstruction | [hyworld2.md](hyworld2.md) |
 | Run Apple LiTo image-to-3DGS research inference | [lito.md](lito.md) |
 | Run MapAnything multi-view scene generation | [mapanything.md](mapanything.md) |
+| Inspect Pixal3D MLX implementation status | [pixal3d.md](pixal3d.md) |
 | Start from recommended runnable scripts | [scripts/README.md](../scripts/README.md) |
 | Understand module boundaries | [architecture.md](architecture.md) |
 | Contribute or verify changes locally | [development.md](development.md) |
@@ -37,6 +38,7 @@ mlx-spatial-trellis2 --help
 mlx-spatial-hyworld2 --help
 mlx-spatial-lito --help
 mlx-spatial-mapanything --help
+mlx-spatial-pixal3d --help
 ```
 
 From a cloned repo, use `uv run <command>` for the same CLIs.

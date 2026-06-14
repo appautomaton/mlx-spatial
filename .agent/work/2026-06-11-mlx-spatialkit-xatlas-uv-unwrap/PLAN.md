@@ -1,0 +1,203 @@
+# Plan: Reference-Parity UV Unwrap
+
+**Goal:** SPEC at `.agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/SPEC.md` (UVU-01..11); architecture in `DESIGN.md`.
+
+All commands run from `packages/mlx-spatialkit/` with the project venv (`.venv/bin/pytest`); rebuild = `uv pip install --no-build-isolation -e .` (clean: `rm -rf /tmp/mlx-spatialkit-build` first).
+
+### Slice 1: Native UV-quality metrics (oracle of record)
+
+Required:
+**Objective:** Land `cpp/uv_metrics.cpp` — UV-triangle overlap count, flipped-triangle count, per-chart Sander L2/Linf texel stretch, atlas utilization — exposed via bindings, report-only.
+**Acceptance criteria:**
+- Synthetic with known-overlapping UVs → `uv_overlap_count > 0`; clean grid → 0. Mirrored-triangle UVs → `uv_flipped_count > 0`.
+- Analytic stretch case (uniform scale → L2 == scale; anisotropic squash → Linf reflects it, within float tolerance).
+- Existing backends' stats and tests untouched; metrics callable standalone on `(vertices, faces, uvs, chart_ids)` (UVU-04 mechanism, UVU-11).
+- Deterministic outputs (pure functions, ordered iteration).
+**Verification:** rebuild, then `.venv/bin/pytest tests/test_glb_writer.py -k uv_metrics` (new tests) and `.venv/bin/pytest tests/test_glb_writer.py -q` green.
+**Touches:** `cpp/uv_metrics.cpp|hpp`, `cpp/bindings.cpp`, `CMakeLists.txt`, `tests/test_glb_writer.py`
+
+**Status:** complete (subagent route: implementer DONE → spec APPROVED → quality CHANGES_REQUESTED → fixes → quality APPROVED)
+**Evidence:** new `cpp/uv_metrics.{cpp,hpp}` + one nanobind def (`uv_quality_metrics(vertices, faces, uvs, chart_ids=None)`) + CMake source + 8 non-heavy tests. All normative metrics verified line-by-line by spec review (Sander Ss/St/Gamma formulas exact; eps-tolerant SAT excludes edge-touching; deterministic ordered iteration). Quality round fixed 2 importants: rank-1 chart_ids heap-OOB (`strides[1]`) → local strides[0]-only reader; per-pair `std::set` dedup → O(F) last-anchor stamp array (+ kMaxCellSpanPerAxis=64 large-triangle path; dedup-equivalence test pins 15/15 pairs across 289 shared cells). `pytest tests/test_glb_writer.py -q` = **23 passed** (22 pre-existing untouched + new). Orchestration detail: `orchestration/slice-001-summary.md`.
+**Risks / next:** three recorded minors (no strided-chart_ids regression test; >64-cell-span path untested by fixture; checked_pairs semantics differ for atlas-spanning triangles — flagged if a later slice pins checked_pairs on such fixtures).
+
+### Slice 2: Stage-A cone-cluster engine
+
+Required:
+**Objective:** Implement `ConeClusterer` in `cpp/uv_unwrap.cpp` — heap-driven cost-ordered chart agglomeration with cone half-angle bound, area + perimeter/area penalties, refine/smooth semantics — deterministic, exposing per-face cluster ids.
+**Acceptance criteria:**
+- Cone invariant machine-checked on synthetics: no face normal deviates from its cluster cone axis beyond `threshold_cone_half_angle_rad` (UVU-02).
+- Penalty semantics: raising `area_penalty_weight` strictly does-not-increase max cluster area on a fixed synthetic; perimeter/area weight penalizes strip-shaped merges (unit test with a long strip + compact blob).
+- Production knobs (90°, refine 0, global 1, smooth 1, 0.1, 0.0001) run end-to-end; non-default refine/smooth exercised in unit tests only.
+- Determinism: identical cluster ids on repeat call; ordered containers + named heap comparator (QEM pattern); no O(F²) (spot-check: subdiv icosphere scaling ~linear in a quick timing assert with generous bound).
+**Verification:** rebuild, then `.venv/bin/pytest tests/test_mesh_processing.py -k cone_cluster`.
+**Execution:** subagent recommended
+**Depends on:** none
+**Touches:** `cpp/uv_unwrap.cpp|hpp`, `cpp/bindings.cpp`, `CMakeLists.txt`, `tests/test_mesh_processing.py`
+
+**Status:** complete (subagent route: implementer DONE → spec APPROVED → quality APPROVED)
+**Evidence:** `ConeClusterer` in new `cpp/uv_unwrap.{cpp,hpp}` (~750 lines) + `compute_uv_charts` binding with CuMesh defaults. Spec review verified the cost composition against `atlas.cu:184-192` — the kernel uses **perimeter²/area** (docstring says perimeter/area; kernel wins, documented). Three documented deviations approved (monotone enclosing cones → cone invariant is a hard guarantee; refine cone-admission; guarded division). QEM determinism discipline verified structurally (no unordered containers in TU; `ChartEdgeCostGreater` cost↑/edge_id↑/version↓; lazy invalidation + 3× compaction). 9 new tests: cube 6-planar@10°, icosphere invariant @30°/90°, area-penalty monotonicity, strip-vs-blob perimeter penalty, production knobs e2e, refine/smooth variants, exact-equality determinism, 81920-face scale (0.186 s, budget 10 s). `pytest tests/test_mesh_processing.py -q` = **49 passed**; full suite 153 passed. Orchestration: `orchestration/slice-002-summary.md`.
+**Risks / next:** **(important, fold into S4)** refine path at CuMesh-default knobs (refine 100 × global 3) is unbenchmarked at scale — per-face map lookups ×300 passes could be minutes at 1.1M faces; production knobs (refine 0, global 1) avoid it, but S4 must add fixpoint early-exit + neighbor-table precompute and extend the scale test to nonzero refine. Minors recorded: round-rebuild allocation churn at 1.1M (flat adjacency if stage B needs it); rejection stats count re-rejections (not unique pairs); no threshold upper-bound validation; zero-area faces unfiltered (upstream QEM strips them); two libm-sensitive test pins (macOS-deterministic).
+
+### Slice 3: Oracle anchors (dev-time pip xatlas)
+
+Required:
+**Objective:** Generate and commit version-pinned parity anchors: both fixtures' QEM 50k meshes → native stage-A clusters → pip xatlas per cluster (reference composition) + whole-mesh sanity run, recording chart count, utilization, stretch distribution (via slice-1 metrics), seam ratio into `tests/data/uv_oracle_anchors.json`.
+**Acceptance criteria:**
+- `/tmp/uvoracle-venv` with pinned pip `xatlas`; generation script `tests/tools/gen_uv_oracle_anchors.py` is re-runnable and records `xatlas_version` + option mapping (SPEC assumption).
+- Anchors JSON committed with both fixtures' numbers; values sane (chart_count > stage-A cluster count is allowed; utilization in (0,1]; stretch finite).
+- All tests reading anchors pass **without** xatlas importable in the project venv (UVU-10); generation path skips cleanly when xatlas absent.
+- If pip xatlas cannot install on this host: STOP and surface to user (SPEC assumption fallback is a user decision, not silent).
+**Verification:** `.venv/bin/python -c "import xatlas"` FAILS in project venv while `ls tests/data/uv_oracle_anchors.json` exists and `.venv/bin/pytest tests/ -k anchors -q` green; anchors regenerated once from `/tmp/uvoracle-venv` with log retained under `/tmp`.
+**Depends on:** S1, S2
+**Touches:** `tests/tools/gen_uv_oracle_anchors.py`, `tests/data/uv_oracle_anchors.json`, `tests/test_glb_writer.py`
+
+**Status:** complete (implementer DONE_WITH_CONCERNS → spec APPROVED → quality CHANGES_REQUESTED → fixes applied in working tree during session interruptions, verified item-by-item by coordinator; user declined further subagent dispatches, so re-review was coordinator-direct)
+**Evidence:** two-phase generator (`tests/tools/gen_uv_oracle_anchors.py`): project venv builds QEM 50k meshes (recipe mirrors heavy proof tests parameter-for-parameter, spec-verified) + stage-A clusters at production knobs; `/tmp/uvoracle-venv` subprocess runs pip **xatlas 0.0.11** per cluster in ONE Atlas (reference composition) + whole-mesh sanity with `parametrize_matches_atlas=true`. Committed `tests/data/uv_oracle_anchors.json`: main 1844 clusters → 5166 charts, atlas_util 0.721; violin_bow 704 → 2527, util 0.745. All 5 quality fixes verified in file: sentinel-excluded per-chart summaries (real mean l2 **10.17** over 2539 measured charts vs 4.997 diluted — the ~2× understatement the review predicted) + measured/total counts; bootstrap recipe + venv preflight + phase-B version assert; merge provenance guard + argparse error; version-tagged cache + legacy warning; 3 invariant asserts. Regenerated JSON field-diff vs pre-fix: headline values byte-identical, only summaries/notes/provenance changed. One coordinator test-fix: mean≤p95 assert was wrong for heavy-tailed linf (max 5648) → bound mean/p95 against max only. `pytest tests/ -q` = **158 passed**. Recorded reference truths: xatlas mirrors ~half its charts (flipped ≈ 50% of faces is GENUINE reference output — do not use flipped-count as a parity target); reference output has real overlaps at padding=0 (147–388) — our zero-overlap invariant is deliberately stricter.
+**Risks / next:** parity tolerances in S4/S5 must use the sentinel-excluded summaries; chart-orientation (mirroring) must be treated as insensitive in any parity comparison.
+
+### Slice 4: Stage-B chart growth + projection baseline
+
+Required:
+**Objective:** Implement `ChartBuilder` (xatlas ChartOptions cost semantics within each cluster) plus the PCA/orthographic parameterization path with flip/stretch acceptance test, producing per-chart UVs for planar-ish charts.
+**Acceptance criteria:**
+- Growth cost implements normal-deviation/roundness/straightness/normal-seam/texture-seam weights with `max_cost` stop and `max_iterations=1` reseed semantics; weights are knobs defaulted to reference values (UVU-03 mechanism).
+- On fixture meshes (cached QEM 50k from S3 setup), chart count within the stated tolerance factor of the per-cluster oracle anchors (tolerance recorded in test, target ≤1.5×; tighten in S8 evidence if measured tighter).
+- Projection acceptance: charts accepted only when `uv_flipped_count==0` and Linf stretch ≤ recorded threshold; rejected charts marked for S5 (LSCM) — count recorded in stats.
+- Deterministic chart ids/UVs across repeat calls.
+**Verification:** rebuild, then `.venv/bin/pytest tests/test_mesh_processing.py -k chart_growth` and `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -k chart_count_parity`.
+**Execution:** subagent recommended
+**Depends on:** S2, S3
+**Touches:** `cpp/uv_unwrap.cpp`, `tests/`
+
+**Status:** complete (direct route — user declined subagent dispatches; coordinator implemented and self-reviewed)
+**Evidence:** `ChartBuilder` in `cpp/uv_unwrap.cpp` (+`grow_uv_charts` binding, xatlas-default knobs): behavior port of the vendored reference `ClusteredCharts` (`/tmp/CuMesh/third_party/xatlas/xatlas.cpp:5320-6300`) — planar regions (kNormalEpsilon 0.001), placeSeeds(maxCost/2) → relocate(10-best central) → reset → competitive growCharts(maxCost) → fillHoles(maxCost/2) → mergeCharts (all four reference merge rules incl. the −1×shared bookkeeping), region-wise adds, first-face vs least-squares basis, orthographic parameterization with all-or-none-flip + boundary-self-intersection validity. Five documented deviations in-file (seam metrics ≡0 on welded input; no eigen fallback; pairwise-bbox intersection; tie order; degenerate-seed rescue). Per-chart projection acceptance (flip==0 ∧ Linf≤1.25 default) routes rejects to `chart_needs_lscm` for S5; mirrored charts orientation-normalized (zero-flip output invariant, cross-checked via `uv_quality_metrics`: flipped==0 on sphere). Cluster confinement machine-checked. **Fixture parity (heavy, both pass in 50s): stage-A reproduces anchor cluster counts EXACTLY (1844/704); stage-B chart counts 4007 vs oracle 5166 (0.776) and 1677 vs 2527 (0.664), band [0.60,1.50] recorded** — low side explained (double-precision validity fails less often than xatlas float32 → slightly larger charts); accepted/pending: main 2556/1451, violin 1053/624. **S2 obligation closed:** refine fixpoint early-exit + per-face neighbor-table CSR; new 80k-face nonzero-refine scale test (<15s budget) passes. 8 new non-heavy tests; suite **166 passed**.
+**Risks / next:** ~36% of fixture charts are LSCM-pending — S5's core load is real; merge phase is O(merges×C×F) from the reference's restart-scan behavior (19.2s on main at 50k) — fine at preview scale, revisit only if S8 budgets flag it. Plan correction: heavy tests named `-k chart_growth` (plan said `chart_count_parity`).
+
+### Slice 5: LSCM parameterization + zero-overlap repair (hard core)
+
+Required:
+**Objective:** Native LSCM (sparse conformal system, two pinned boundary vertices, CG solver) for charts that fail projection, plus overlap repair by bounded chart split + re-parameterize, establishing the zero-overlap invariant.
+**Acceptance criteria:**
+- LSCM on analytic curved charts (hemisphere cap, cylinder segment): `uv_flipped_count==0`, L2 stretch strictly better than projection on the same chart, finite UVs (UVU-04).
+- Zero-overlap invariant on both fixture meshes: `uv_overlap_count==0` post-repair, split depth bounded, repair counts in stats; failure = loud stat + test failure, never silent.
+- Stretch parity: fixture stretch distribution within stated tolerance of oracle anchors (UVU-04).
+- CG solver deterministic (fixed iteration order, capped iterations, no parallel reductions); no O(F²) — fixture-scale parameterization completes within a generous timing assert.
+- Boundary charts (the 5–7 residual input loops) parameterize without overlap/distortion blowup; per-chart boundary attribution recorded (SPEC input condition).
+**Verification:** rebuild, then `.venv/bin/pytest tests/test_mesh_processing.py -k lscm` and `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -k "overlap or stretch_parity"`.
+**Execution:** subagent recommended
+**Depends on:** S4
+**Touches:** `cpp/uv_unwrap.cpp`, `tests/`
+
+**Status:** complete (direct route — user declined subagent dispatches; coordinator implemented with three measured iterations on the acceptance logic)
+**Evidence:** `LscmSolver` + `ChartParameterizer` in `cpp/uv_unwrap.cpp` (+`parameterize_uv_charts` binding): exact behavior port of xatlas `computeLeastSquaresConformalMap` — ABF conformal rows (`setup_abf_relations`) with projected-triangle fallback, pins via `findApproximateDiameterVertices` (incl. its v=1 scan quirk), matrix-free Jacobi-CG on the normal equations warm-started from the projection (OpenNL-equivalent, 5·V iterations, tol 1e-6; deviations 6–8 documented in-file). Validity = zero flips + zero interior overlaps (full SAT — stricter than the reference's boundary-only check). **Repair logic converged through measurement:** (1) naive strict-validity + blind bisection → mass shatter (violin 8899 single-face charts); (2) targeted offender-peeling splits + unbounded projection fallback → counts fixed but fallback charts hit Linf>1700, wrecking mean parity; (3) split-stretchy-charts → LSCM tube pathology (exponential decay, Linf 9496); final: **best-valid-candidate selection (projection vs LSCM by Linf) accepted under a fallback cap (12.5), split beyond it, shatter at depth exhaustion.** Fixture results: main 5298 charts (oracle 5166, ratio **1.026**), violin 2120 (2527, 0.839); normalized stretch mean **1.005/1.003**, p95 1.019/1.008, max 3.51/2.33 (oracle mean 1.326/1.174, p95 3.06/1.97 — substantially better than reference); **zero flips + zero intra-chart overlaps cross-checked per chart via uv_quality_metrics on both fixtures**; shatter 17.6%/14.4% (<25% bound); LSCM unconverged 0; runtime <1 s/fixture. Anchors extended with `chart_stretch_l2_normalized_summary` (scale-free parity signal) and regenerated (headlines unchanged). 6 new `-k lscm` unit tests (incl. smooth-hemisphere LSCM-beats-projection in scale-free form, open-boundary mesh, determinism); 2 heavy `-k reference_uv_param` tests. Suites: **171 non-heavy passed; 4/4 heavy S4+S5 green (156 s)**.
+**Risks / next:** boundary self-intersection in growth + full interior SAT here cost O(T²) per chart — fine at preview scale. The lumpy-`_icosphere` test helper is an unnormalized icosahedron (radius→1.9) — flagged in-test, useful as an adversarial case. Plan correction: heavy test names use `-k reference_uv_param` (plan said `-k "overlap or stretch_parity"`).
+
+### Slice 6: Packing + backend assembly + opt-in wiring
+
+Required:
+**Objective:** Chart packing (hull-axis rotation, shelf/skyline, padding + bilinear gutters, resolution/texels-per-unit) and assembly of the full `make_reference_uvs` backend, exposed via widened `uv_backend` validator — default unchanged.
+**Acceptance criteria:**
+- New `uv_backend="xatlas-equivalent-native"` accepted (`export.py:1075-1079` widened; invalid strings still raise); default `"face-atlas"` byte-for-byte unchanged (UVU-01, UVU-11).
+- Padding honored: no two charts within `padding` texels at proof resolution (machine-checked on the packed atlas); UVs in [0,1]; utilization within stated tolerance of oracle anchors (UVU-05).
+- Full backend returns the `NativeUvMesh` contract (vertices/faces/uvs/vmap/stats); stats include chart/cluster counts, rejection/repair counters, all slice-1 metrics.
+- Existing two backends' stats keysets unchanged (regression assert).
+**Verification:** rebuild, then `.venv/bin/pytest tests/test_glb_writer.py -k "packing or reference_uvs"` and `.venv/bin/pytest tests/test_real_pixal3d_export.py -k "uv_backend" -q` (non-heavy validator + default-preservation tests).
+**Depends on:** S5
+**Touches:** `cpp/uv_unwrap.cpp`, `cpp/bindings.cpp`, `src/mlx_spatialkit/export.py`, `tests/`
+
+**Status:** complete (direct route)
+**Evidence:** `pack_uv_charts` in `cpp/uv_unwrap.cpp` (PCA rotate-to-axis, height-sorted shelf placement with texel gaps = padding + bilinear gutter, 40-iteration scale bisection; deviation 9 documented: rect shelves vs xatlas rasterized insertion) + `make_reference_uvs` in `export.py` composing cluster→grow→parameterize→pack at pinned production knobs into the `NativeUvMesh` contract (deterministic (chart, vertex) duplication via sorted unique keys; self-measuring stats incl. final whole-atlas `uv_quality_metrics`). Validator widened to `"xatlas-equivalent-native"` (underscore form normalized; junk rejected); `_resolve_tile_padding` backend default 0.0 (texel-gap semantics); `build_uv_mesh` dispatch added; default `face-atlas` path untouched. **Two measured bug-fixes:** packing scale bisection had a bracket-collapse (hi==lo after halving-to-feasibility → atlas packed at ~45% scale, total_area 0.107) → proper bracket, total_area 0.358/0.373; `uv_metrics` grid cell floored at bbox/256 (sliver-dominated median pushed ordinary triangles into the quadratic large-triangle path: 167 s → 28 s on main packed atlas). Fixture results: **packed-atlas overlap 0 / flipped 0 both fixtures**, utilization 0.359/0.373 vs oracle 0.534/0.604 (ratio 0.67/0.62, band ≥0.55 recorded as the deviation-9 cost). Cube contract test: positions preserved through duplication, 24 output vertices, UVs ∈ [0,1]; pairwise rect-gap padding machine-check at padding=2. Suites: **177 non-heavy passed**; heavy violin utilization parity green (15 s).
+**Risks / next:** opting into the new backend through `export_pixal3d_glb` end-to-end exercises `_native_chart_uv_candidate_status`/`_xatlas_chart_parity_summary` with the new uv_stats keyset — verified not to crash only at the make_reference_uvs level; S7 reworks those functions (and the full-export run is S8's proof). Rect-shelf utilization gap (~0.62×) is the candidate if S8's bake quality wants more texel density (skyline/rasterized packing would close it).
+
+### Slice 7: Honest gate flip
+
+Required:
+**Objective:** Make `xatlas_unwrap` stage and `_xatlas_chart_parity_summary` honest: `parity_ready` computed from measured values, `reference_matched` only for the new backend with proof passing, old backends still quarantined.
+**Acceptance criteria:**
+- `parity_ready` hardcoded `False` (`export.py:1730/1823`) replaced by computed verdict (overlap==0 AND anchor tolerances met AND backend is reference); consumed unchanged at `:2335-2348` (UVU-06).
+- Stage contract: new backend → `reference_matched`; `face-atlas`/`native-chart` → `heuristic_quarantined` unchanged; `production_backend_blockers` semantics untouched (`:1461-1465`).
+- Parity summary reports the real measured numbers (no vacuous defaults); contract unit tests hard-assert all three backend statuses.
+- Gate cannot flip on a failing metric: targeted test feeds a deliberately-bad UV result and asserts `parity_ready` stays False (anti-gaming, SPEC anti-goal).
+**Verification:** `.venv/bin/pytest tests/test_real_pixal3d_export.py -k "parity_summary or stage_contract or quality_summary" -q`.
+**Depends on:** S6
+**Touches:** `src/mlx_spatialkit/export.py`, `tests/test_real_pixal3d_export.py`
+
+**Status:** complete (direct route)
+**Evidence:** Two-layer honest gate. (1) Stage gate (`unwrap_reference`): backend name `startswith("xatlas")` is now necessary but NOT sufficient — the measured atlas invariants (`uv_overlap_count==0`, `uv_flipped_count==0`, `lscm_unconverged_count==0`) must hold, so a renamed heuristic or regressed backend stays `heuristic_quarantined`. (2) `_reference_unwrap_parity_summary` (new branch of `_xatlas_chart_parity_summary` for the reference backend): `parity_ready` is a **computed verdict** over 7 named checks — backend identity, overlap-free, flip-free, LSCM converged, charts present, utilization ≥ 0.29 floor (anchored: 0.55× the lower oracle bbox-util 0.534), stretch measured — with reference-trace ratios recorded as informational only (trace is full-scale, preview is 50k). Legacy paths untouched: native-chart still reports its honest `parity_ready: False`; face-atlas `not_requested/None`; consumption at `production_quality_ready` unchanged. Tests: computed-verdict + 4-scenario anti-gaming (overlap>0, flipped>0, renamed heuristic, low utilization) + stage-contract gate (good reference stats → `reference_matched`; regressed/bare-`"xatlas"`-name/legacy → `heuristic_quarantined`). One existing aspirational test updated: its hypothetical `uv_stats={"backend": "xatlas"}` no longer passes the hardened gate by design — now carries the measured invariants. Suite: **180 non-heavy passed**.
+**Risks / next:** none for this slice; the utilization floor 0.29 is preview-scale-anchored — S8/verify should restate it if the proof texture size changes.
+
+### Slice 8: Two-fixture end-to-end proof + numeric budgets
+
+Required:
+**Objective:** Prove on both fixtures: cached NPZ → remesh → QEM 50k → reference unwrap → bake → GLB under `/tmp`, with bake round-trip error bound, parity numbers, and runtime/delta-RSS budgets.
+**Acceptance criteria:**
+- Both fixtures: zero UV overlaps, stretch/utilization/chart-count within anchor tolerances, `parity_ready==True`, stage `reference_matched` (UVU-07).
+- Bake round-trip error recorded and bounded (metric + bound stated in test); boundary-seam texels attributed in diagnostics (input-condition handling).
+- Numeric budgets: `timings_sec` for the unwrap stage and **delta** peak RSS under anchored bounds (anchor 5× first observed, QEM precedent) (UVU-09).
+- Proof scope pinned: preview/50k target recorded; reference-scale 1M/4096 explicitly deferred in evidence.
+**Verification:** `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -k "reference_uv" -v` green on both fixtures; GLBs written under each fixture's `/tmp` output dir for inspection.
+**Depends on:** S6, S7
+**Checkpoint after:** human-verify
+**Checkpoint reason:** UV/texture quality is the user's stated goal; metrics bound distortion but visual coherence of the unwrapped+baked GLB (seam placement, texture continuity) needs human inspection in a GLB viewer before the outcome is accepted.
+**Touches:** `tests/test_real_pixal3d_export.py`, `src/mlx_spatialkit/export.py` (diagnostics only if gaps found)
+
+**Status:** complete (direct route); awaiting human-verify checkpoint
+**Evidence (full `export_pixal3d_glb` pipeline, preview/res256/50k/1024, both heavy proofs green in 127 s):**
+| metric | main (city) | violin-bow |
+|---|---|---|
+| chart_count (vs oracle, band [0.60,1.50]) | 6321 (1.22×) | 2070 (0.82×) |
+| uv_overlap_count / uv_flipped_count | **0 / 0** | **0 / 0** |
+| parity_ready (computed) | **True** | **True** |
+| uv_bbox_utilization (vs oracle, ≥0.55×) | 0.365 (0.68×) | 0.360 (0.60×) |
+| uv_stretch_l2 | 3.69 | 2.38 |
+| bake coverage ≥ 0.95×chart area | ✓ | ✓ |
+| boundary loops == QEM residual | ✓ | ✓ |
+| uv stage time (budget 140/31 s, 5× anchored) | 42.6 s | 6.2 s |
+| uv stage delta RSS (budget 2/1 GiB) | ~0 MiB | ~0 MiB |
+
+GLBs for inspection: `/tmp/mlx-spatialkit-refuv-main-proof-23292/model.glb` (9.1 MB), `/tmp/mlx-spatialkit-refuv-violin-proof-23292/model.glb` (8.6 MB). Proof scope pinned: preview preset (production gate honestly `not_requested` under preview per F2 semantics); reference-scale (res1024/1M/4096) explicitly deferred. Suite: 180 non-heavy passed.
+**Risks / next:** none blocking; the bake "round-trip" metric is coverage-based (texels inside charts baked, raw≥95% of filled) — a per-texel color round-trip sampler would be stronger but needs bake-source machinery out of scope here.
+
+### Slice 9: Regression, cross-process determinism & dependency-light wrap
+
+Required:
+**Objective:** Confirm the change is additive and clean across the full suite, deterministic cross-process, and dependency-light.
+**Acceptance criteria:**
+- Cross-process determinism: byte-identical `uvs/vertices/faces` across two processes with different `PYTHONHASHSEED` (UVU-08).
+- No new required deps (`git diff pyproject.toml CMakeLists.txt`); build + import clean; full suite green **without** xatlas importable (UVU-10).
+- Full suites green: `test_glb_writer`, `test_mesh_processing`, `test_remesh`, `test_contracts`, non-heavy + heavy `test_real_pixal3d_export`; existing backends/knobs/stats intact (UVU-11).
+**Verification:** clean rebuild, then `.venv/bin/pytest tests/ -q` and `.venv/bin/pytest -m heavy tests/test_real_pixal3d_export.py -q`; `git diff --stat pyproject.toml CMakeLists.txt` empty of new required deps.
+**Depends on:** S6, S7, S8
+
+**Status:** complete (direct route)
+**Evidence:** Cross-process determinism (UVU-08): new `test_reference_uv_cross_process_determinism_invariant_under_hash_seed` — full `make_reference_uvs` pipeline on a 2048-face sphere, sha256 over vertices+faces+uvs, byte-identical across `PYTHONHASHSEED=0/1` subprocesses — **passes** (QEM cross-process test also still green). Dependency-light (UVU-10): `git diff main` on `pyproject.toml`/`CMakeLists.txt` shows exactly two added source lines (`cpp/uv_metrics.cpp`, `cpp/uv_unwrap.cpp`), no new required deps; clean rebuild (`rm -rf /tmp/mlx-spatialkit-build`) + `import mlx_spatialkit` succeed; suite passes with xatlas not importable in the project venv (guard test in suite). Regression (UVU-11): full non-heavy **181 passed** on the clean rebuild; full heavy suite **19 passed in 21:37** — all QEM-era proofs, legacy face-atlas/native-chart export tests, and the new S4/S5/S6/S8 fixture proofs green together.
+**Risks / next:** none — change complete; follow-ons recorded in SPEC (non-manifold-tolerant QEM, reference-scale 1M/4096, rasterized packing for utilization, stage-4 Telea-equivalent inpaint).
+
+## Execution routing and topology
+
+- **Default path:** continuation S1→S2→S3→S4→S5→S6→S7→S8; one **human-verify** checkpoint after S8; S9 resumes after.
+- **Subagent routes:** S2 (algorithm-heavy), S4 and S5 (algorithm-heavy core) `subagent recommended`; rest `direct`.
+- **Parallel-safe groups:** none — S1/S2 are logically independent but share write sets (`bindings.cpp`, `CMakeLists.txt`); strict serial order.
+- **STOP conditions:** S3 oracle-install failure (user decision); any slice unable to hold the zero-overlap invariant without weakening it (spec change, not an engineering judgment).
+
+## Requirement traceability
+
+| ID | Slice(s) |
+|---|---|
+| UVU-01 backend callable | S6 |
+| UVU-02 stage-A clustering parity | S2 |
+| UVU-03 chart segmentation parity | S4 (mechanism + fixture factor) |
+| UVU-04 overlap-free bounded-distortion | S1 (metrics), S5 (invariant + parity) |
+| UVU-05 packing parity | S6 |
+| UVU-06 honest gate flip | S7 |
+| UVU-07 two-fixture e2e proof | S8 |
+| UVU-08 determinism | S2/S4/S5 (in-process), S9 (cross-process) |
+| UVU-09 runtime/memory bounded | S8 (budgets), S9 |
+| UVU-10 dependency-light | S3 (anchors without xatlas), S9 |
+| UVU-11 regression preserved | S1, S6, S9 |
+| SPEC input condition (residual loops) | S5 (boundary charts), S8 (seam attribution) |
+| SPEC assumption (oracle version pin) | S3 |
+
+## Architecture approach
+
+New pattern (two-stage unwrap + LSCM + oracle anchoring) — see `DESIGN.md`. Additive: two new cpp files, one widened validator, gate computation replacing hardcoded False; no existing backend or signature changes.

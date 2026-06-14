@@ -4,13 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlx-spatial"
-version = "0.0.2"
+version = "0.0.3.dev0"
 description = "MLX-first primitives for 3D and spatial model inference."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "AppAutomaton" }]
 urls = { Repository = "https://github.com/appautomaton/mlx-spatial" }
-requires-python = ">=3.11"
+requires-python = ">=3.13,<3.14"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "fast-simplification>=0.1.13",
     "mlx",
@@ -34,8 +41,8 @@ torch-ref = [
     "hydra-core; python_version == '3.13'",
     "opencv-python-headless==4.10.0.84; python_version == '3.13'",
     "pillow-heif; python_version == '3.13'",
-    "torch==2.12.0rc3+m5max; python_version == '3.13'",
-    "torchvision==0.27.0+m5max; python_version == '3.13'",
+    "torch; python_version == '3.13'",
+    "torchvision; python_version == '3.13'",
     "uniception==0.1.7; python_version == '3.13'",
 ]
 torch-build = [
@@ -49,13 +56,6 @@ torch-build = [
 environments = [
     "python_version == '3.13' and sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
-override-dependencies = [
-    "torch==2.12.0rc3+m5max",
-]
-
-[tool.uv.sources]
-torch = { path = "../../ai-frameworks/pytorch/dist/m5max/torch-2.12.0rc3+m5max-cp313-cp313-macosx_26_0_arm64.whl" }
-torchvision = { path = "../../ai-frameworks/torchvision/dist/m5max/torchvision-0.27.0+m5max-cp313-cp313-macosx_26_0_arm64.whl" }
 
 [project.scripts]
 mlx-spatial-trellis2 = "mlx_spatial.trellis2:main"
@@ -63,6 +63,7 @@ mlx-spatial-hyworld2 = "mlx_spatial.hyworld2:main"
 mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
 mlx-spatial-lito = "mlx_spatial.lito:main"
 mlx-spatial-mapanything = "mlx_spatial.mapanything:main"
+mlx-spatial-pixal3d = "mlx_spatial.pixal3d:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlx_spatial"]

@@ -1,19 +1,21 @@
 ---
 name: auto-ceo-review
-description: Product go/no-go on a framed spec. Use after auto-frame, before planning.
+description: Optional product go/no-go on a framed spec. Use when product direction needs review before planning.
 metadata:
   stage: frame
 ---
 
 # auto-ceo-review
 
-Product-direction gate. Decides whether a spec is worth building before planning begins.
+Optional product-direction review. Decides whether a spec is worth building before planning begins.
 
-First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root → JSON `{activeChange, stage, canonicalSpec, canonicalDesign, canonicalPlan, productReview, engineeringReview, diagnostics}` (missing state normalizes to `"none"`/`null`). If any diagnostic has level `"error"`, stop and report it before proceeding.
+First action: run `node .agent/.automaton/scripts/get-context.mjs` from the project root.
 
 ## Preamble
 
 Product bet review. Restates the objective as one crisp bet, identifies differentiation, calls out generic or mis-scoped direction. Does not design implementation or write code.
+
+A good review names the bet in one sentence, identifies the weakest assumption, and renders a verdict in under 150 words. A bad review restates the spec.
 
 Loading discipline: one SPEC.md read, one review paragraph, one verdict. Read project files when understanding the codebase helps ground the review — verify that spec claims reflect what actually exists before approving or rejecting.
 
@@ -23,21 +25,29 @@ Before appending the product review:
 - Replace strategic filler with user, action, value, and risk.
 - Separate supported claims from assumptions.
 - Name the strongest risk even when approving.
-- Read `references/quality.md` (~36 lines: anti-patterns, better shape, prose hygiene scan patterns) when the review sounds like polite validation.
+- Read `references/quality.md` when the review sounds like polite validation.
 
 ## Do
 
+<GATE>
+
+Do NOT proceed unless:
+- `canonical_spec` is set and `SPEC.md` is readable.
+
+If the spec is missing or unreadable, set verdict to `needs_clarification` and stop.
+</GATE>
+
 ### Load State
 
-Read `.agent/steering/STATUS.md`. Read the canonical `SPEC.md`.
+Read the canonical `SPEC.md`.
 
 ### Restate the Bet
 
-In one sentence: "We are betting that [specific user] will [specific action] because [specific reason], and the risk is [specific risk]."
+In one sentence: "We are betting that [specific user] will [specific action] because [specific reason], and the risk is [specific risk]." Read `references/bet-framing.md` for crisp-vs-vague bet examples.
 
 ### Evaluate
 
-Assess differentiation, user value, generic or mis-scoped elements, and shippability. Ground each in evidence from the spec.
+Choose a review posture per `references/review-modes.md`. Assess differentiation, user value, generic or mis-scoped elements, and shippability — ground each in evidence from the spec. Read `references/product-checklist.md` for structured checks and `references/cognitive-patterns.md` for thinking patterns that surface blind spots.
 
 ### Render Verdict
 
@@ -60,46 +70,20 @@ Add a `## Review: Product` section to `SPEC.md` using the exact template in `ref
 
 ### Update State
 
-Run `node .agent/.automaton/scripts/sync-status.mjs` from the project root.
-Update `.agent/.automaton/state/current.json`:
-- `product_review` → `<verdict>`
+Run `node .agent/.automaton/scripts/sync-status.mjs --product-review "<verdict>"` from the project root.
 
 ### Recommend
 
-State the next skill based on the verdict.
+On a non-blocking verdict (`approved` or `approved_with_risks`), continue inline into `auto-plan`. On `needs_clarification` or `descoped`, stop and recommend the mapped skill.
 
 ## Output
 
 - `SPEC.md` with appended `## Review: Product` section
-- `.agent/.automaton/state/current.json` updated with `product_review`; `stage` is unchanged by this skill
-- Diagnostic handling: `error`-level diagnostics block the review; `warning`-level diagnostics surface to the next stage
-- Recommended next skill, mapped from verdict: `approved` or `approved_with_risks` → `auto-plan`; `needs_clarification` → `auto-frame` or `auto-office-hours`; `descoped` → `auto-office-hours` or stop. The user or host invokes the next skill; auto-ceo-review does not chain.
+- `.agent/.automaton/state/current.json` updated through `sync-status.mjs` with `product_review`; `stage` is unchanged by this skill
+- Next handoff, mapped from verdict: `approved` or `approved_with_risks` → continue inline into `auto-plan` (planning produces a markdown artifact, not code changes; no re-authorization needed); `needs_clarification` → stop, recommend `auto-frame` or `auto-office-hours`; `descoped` → stop, recommend `auto-office-hours` or halt.
 
 ## Rules
 
 - Be decisive, not theatrical. A sharp verdict is better than a long analysis.
 - Do not turn the review into implementation design. Stay in product bet territory.
 - Verdict vocabulary is strict. Use only the four approved values.
-- If the spec is missing or unreadable, verdict is `needs_clarification`. Do not guess.
-
-## Deep
-
-### Review Template
-
-Read `references/review-template.md` for the exact markdown format. (~21 lines: 5-field format covering verdict/strength/concern/action/de-scoped, with rules on sentence limits and no extra commentary.)
-
-### Product Bet Framing
-
-Read `references/bet-framing.md` for 10x check, platonic ideal, dream state mapping. (~70 lines: crisp vs. vague bet examples, reframing structure, 10x check, platonic ideal exercise, dream state mapping diagram, temporal interrogation by implementation hour, expansion framing FLAT vs. EXPANSIVE pattern.)
-
-### Review Modes
-
-Read `references/review-modes.md` for four scope postures and mode selection defaults. (~48 lines: SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, SCOPE REDUCTION, each with ceremony/protocol; mode selection table by context.)
-
-### Product Checklist
-
-Read `references/product-checklist.md` for premise challenge, differentiation, scope calibration. (~44 lines: 7 check categories covering premise challenge, differentiation scan, scope calibration, leverage assessment, user sovereignty, anti-goal filter, temporal check.)
-
-### Cognitive Patterns
-
-Read `references/cognitive-patterns.md` for 18 thinking instincts. (~53 lines: 18 patterns from classification instinct to design-for-trust; application map linking patterns to review tasks.)

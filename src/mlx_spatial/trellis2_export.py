@@ -1204,8 +1204,14 @@ def trellis2_texture_png_payload(image: np.ndarray) -> bytes:
     return texture_png_payload(image)
 
 
-def trellis2_textured_glb_payload(baked_texture: Trellis2TextureBakeResult) -> bytes:
-    """Build a self-contained GLB 2.0 payload from a baked TRELLIS.2 texture."""
+def trellis2_textured_glb_payload(
+    baked_texture: Trellis2TextureBakeResult,
+    *,
+    generator: str = "mlx-spatial TRELLIS.2",
+    mesh_name: str = "TRELLIS2_TexturedMesh",
+    material_name: str = "TRELLIS2_PBR",
+) -> bytes:
+    """Build a self-contained GLB 2.0 payload from a baked texture."""
 
     vertices = np.asarray(baked_texture.vertices, dtype=np.float32)
     faces = np.asarray(baked_texture.faces, dtype=np.int64)
@@ -1269,13 +1275,13 @@ def trellis2_textured_glb_payload(baked_texture: Trellis2TextureBakeResult) -> b
     pad_glb_buffer(bin_blob, pad_byte=0)
 
     document = {
-        "asset": {"version": "2.0", "generator": "mlx-spatial TRELLIS.2"},
+        "asset": {"version": "2.0", "generator": str(generator)},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
-        "nodes": [{"mesh": 0, "name": "TRELLIS2_TexturedMesh"}],
+        "nodes": [{"mesh": 0, "name": str(mesh_name)}],
         "meshes": [
             {
-                "name": "TRELLIS2_TexturedMesh",
+                "name": str(mesh_name),
                 "primitives": [
                     {
                         "attributes": {"POSITION": 0, "TEXCOORD_0": 1},
@@ -1287,7 +1293,7 @@ def trellis2_textured_glb_payload(baked_texture: Trellis2TextureBakeResult) -> b
         ],
         "materials": [
             {
-                "name": "TRELLIS2_PBR",
+                "name": str(material_name),
                 "doubleSided": True,
                 "alphaMode": "OPAQUE",
                 "pbrMetallicRoughness": {

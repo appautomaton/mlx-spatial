@@ -343,7 +343,7 @@ def assess_dinov3_mlx_conditioning(
     if config.fake_conditioning:
         batch = int(image_tensor.shape[0]) if image_tensor is not None and image_tensor.ndim == 4 else 1
         tokens_per_side = config.image_size // config.patch_size
-        token_count = tokens_per_side * tokens_per_side + config.num_register_tokens
+        token_count = 1 + tokens_per_side * tokens_per_side + config.num_register_tokens
         return DinoV3ConditioningResult(
             shape=(batch, token_count, config.expected_feature_width),
             dtype="float32",

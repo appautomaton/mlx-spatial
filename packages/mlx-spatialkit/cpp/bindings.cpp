@@ -1,0 +1,197 @@
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+
+#include "flexi_dual_grid.hpp"
+#include "glb_writer.hpp"
+#include "metal_probe.hpp"
+#include "mesh_processing.hpp"
+#include "pixal3d_contracts.hpp"
+#include "remesh.hpp"
+#include "texture_bake.hpp"
+#include "uv_metrics.hpp"
+#include "uv_unwrap.hpp"
+
+namespace nb = nanobind;
+
+NB_MODULE(_native, module) {
+  module.doc() = "Native C++/Metal bindings for mlx-spatialkit";
+
+  module.def("metal_device_available", &mlx_spatialkit::metal_device_available,
+             "Return whether the default Metal device is available.");
+
+  module.def("backend_info", []() {
+    nb::dict info;
+    info["native"] = true;
+    info["metal_available"] = mlx_spatialkit::metal_device_available();
+    info["metal_device"] = mlx_spatialkit::metal_device_name();
+    return info;
+  }, "Return native backend build and Metal availability information.");
+
+  module.def("validate_pixal3d_shape_fields",
+             &mlx_spatialkit::validate_pixal3d_shape_fields,
+             "Validate Pixal3D decoded shape coordinate and field arrays.");
+
+  module.def("validate_pixal3d_texture_attributes",
+             &mlx_spatialkit::validate_pixal3d_texture_attributes,
+             "Validate Pixal3D decoded texture coordinate and attribute arrays.");
+
+  module.def("extract_flexi_dual_grid",
+             &mlx_spatialkit::extract_flexi_dual_grid,
+             nb::arg("coordinates"),
+             nb::arg("fields"),
+             nb::arg("grid_size"),
+             "Extract a triangle mesh from Pixal3D FlexiDualGrid fields.");
+
+  module.def("mesh_metrics",
+             &mlx_spatialkit::mesh_metrics,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             "Return native mesh metrics and export-blocking reasons.");
+
+  module.def("clean_mesh",
+             &mlx_spatialkit::clean_mesh,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("min_component_faces") = 32,
+             "Clean degenerate, duplicate, unreferenced, and tiny-component mesh data.");
+
+  module.def("simplify_mesh",
+             &mlx_spatialkit::simplify_mesh,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("target_faces"),
+             nb::arg("min_component_faces") = 32,
+             nb::arg("backend") = "spatial-cluster",
+             nb::arg("small_boundary_loop_fill_max_edges") = 8,
+             nb::arg("small_boundary_loop_fill_max_perimeter") = 0.03,
+             "Run the native-owned first-pass mesh simplification interface.");
+
+  module.def("remesh_narrow_band",
+             &mlx_spatialkit::remesh_narrow_band,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("resolution"),
+             nb::arg("band") = 1.0,
+             nb::arg("project_back") = 0.0,
+             nb::arg("repair_nonmanifold") = false,
+             "Narrow-band dual-contour remesh into a watertight triangle mesh.");
+
+  module.def("make_face_atlas_uvs",
+             &mlx_spatialkit::make_face_atlas_uvs,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("tile_padding") = 0.08,
+             "Create a deterministic native face-atlas UV mesh.");
+
+  module.def("make_native_chart_uvs",
+             &mlx_spatialkit::make_native_chart_uvs,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("chart_angle_degrees") = 45.0,
+             nb::arg("tile_padding") = 0.04,
+             "Create a deterministic native chart UV mesh.");
+
+  module.def("compute_uv_charts",
+             &mlx_spatialkit::compute_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             // Defaults mirror CuMesh compute_charts (cumesh.py).
+             nb::arg("threshold_cone_half_angle_rad") = 1.5707963267948966,
+             nb::arg("refine_iterations") = 100,
+             nb::arg("global_iterations") = 3,
+             nb::arg("smooth_strength") = 1.0,
+             nb::arg("area_penalty_weight") = 0.1,
+             nb::arg("perimeter_area_ratio_weight") = 0.0001,
+             "Cluster faces into UV charts via cone-bounded cost-ordered agglomeration.");
+
+  module.def("grow_uv_charts",
+             &mlx_spatialkit::grow_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("cluster_ids") = nb::none(),
+             // Defaults mirror xatlas ChartOptions (the reference stage-B
+             // engine CuMesh.uv_unwrap runs per stage-A cluster).
+             nb::arg("max_cost") = 2.0,
+             nb::arg("normal_deviation_weight") = 2.0,
+             nb::arg("roundness_weight") = 0.01,
+             nb::arg("straightness_weight") = 6.0,
+             nb::arg("normal_seam_weight") = 4.0,
+             nb::arg("texture_seam_weight") = 0.5,
+             nb::arg("max_iterations") = 1,
+             nb::arg("projection_linf_threshold") = 1.25,
+             nb::arg("max_chart_area") = 0.0,
+             nb::arg("max_boundary_length") = 0.0,
+             "Grow xatlas-equivalent UV charts within stage-A clusters, with "
+             "orthographic-projection baseline UVs and per-chart acceptance.");
+
+  module.def("parameterize_uv_charts",
+             &mlx_spatialkit::parameterize_uv_charts,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("chart_ids"),
+             nb::arg("projection_linf_threshold") = 1.25,
+             nb::arg("max_split_depth") = 3,
+             nb::arg("lscm_iteration_factor") = 5,
+             "Final per-chart UVs: projection where acceptable, LSCM otherwise, "
+             "with bounded split/shatter repair (zero flips, zero intra-chart "
+             "overlaps).");
+
+  module.def("pack_uv_charts",
+             &mlx_spatialkit::pack_uv_charts,
+             nb::arg("faces"),
+             nb::arg("chart_ids"),
+             nb::arg("corner_uvs"),
+             // Reference xatlas PackOptions defaults (padding 0 + bilinear
+             // gutter, rotate to axis, no brute force).
+             nb::arg("resolution") = 1024,
+             nb::arg("padding") = 0.0,
+             nb::arg("bilinear") = true,
+             nb::arg("rotate_charts_to_axis") = true,
+             "Shelf-pack parameterized charts into a [0,1] atlas with texel "
+             "gaps (xatlas PackOptions semantics).");
+
+  module.def("uv_quality_metrics",
+             &mlx_spatialkit::uv_quality_metrics,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("chart_ids") = nb::none(),
+             "Return report-only UV quality metrics: overlaps, flips, Sander stretch, utilization.");
+
+  module.def("textured_glb_payload",
+             &mlx_spatialkit::textured_glb_payload,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("base_color_rgba"),
+             nb::arg("metallic_roughness"),
+             nb::arg("generator") = "mlx-spatialkit",
+             nb::arg("mesh_name") = "TexturedMesh",
+             nb::arg("material_name") = "PBRMaterial",
+             "Build a self-contained GLB 2.0 payload with embedded PBR textures.");
+
+  module.def("bake_pbr_texture_metal",
+             &mlx_spatialkit::bake_pbr_texture_metal,
+             nb::arg("vertices"),
+             nb::arg("faces"),
+             nb::arg("uvs"),
+             nb::arg("texture_coordinates"),
+             nb::arg("texture_attributes"),
+             nb::arg("texture_size"),
+             nb::arg("origin"),
+             nb::arg("voxel_size"),
+             nb::arg("decode_resolution"),
+             nb::arg("atlas_cols") = 0,
+             nb::arg("atlas_rows") = 0,
+             nb::arg("atlas_faces_per_tile") = 0,
+             nb::arg("tile_padding") = 0.08,
+             nb::arg("max_texture_pixels") = 1048576,
+             nb::arg("source_vertices") = nb::none(),
+             nb::arg("source_faces") = nb::none(),
+             nb::arg("source_projection_fallback_mode") = "knn",
+             nb::arg("source_projection_fallback_neighbors") = 8,
+             nb::arg("source_projection_fallback_max_distance_voxels") = 12.0,
+             nb::arg("render_padding") = true,
+             nb::arg("surface_fill") = true,
+             "Bake PBR texture buffers with the Metal backend.");
+}

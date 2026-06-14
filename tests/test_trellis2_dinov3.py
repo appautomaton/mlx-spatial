@@ -177,7 +177,7 @@ def test_assess_dinov3_mlx_conditioning_returns_fake_fixture_output(tmp_path):
     )
 
     assert result == DinoV3ConditioningResult(
-        shape=(1, 4, 1024),
+        shape=(1, 5, 1024),
         dtype="float32",
         detail=f"fake DINOv3 conditioning from {tmp_path} using embeddings.patch_embeddings.weight",
         blocker=None,

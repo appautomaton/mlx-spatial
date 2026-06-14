@@ -1035,7 +1035,7 @@ def test_attempt_forward_trace_with_fake_dinov3_assets_reaches_sparse_boundary(t
     assert report.outputs[0] == Trellis2StageOutput(
         stage="image-conditioning",
         name="cond",
-        shape=(1, 4, 1024),
+        shape=(1, 5, 1024),
         dtype="float32",
         detail=f"fake DINOv3 conditioning from {dino_root} using embeddings.patch_embeddings.weight",
     )

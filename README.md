@@ -1,5 +1,10 @@
 # mlx-spatial
 
+[![PyPI](https://img.shields.io/pypi/v/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
+[![Python](https://img.shields.io/pypi/pyversions/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml/badge.svg)](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml)
+
 MLX-native 3D and spatial inference tooling for Apple Silicon.
 
 `mlx-spatial` is a practical runtime package for running modern 3D
@@ -11,7 +16,7 @@ This is not a training framework, and it does not bundle model weights.
 
 ## What Works Now
 
-The package covers five model families:
+The package covers six model families:
 
 | Pipeline | Input | Output | Weight setup |
 | --- | --- | --- | --- |
@@ -20,6 +25,7 @@ The package covers five model families:
 | HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
 | LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
 | MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
+| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | Pixal3D/DINOv3 safetensors plus converted NAF and MoGe |
 
 Choose by job:
 
@@ -33,6 +39,8 @@ Choose by job:
   Gaussian splat PLY output instead of a mesh.
 - Use MapAnything when you have related scene views and want image-only depth,
   confidence, masks, camera parameters, and dense world points.
+- Use Pixal3D when you want to inspect TencentARC Pixal3D's projection-conditioned
+  model path as it is being wired into MLX.
 
 Honest status:
 
@@ -48,6 +56,14 @@ Honest status:
 - MapAnything runs checkpoint-backed scene generation with the public
   `facebook/map-anything` weights. The supported artifact is a scene `.npz`
   tensor bundle, not a mesh or Gaussian splat export.
+- Pixal3D is partially wired: assets, MoGe-derived auto-camera via the existing
+  converted MLX MoGe runtime, manual FOV override, projection conditioning,
+  projection attention, sparse FlowEuler probing, sparse decoder coordinates,
+  MLX NAF-projected features from converted local NAF weights, 512/1024 shape
+  SLat probing, shape decoder HR coordinate upsample, texture SLat probing,
+  shared shape/texture decoder execution, cascade planning, trace output,
+  sparse/shape/texture/decode NPZ artifacts, and textured GLB export after
+  decoded tensors are implemented.
 
 ## Install
 
@@ -68,14 +84,14 @@ pip install mlx-spatial
 
 Requirements:
 
-- Python 3.11+
+- Python 3.13
 - Apple Silicon recommended
 - MLX installed through the package dependencies
 - model weights downloaded separately under `weights/`
 
 ## Command Line Tools
 
-The package installs five CLIs:
+The package installs six CLIs:
 
 ```bash
 uv run mlx-spatial-sam3d --help
@@ -83,6 +99,7 @@ uv run mlx-spatial-trellis2 --help
 uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
 uv run mlx-spatial-mapanything --help
+uv run mlx-spatial-pixal3d --help
 ```
 
 The repository also includes readable script wrappers under `scripts/`. These
@@ -101,6 +118,8 @@ weights/rmbg2/
 weights/dinov3-vitl16-pretrain-lvd1689m/
 weights/hy-world-2/
 weights/map-anything/
+weights/pixal3d/
+weights/naf/
 ```
 
 SAM3D uses the converted `appautomaton/sam-3d-objects-mlx` runtime bundle:
@@ -119,8 +138,8 @@ uv run hf download appautomaton/lito-research-mlx \
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 
-TRELLIS.2, HY-WorldMirror, and MapAnything do not need SAM3D-style conversion.
-They load the downloaded safetensors and JSON configs directly:
+TRELLIS.2, HY-WorldMirror, MapAnything, and Pixal3D do not need SAM3D-style
+conversion. They load the downloaded safetensors and JSON configs directly:
 
 ```bash
 uv run mlx-spatial-trellis2 download-command --root weights/trellis2
@@ -128,6 +147,7 @@ uv run mlx-spatial-trellis2 rmbg-download-command --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-download-command weights/dinov3-vitl16-pretrain-lvd1689m
 uv run mlx-spatial-hyworld2 download-command weights/hy-world-2
 uv run mlx-spatial-mapanything download-command weights/map-anything
+uv run mlx-spatial-pixal3d download-command weights/pixal3d
 ```
 
 Run the printed `hf download ...` commands, then validate:
@@ -138,6 +158,7 @@ uv run mlx-spatial-trellis2 rmbg-validate --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-validate weights/dinov3-vitl16-pretrain-lvd1689m
 uv run mlx-spatial-hyworld2 validate weights/hy-world-2
 uv run mlx-spatial-mapanything validate weights/map-anything
+uv run mlx-spatial-pixal3d validate weights/pixal3d
 ```
 
 Respect the licenses and access terms of the upstream model providers. The
@@ -265,6 +286,37 @@ semantically: images, depth, confidence, masks, intrinsics, camera poses, and
 world points. The MLX file uses clean top-level keys and also records
 `extrinsics`.
 
+### Pixal3D Implementation Track
+
+Use the vendored upstream sample image. By default, Pixal3D derives camera
+parameters from the converted MLX MoGe root; pass `--manual-fov 0.2` only when
+you want the explicit override.
+
+```bash
+python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
+  --root weights/pixal3d \
+  --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
+  --moge-root weights/sam-3d-objects-mlx/moge \
+  --naf-root weights/naf \
+  --output-dir outputs/pixal3d/sample \
+  --pipeline-type 1024_cascade
+```
+
+Current expected output starts with `trace.json` plus `sparse_projection.npz`.
+When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
+also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. With
+converted NAF weights at `weights/naf/naf_release.safetensors`, the runtime
+builds coordinate-sampled MLX NAF features instead of materializing full
+high-resolution feature maps, then can write `shape_slat_lr.npz`,
+`shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and `texture_slat.npz`
+as downstream stage assets permit. Compatible decoder assets then write
+`shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, followed by shared
+mesh extraction and texture baking to write `model.glb`. `max_num_tokens`
+remains the HR coordinate selection guard; `--shape-upsample-token-limit`
+separately bounds the shape-decoder upsample compute stage, and
+`--shape-decoder-token-limit` / `--texture-decoder-token-limit` bound final
+decoder compute.
+
 ## Repository Layout
 
 ```text
@@ -287,6 +339,7 @@ vendors/             ignored upstream checkouts
 - [docs/hyworld2.md](docs/hyworld2.md): HY-WorldMirror asset layout, scene inputs, memory profiles, and outputs.
 - [docs/lito.md](docs/lito.md): LiTo setup, research-weight bundle, image-to-3DGS CLI, memory profiles, and PLY viewing notes.
 - [docs/mapanything.md](docs/mapanything.md): MapAnything asset layout, scene `.npz` schema, parity notes, and viewer/export boundary.
+- [docs/pixal3d.md](docs/pixal3d.md): Pixal3D asset layout, current MLX boundary, recommended settings, and blockers.
 - [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
 - [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
 - [docs/model-publishing.md](docs/model-publishing.md): model bundles and model-card rules.

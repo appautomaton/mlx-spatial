@@ -73,6 +73,8 @@ class SLatFlowConfig:
     qk_rms_norm: bool
     qk_rms_norm_cross: bool
     dtype: str
+    image_attn_mode: str = "cross"
+    proj_in_channels: int | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,8 @@ def read_slat_flow_config(root: str | Path, config_path: str) -> SLatFlowConfig:
             qk_rms_norm=bool(args["qk_rms_norm"]),
             qk_rms_norm_cross=bool(args["qk_rms_norm_cross"]),
             dtype=str(args["dtype"]),
+            image_attn_mode=str(args.get("image_attn_mode", "cross")),
+            proj_in_channels=int(args["proj_in_channels"]) if args.get("proj_in_channels") is not None else None,
         )
     except FileNotFoundError:
         raise
@@ -209,7 +213,7 @@ def probe_shape_slat_forward_boundary(
     config: SLatFlowConfig,
     sparse_coordinates: mx.array,
     *,
-    conditioning: mx.array | None = None,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array] | None = None,
     steps: int = 1,
     rescale_t: float = 1.0,
     guidance_strength: float = 1.0,
@@ -236,7 +240,7 @@ def probe_shape_slat_forward_boundary(
     cond = conditioning
     if cond is None:
         cond = mx.zeros((1, 1, config.cond_channels), dtype=input_weight.dtype)
-    _validate_slat_conditioning_shape(cond.shape, config)
+    _validate_slat_conditioning(cond, config, token_count=coordinates_shape[0])
     projected, block0, stack, output = _slat_model_forward(
         features,
         sparse_coordinates,
@@ -308,7 +312,7 @@ def probe_texture_slat_forward_boundary(
     shape_slat_coordinates: mx.array,
     shape_slat_features: mx.array,
     *,
-    conditioning: mx.array | None = None,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array] | None = None,
     steps: int = 1,
     rescale_t: float = 1.0,
     guidance_strength: float = 1.0,
@@ -339,7 +343,7 @@ def probe_texture_slat_forward_boundary(
     cond = conditioning
     if cond is None:
         cond = mx.zeros((1, 1, config.cond_channels), dtype=input_weight.dtype)
-    _validate_slat_conditioning_shape(cond.shape, config)
+    _validate_slat_conditioning(cond, config, token_count=coordinates_shape[0])
     projected, block0, stack, output = _slat_model_forward(
         noise_features,
         shape_slat_coordinates,
@@ -410,7 +414,7 @@ def _slat_model_forward(
     features: mx.array,
     coordinates: mx.array,
     t: float,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -454,7 +458,7 @@ def _slat_model_forward(
 def _flow_euler_sample_slat(
     sample: mx.array,
     coordinates: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -467,7 +471,7 @@ def _flow_euler_sample_slat(
     concat_features: mx.array | None = None,
 ) -> mx.array:
     schedule = flow_euler_schedule(steps=steps, rescale_t=rescale_t, guidance_interval=guidance_interval)
-    neg_conditioning = mx.zeros_like(conditioning)
+    neg_conditioning = _slat_conditioning_zeros_like(conditioning)
     for t, t_prev in schedule.pairs:
         pred_v = _flow_euler_guided_slat_prediction(
             sample,
@@ -491,8 +495,8 @@ def _flow_euler_guided_slat_prediction(
     sample: mx.array,
     coordinates: mx.array,
     t: float,
-    conditioning: mx.array,
-    neg_conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    neg_conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -525,7 +529,7 @@ def _flow_euler_slat_model_prediction(
     sample: mx.array,
     coordinates: mx.array,
     t: float,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -554,7 +558,7 @@ def _flow_euler_slat_xstart_to_pred(sample: mx.array, t: float, x0: mx.array, *,
 def _slat_block_forward(
     hidden_states: mx.array,
     coordinates: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
@@ -562,7 +566,7 @@ def _slat_block_forward(
     block_index: int,
 ) -> mx.array:
     hidden_states = hidden_states.astype(mx.float32)
-    conditioning = conditioning.astype(mx.float32)
+    conditioning = _slat_cast_conditioning(conditioning, mx.float32)
     prefix = f"blocks.{block_index}"
     shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = _split_modulation(
         tensors[f"{prefix}.modulation"].astype(mx.float32)[None, :] + mod
@@ -650,16 +654,74 @@ def _slat_self_attention(
 
 def _slat_cross_attention(
     hidden_states: mx.array,
-    conditioning: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
     config: SLatFlowConfig,
     tensors: dict[str, mx.array],
     *,
     block_index: int,
 ) -> mx.array:
+    if config.image_attn_mode == "proj":
+        return _slat_project_attention(hidden_states, conditioning, config, tensors, block_index=block_index)
+    if config.image_attn_mode != "cross":
+        raise ValueError(f"unsupported SLat image_attn_mode: {config.image_attn_mode!r}")
+
     token_count = int(hidden_states.shape[0])
     cond_count = int(conditioning.shape[1])
     head_dim = _slat_head_dim(config)
     prefix = f"blocks.{block_index}.cross_attn"
+    return _slat_cross_attention_with_prefix(
+        hidden_states,
+        conditioning,
+        config,
+        tensors,
+        prefix=prefix,
+        cond_count=cond_count,
+        head_dim=head_dim,
+    )
+
+
+def _slat_project_attention(
+    hidden_states: mx.array,
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    config: SLatFlowConfig,
+    tensors: dict[str, mx.array],
+    *,
+    block_index: int,
+) -> mx.array:
+    global_context, proj_context = _split_slat_projection_conditioning(conditioning)
+    token_count = int(hidden_states.shape[0])
+    proj_context = _normalize_slat_projection_context(proj_context, token_count)
+    _validate_slat_projection_context_shape(global_context.shape, proj_context.shape, config, token_count=token_count)
+    head_dim = _slat_head_dim(config)
+    prefix = f"blocks.{block_index}.cross_attn"
+    global_out = _slat_cross_attention_with_prefix(
+        hidden_states,
+        global_context,
+        config,
+        tensors,
+        prefix=f"{prefix}.cross_attn_block",
+        cond_count=int(global_context.shape[1]),
+        head_dim=head_dim,
+    )
+    proj_out = _linear(
+        proj_context,
+        tensors[f"{prefix}.proj_linear.weight"].astype(mx.float32),
+        tensors[f"{prefix}.proj_linear.bias"].astype(mx.float32),
+    )
+    return global_out + proj_out
+
+
+def _slat_cross_attention_with_prefix(
+    hidden_states: mx.array,
+    conditioning: mx.array,
+    config: SLatFlowConfig,
+    tensors: dict[str, mx.array],
+    *,
+    prefix: str,
+    cond_count: int,
+    head_dim: int,
+) -> mx.array:
+    token_count = int(hidden_states.shape[0])
     query = _linear(
         hidden_states,
         tensors[f"{prefix}.to_q.weight"].astype(mx.float32),
@@ -868,11 +930,11 @@ def _slat_stack_inspection_names(config: SLatFlowConfig) -> tuple[str, ...]:
         "out_layer.bias",
     ]
     for block_index in range(config.num_blocks):
-        names.extend(_slat_block_tensor_names(block_index))
+        names.extend(_slat_block_tensor_names(block_index, config))
     return tuple(names)
 
 
-def _slat_block_tensor_names(block_index: int) -> tuple[str, ...]:
+def _slat_block_tensor_names(block_index: int, config: SLatFlowConfig) -> tuple[str, ...]:
     prefix = f"blocks.{block_index}"
     return (
         f"{prefix}.modulation",
@@ -884,18 +946,30 @@ def _slat_block_tensor_names(block_index: int) -> tuple[str, ...]:
         f"{prefix}.self_attn.k_rms_norm.gamma",
         f"{prefix}.self_attn.to_out.weight",
         f"{prefix}.self_attn.to_out.bias",
-        f"{prefix}.cross_attn.to_q.weight",
-        f"{prefix}.cross_attn.to_q.bias",
-        f"{prefix}.cross_attn.to_kv.weight",
-        f"{prefix}.cross_attn.to_kv.bias",
-        f"{prefix}.cross_attn.q_rms_norm.gamma",
-        f"{prefix}.cross_attn.k_rms_norm.gamma",
-        f"{prefix}.cross_attn.to_out.weight",
-        f"{prefix}.cross_attn.to_out.bias",
+        *_slat_cross_attention_tensor_names(block_index, config),
         f"{prefix}.mlp.mlp.0.weight",
         f"{prefix}.mlp.mlp.0.bias",
         f"{prefix}.mlp.mlp.2.weight",
         f"{prefix}.mlp.mlp.2.bias",
+    )
+
+
+def _slat_cross_attention_tensor_names(block_index: int, config: SLatFlowConfig) -> tuple[str, ...]:
+    prefix = f"blocks.{block_index}.cross_attn"
+    cross_prefix = _slat_cross_attention_prefix(block_index, config)
+    extra: tuple[str, ...] = ()
+    if config.image_attn_mode == "proj":
+        extra = (f"{prefix}.proj_linear.weight", f"{prefix}.proj_linear.bias")
+    return (
+        f"{cross_prefix}.to_q.weight",
+        f"{cross_prefix}.to_q.bias",
+        f"{cross_prefix}.to_kv.weight",
+        f"{cross_prefix}.to_kv.bias",
+        f"{cross_prefix}.q_rms_norm.gamma",
+        f"{cross_prefix}.k_rms_norm.gamma",
+        f"{cross_prefix}.to_out.weight",
+        f"{cross_prefix}.to_out.bias",
+        *extra,
     )
 
 
@@ -932,28 +1006,56 @@ def _validate_slat_stack_infos(infos: tuple[CheckpointTensorInfo, ...], config: 
         _validate_checkpoint_info_shape(infos, f"{prefix}.self_attn.to_out.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_q.weight",
+            f"{_slat_cross_attention_prefix(block_index, config)}.to_q.weight",
             (config.model_channels, config.model_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_q.bias", (config.model_channels,))
+        _validate_checkpoint_info_shape(infos, f"{_slat_cross_attention_prefix(block_index, config)}.to_q.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_kv.weight",
+            f"{_slat_cross_attention_prefix(block_index, config)}.to_kv.weight",
             (config.model_channels * 2, config.cond_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_kv.bias", (config.model_channels * 2,))
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.q_rms_norm.gamma", (config.num_heads, head_dim))
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.k_rms_norm.gamma", (config.num_heads, head_dim))
         _validate_checkpoint_info_shape(
             infos,
-            f"{prefix}.cross_attn.to_out.weight",
+            f"{_slat_cross_attention_prefix(block_index, config)}.to_kv.bias",
+            (config.model_channels * 2,),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_slat_cross_attention_prefix(block_index, config)}.q_rms_norm.gamma",
+            (config.num_heads, head_dim),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_slat_cross_attention_prefix(block_index, config)}.k_rms_norm.gamma",
+            (config.num_heads, head_dim),
+        )
+        _validate_checkpoint_info_shape(
+            infos,
+            f"{_slat_cross_attention_prefix(block_index, config)}.to_out.weight",
             (config.model_channels, config.model_channels),
         )
-        _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.to_out.bias", (config.model_channels,))
+        _validate_checkpoint_info_shape(infos, f"{_slat_cross_attention_prefix(block_index, config)}.to_out.bias", (config.model_channels,))
+        if config.image_attn_mode == "proj":
+            _validate_checkpoint_info_shape(
+                infos,
+                f"{prefix}.cross_attn.proj_linear.weight",
+                (config.model_channels, config.proj_in_channels or config.cond_channels),
+            )
+            _validate_checkpoint_info_shape(infos, f"{prefix}.cross_attn.proj_linear.bias", (config.model_channels,))
         _validate_checkpoint_info_shape(infos, f"{prefix}.mlp.mlp.0.weight", (intermediate_channels, config.model_channels))
         _validate_checkpoint_info_shape(infos, f"{prefix}.mlp.mlp.0.bias", (intermediate_channels,))
         _validate_checkpoint_info_shape(infos, f"{prefix}.mlp.mlp.2.weight", (config.model_channels, intermediate_channels))
         _validate_checkpoint_info_shape(infos, f"{prefix}.mlp.mlp.2.bias", (config.model_channels,))
+
+
+def _slat_cross_attention_prefix(block_index: int, config: SLatFlowConfig) -> str:
+    prefix = f"blocks.{block_index}.cross_attn"
+    if config.image_attn_mode == "cross":
+        return prefix
+    if config.image_attn_mode == "proj":
+        return f"{prefix}.cross_attn_block"
+    raise ValueError(f"unsupported SLat image_attn_mode: {config.image_attn_mode!r}")
 
 
 def _slat_head_dim(config: SLatFlowConfig) -> int:
@@ -980,6 +1082,78 @@ def _validate_slat_conditioning_shape(shape: tuple[int, ...], config: SLatFlowCo
         raise ValueError("SLat conditioning must contain at least one token")
     if actual[2] != config.cond_channels:
         raise ValueError(f"SLat conditioning width mismatch: expected {config.cond_channels}, got {actual[2]}")
+
+
+def _validate_slat_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    config: SLatFlowConfig,
+    *,
+    token_count: int,
+) -> None:
+    if config.image_attn_mode == "cross":
+        _validate_slat_conditioning_shape(conditioning.shape, config)
+        return
+    if config.image_attn_mode == "proj":
+        global_context, proj_context = _split_slat_projection_conditioning(conditioning)
+        proj_context = _normalize_slat_projection_context(proj_context, token_count)
+        _validate_slat_projection_context_shape(global_context.shape, proj_context.shape, config, token_count=token_count)
+        return
+    raise ValueError(f"unsupported SLat image_attn_mode: {config.image_attn_mode!r}")
+
+
+def _split_slat_projection_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+) -> tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return conditioning["global"], conditioning["proj"]
+    if isinstance(conditioning, tuple) and len(conditioning) == 2:
+        return conditioning
+    raise ValueError("SLat projection conditioning must be a dict with 'global'/'proj' or a (global, proj) tuple")
+
+
+def _normalize_slat_projection_context(proj_context: mx.array, token_count: int) -> mx.array:
+    if proj_context.ndim == 3 and int(proj_context.shape[0]) == 1:
+        proj_context = proj_context[0]
+    actual = tuple(int(dim) for dim in proj_context.shape)
+    if actual[0] != token_count:
+        raise ValueError(f"SLat projection context token mismatch: expected {token_count}, got {actual[0]}")
+    return proj_context
+
+
+def _validate_slat_projection_context_shape(
+    global_shape: tuple[int, ...],
+    proj_shape: tuple[int, ...],
+    config: SLatFlowConfig,
+    *,
+    token_count: int,
+) -> None:
+    _validate_slat_conditioning_shape(global_shape, config)
+    expected_proj_channels = config.proj_in_channels or config.cond_channels
+    actual = tuple(int(dim) for dim in proj_shape)
+    expected = (token_count, expected_proj_channels)
+    if actual != expected:
+        raise ValueError(f"SLat projection context shape mismatch: expected {expected}, got {actual}")
+
+
+def _slat_cast_conditioning(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+    dtype: mx.Dtype,
+) -> mx.array | dict[str, mx.array] | tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return {key: value.astype(dtype) for key, value in conditioning.items()}
+    if isinstance(conditioning, tuple):
+        return tuple(value.astype(dtype) for value in conditioning)
+    return conditioning.astype(dtype)
+
+
+def _slat_conditioning_zeros_like(
+    conditioning: mx.array | dict[str, mx.array] | tuple[mx.array, mx.array],
+) -> mx.array | dict[str, mx.array] | tuple[mx.array, mx.array]:
+    if isinstance(conditioning, dict):
+        return {key: mx.zeros_like(value) for key, value in conditioning.items()}
+    if isinstance(conditioning, tuple):
+        return tuple(mx.zeros_like(value) for value in conditioning)
+    return mx.zeros_like(conditioning)
 
 
 def _validate_sparse_coordinates(shape: tuple[int, ...]) -> None:

@@ -15,3 +15,5 @@ outputs/
 vendors/
 
 .opencode/node_modules/
+
+.antigravitycli/

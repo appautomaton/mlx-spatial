@@ -54,6 +54,36 @@ TRELLIS2_ASSETS = ModelAssetManifest(
     ),
 )
 
+PIXAL3D_ASSETS = ModelAssetManifest(
+    name="Pixal3D",
+    root_hint="weights/pixal3d",
+    required_paths=(
+        "pipeline.json",
+        "ckpts/ss_flow_img_dit_1_3B_64_bf16.json",
+        "ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors",
+        "ckpts/ss_dec_conv3d_16l8_fp16.json",
+        "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+        "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.json",
+        "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.safetensors",
+        "ckpts/slat_flow_img2shape_dit_1_3B_1024_bf16.json",
+        "ckpts/slat_flow_img2shape_dit_1_3B_1024_bf16.safetensors",
+        "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json",
+        "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors",
+        "ckpts/shape_dec_next_dc_f16c32_fp16.json",
+        "ckpts/shape_dec_next_dc_f16c32_fp16.safetensors",
+        "ckpts/tex_dec_next_dc_f16c32_fp16.json",
+        "ckpts/tex_dec_next_dc_f16c32_fp16.safetensors",
+    ),
+)
+
+NAF_ASSETS = ModelAssetManifest(
+    name="NAF",
+    root_hint="weights/naf",
+    required_paths=(
+        "naf_release.safetensors",
+    ),
+)
+
 DINOv3_VITL16_ASSETS = ModelAssetManifest(
     name="DINOv3 ViT-L/16",
     root_hint="weights/dinov3-vitl16-pretrain-lvd1689m",

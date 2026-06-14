@@ -1,6 +1,7 @@
 {
-  "active_change": "2026-05-26-mlx-spatial-mapanything-release-readiness",
+  "active_change": "2026-06-11-mlx-spatialkit-xatlas-uv-unwrap",
   "stage": "verified",
-  "canonical_spec": ".agent/work/2026-05-26-mlx-spatial-mapanything-release-readiness/SPEC.md",
-  "canonical_plan": ".agent/work/2026-05-26-mlx-spatial-mapanything-release-readiness/PLAN.md"
+  "canonical_spec": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/SPEC.md",
+  "canonical_design": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-06-11-mlx-spatialkit-xatlas-uv-unwrap/PLAN.md"
 }

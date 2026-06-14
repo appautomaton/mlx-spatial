@@ -1,0 +1,60 @@
+[build-system]
+requires = [
+    "nanobind>=2.9",
+    "scikit-build-core>=0.11",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mlx-spatialkit"
+version = "0.0.1"
+description = "Native C++ and Metal spatial export primitives for mlx-spatial."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "AppAutomaton" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.scikit-build]
+minimum-version = "0.11"
+build-dir = "/tmp/mlx-spatialkit-build/{wheel_tag}"
+
+[tool.scikit-build.wheel]
+packages = ["src/mlx_spatialkit"]
+
+[tool.scikit-build.sdist]
+include = [
+    "/CMakeLists.txt",
+    "/README.md",
+    "/cpp/**",
+    "/metal/**",
+    "/src/mlx_spatialkit/*.py",
+    "/tests/*.py",
+    "/pyproject.toml",
+]
+exclude = [
+    "/.venv",
+    "/.pytest_cache",
+    "/dist",
+    "/inputs",
+    "/outputs",
+    "/vendors",
+    "/weights",
+    "/**/__pycache__",
+    "/**/*.pyc",
+    "/**/*.pyo",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not heavy'"
+markers = [
+    "heavy: opt-in tests that use real model outputs or large native workloads",
+]
