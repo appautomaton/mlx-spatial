@@ -1260,7 +1260,8 @@ nb::dict bake_pbr_texture_metal(
     int64_t source_projection_fallback_neighbors,
     double source_projection_fallback_max_distance_voxels,
     bool render_padding,
-    bool surface_fill) {
+    bool surface_fill,
+    bool expose_raw_postprocess_inputs) {
   if (texture_size <= 0) {
     throw nb::value_error("texture_size must be positive");
   }
@@ -1508,6 +1509,22 @@ nb::dict bake_pbr_texture_metal(
         exact_missing_before_fill += 1;
       }
     }
+
+    // Slice-2 raw contract freeze (Codex P0-1): snapshot the channels and
+    // coverage status produced by sampling + reference trilinear + KNN fallback,
+    // BEFORE any dilation / surface-fill / gutter / render-padding mutates them.
+    // This is the exact pre-postprocess input the reference (cv2 INPAINT_TELEA)
+    // and our native Telea must both inpaint against, so oracle parity is
+    // anchored to the true contract rather than a post-mutation mask.
+    std::vector<uint8_t> raw_base_color;
+    std::vector<uint8_t> raw_metallic_roughness;
+    std::vector<uint8_t> raw_coverage;
+    if (expose_raw_postprocess_inputs) {
+      raw_base_color = base_color;
+      raw_metallic_roughness = metallic_roughness;
+      raw_coverage = coverage;
+    }
+
     int64_t dilation_passes = 0;
     const int64_t dilation_max_passes = resolve_dilation_max_passes(texture_size, atlas_cols, atlas_rows);
     const int64_t dilation_filled = dilate_missing_surface_texels(
@@ -1694,6 +1711,11 @@ nb::dict bake_pbr_texture_metal(
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);
     result["metallic_roughness"] = mesh_common::make_uint8_array(std::move(metallic_roughness), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 3);
     result["coverage_mask"] = mesh_common::make_uint8_array(std::move(coverage), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size));
+    if (expose_raw_postprocess_inputs) {
+      result["raw_base_color_rgba"] = mesh_common::make_uint8_array(std::move(raw_base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);
+      result["raw_metallic_roughness"] = mesh_common::make_uint8_array(std::move(raw_metallic_roughness), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 3);
+      result["raw_coverage_status"] = mesh_common::make_uint8_array(std::move(raw_coverage), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size));
+    }
     result["stats"] = stats;
     return result;
   }

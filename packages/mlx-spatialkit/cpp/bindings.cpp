@@ -194,6 +194,7 @@ NB_MODULE(_native, module) {
              nb::arg("source_projection_fallback_max_distance_voxels") = 12.0,
              nb::arg("render_padding") = true,
              nb::arg("surface_fill") = true,
+             nb::arg("expose_raw_postprocess_inputs") = false,
              "Bake PBR texture buffers with the Metal backend.");
 
   module.def("telea_inpaint",

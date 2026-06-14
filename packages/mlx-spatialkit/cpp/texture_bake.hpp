@@ -27,6 +27,7 @@ nanobind::dict bake_pbr_texture_metal(
     int64_t source_projection_fallback_neighbors,
     double source_projection_fallback_max_distance_voxels,
     bool render_padding,
-    bool surface_fill);
+    bool surface_fill,
+    bool expose_raw_postprocess_inputs);
 
 }  // namespace mlx_spatialkit

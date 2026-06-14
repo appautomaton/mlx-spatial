@@ -39,6 +39,11 @@ class NativeTextureBakeResult:
     origin: tuple[float, float, float]
     voxel_size: float
     stats: dict[str, Any]
+    # Slice-2 raw contract freeze: pre-postprocess channels + coverage status,
+    # populated only when bake_pbr_texture(..., expose_raw_postprocess_inputs=True).
+    raw_base_color_rgba: np.ndarray | None = None
+    raw_metallic_roughness: np.ndarray | None = None
+    raw_coverage_status: np.ndarray | None = None
 
 
 def bake_pbr_texture(
@@ -59,8 +64,15 @@ def bake_pbr_texture(
     source_projection_fallback_max_distance_voxels: float = 12.0,
     surface_fill: bool = True,
     render_padding: bool = True,
+    expose_raw_postprocess_inputs: bool = False,
 ) -> NativeTextureBakeResult:
-    """Bake Pixal3D/TRELLIS-style PBR textures through the native Metal backend."""
+    """Bake Pixal3D/TRELLIS-style PBR textures through the native Metal backend.
+
+    When ``expose_raw_postprocess_inputs`` is True the result additionally carries
+    the raw pre-postprocess channels and coverage status (``raw_base_color_rgba``,
+    ``raw_metallic_roughness``, ``raw_coverage_status``) — the contract the
+    reference Telea inpaint operates on, before dilation/surface-fill/gutter.
+    """
 
     if source_projection_fallback_mode not in {"knn", "disabled"}:
         raise ValueError("source_projection_fallback_mode must be 'knn' or 'disabled'")
@@ -97,11 +109,27 @@ def bake_pbr_texture(
         float(source_projection_fallback_max_distance_voxels),
         bool(render_padding),
         bool(surface_fill),
+        bool(expose_raw_postprocess_inputs),
     )
     stats = dict(result["stats"])
     coverage_status = np.asarray(result["coverage_mask"], dtype=np.uint8)
     stats["coverage_status_legend"] = dict(COVERAGE_STATUS_LABELS)
     stats["coverage_status_histogram"] = coverage_status_histogram(coverage_status)
+    raw_base_color = (
+        np.asarray(result["raw_base_color_rgba"], dtype=np.uint8)
+        if "raw_base_color_rgba" in result
+        else None
+    )
+    raw_metallic_roughness = (
+        np.asarray(result["raw_metallic_roughness"], dtype=np.uint8)
+        if "raw_metallic_roughness" in result
+        else None
+    )
+    raw_coverage_status = (
+        np.asarray(result["raw_coverage_status"], dtype=np.uint8)
+        if "raw_coverage_status" in result
+        else None
+    )
     return NativeTextureBakeResult(
         vertices=mesh.vertices,
         faces=mesh.faces,
@@ -115,6 +143,9 @@ def bake_pbr_texture(
         origin=tuple(float(value) for value in stats["origin"]),
         voxel_size=float(stats["voxel_size"]),
         stats=stats,
+        raw_base_color_rgba=raw_base_color,
+        raw_metallic_roughness=raw_metallic_roughness,
+        raw_coverage_status=raw_coverage_status,
     )
 
 
