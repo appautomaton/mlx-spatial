@@ -1,97 +1,65 @@
 # mlx-spatial
 
 [![PyPI](https://img.shields.io/pypi/v/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
-[![Python](https://img.shields.io/pypi/pyversions/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
+[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://pypi.org/project/mlx-spatial/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml/badge.svg)](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml)
 
-MLX-native 3D and spatial inference tooling for Apple Silicon.
+**MLX-native 3D and spatial inference for Apple Silicon.** Run modern 3D reconstruction and image-to-3D pipelines locally on [MLX](https://github.com/ml-explore/mlx).
 
-`mlx-spatial` is a practical runtime package for running modern 3D
-reconstruction and image-to-3D pipelines locally with MLX. The package is
-intentionally focused: keep weights outside the wheel, validate the assets you
-downloaded, then run clear command-line paths that produce inspectable outputs.
+`mlx-spatial` keeps model weights out of the wheel, validates the assets you download, and exposes one clear command path per pipeline that produces inspectable outputs.
 
-This is not a training framework, and it does not bundle model weights.
+> Not a training framework. Does not bundle model weights.
 
-## What Works Now
+mlx-spatial is an [App Automaton](https://appautomaton.github.io) project. The `appautomaton` org hosts the [code on GitHub](https://github.com/appautomaton/mlx-spatial) and the converted [weights on Hugging Face](https://huggingface.co/appautomaton).
 
-The package covers six model families:
+## Capabilities
 
-| Pipeline | Input | Output | Weight setup |
-| --- | --- | --- | --- |
-| SAM 3D Objects | image + object mask | Gaussian PLY, optional GLB | `appautomaton` MLX bundle |
-| TRELLIS.2 | object-centric RGB/RGBA image | shape OBJ or textured GLB | downloaded safetensors directly |
-| HY-WorldMirror 2.0 | scene image or image frames | camera, depth, normals, point-cloud PLY | downloaded safetensors directly |
-| LiTo | object-centric RGB/RGBA image | 3D Gaussian Splat PLY | `appautomaton` research MLX bundle |
-| MapAnything | scene image views | scene `.npz` with depth, cameras, and world points | downloaded safetensors directly |
-| Pixal3D | object-centric RGB/RGBA image | trace/intermediate NPZ, textured GLB after decoded tensors | Pixal3D/DINOv3 safetensors plus converted NAF and MoGe |
+| Pipeline | Task | Input | Output | Status |
+| --- | --- | --- | --- | --- |
+| **SAM3D** | object reconstruction | image + object mask | Gaussian PLY (+ optional GLB) | ✅ Stable |
+| **TRELLIS.2** | image → textured mesh | object-centric RGB/RGBA | shape OBJ or textured GLB | ✅ Stable |
+| **HY-WorldMirror 2.0** | scene reconstruction | scene image or frames | camera, depth, normals, point-cloud PLY | ✅ Stable |
+| **LiTo** | image → 3D Gaussian splat | object-centric RGB/RGBA | 3DGS PLY | ✅ Stable |
+| **MapAnything** | multi-view scene bundle | related scene views | scene `.npz` (depth, cameras, world points) | ✅ Stable |
+| **Pixal3D** | projection-conditioned image → 3D | object-centric RGB/RGBA | trace + NPZ artifacts, textured GLB | 🚧 In development |
 
-Choose by job:
+**Status:** ✅ Stable = checkpoint-backed, release-ready path · 🚧 In development = partially wired; API and outputs may change.
 
-- Use SAM3D when you have an object image plus an exact mask and want object
-  reconstruction with Gaussian PLY output.
-- Use TRELLIS.2 when you have an object-centric image and want a shape OBJ or
-  textured GLB.
-- Use HY-WorldMirror when the input is a scene or frame set and you need camera,
-  depth, normal, or point-cloud outputs.
-- Use LiTo when you want Apple's research image-to-3DGS path and can work with
-  Gaussian splat PLY output instead of a mesh.
-- Use MapAnything when you have related scene views and want image-only depth,
-  confidence, masks, camera parameters, and dense world points.
-- Use Pixal3D when you want to inspect TencentARC Pixal3D's projection-conditioned
-  model path as it is being wired into MLX.
+Pipeline notes:
 
-Honest status:
+- **SAM3D** — the strongest object-reconstruction path here; uses the public `appautomaton/sam-3d-objects-mlx` bundle.
+- **TRELLIS.2** — textured GLB export works; texture and mesh quality are actively improving.
+- **HY-WorldMirror** — release path covers `camera,depth,normal,points`. The optional Gaussian head is not release-ready.
+- **LiTo** — outputs a Gaussian-splat PLY (not a mesh); open it in a 3DGS-aware viewer.
+- **MapAnything** — outputs a scene `.npz` tensor bundle (not a mesh or splat); uses public `facebook/map-anything` weights.
+- **Pixal3D** — projection-conditioned path being wired into MLX; see [docs/pixal3d.md](docs/pixal3d.md) for the current boundary.
 
-- SAM3D is the strongest object reconstruction path in this package. It uses the public
-  `appautomaton/sam-3d-objects-mlx` bundle.
-- TRELLIS.2 generation works, including textured GLB export. The export path is
-  usable, but still an area we keep improving for texture and mesh quality.
-- HY-WorldMirror works for scene reconstruction with `camera,depth,normal,points`.
-  The optional Gaussian head is not part of the release-ready path yet.
-- LiTo runs checkpoint-backed image-to-3DGS inference with the public
-  `appautomaton/lito-research-mlx` bundle. Outputs are Gaussian splat PLY files,
-  not meshes; use a 3DGS-aware viewer.
-- MapAnything runs checkpoint-backed scene generation with the public
-  `facebook/map-anything` weights. The supported artifact is a scene `.npz`
-  tensor bundle, not a mesh or Gaussian splat export.
-- Pixal3D is partially wired: assets, MoGe-derived auto-camera via the existing
-  converted MLX MoGe runtime, manual FOV override, projection conditioning,
-  projection attention, sparse FlowEuler probing, sparse decoder coordinates,
-  MLX NAF-projected features from converted local NAF weights, 512/1024 shape
-  SLat probing, shape decoder HR coordinate upsample, texture SLat probing,
-  shared shape/texture decoder execution, cascade planning, trace output,
-  sparse/shape/texture/decode NPZ artifacts, and textured GLB export after
-  decoded tensors are implemented.
+## Requirements
+
+- Python 3.13
+- Apple Silicon (recommended)
+- MLX — installed as a package dependency
+- Model weights — downloaded separately into `weights/` (see [Model weights](#model-weights))
 
 ## Install
 
-For local development from this repo:
+Package consumers:
+
+```bash
+uv add mlx-spatial   # or: pip install mlx-spatial
+```
+
+Local development from this repo:
 
 ```bash
 uv sync
 uv run pytest -q
 ```
 
-For package consumers:
+## Command-line tools
 
-```bash
-uv add mlx-spatial
-# or
-pip install mlx-spatial
-```
-
-Requirements:
-
-- Python 3.13
-- Apple Silicon recommended
-- MLX installed through the package dependencies
-- model weights downloaded separately under `weights/`
-
-## Command Line Tools
-
-The package installs six CLIs:
+Every pipeline ships a CLI:
 
 ```bash
 uv run mlx-spatial-sam3d --help
@@ -102,13 +70,11 @@ uv run mlx-spatial-mapanything --help
 uv run mlx-spatial-pixal3d --help
 ```
 
-The repository also includes readable script wrappers under `scripts/`. These
-are the easiest starting point because they encode recommended settings.
+The `scripts/` wrappers are the easiest starting point — they encode recommended settings. See [scripts/README.md](scripts/README.md).
 
-## Model Assets
+## Model weights
 
-Weights are intentionally not committed and not shipped in the wheel. Keep them
-under ignored local folders:
+Weights are never committed and never shipped in the wheel. Download them into these ignored local folders:
 
 ```text
 weights/sam-3d-objects-mlx/
@@ -122,37 +88,28 @@ weights/pixal3d/
 weights/naf/
 ```
 
-SAM3D uses the converted `appautomaton/sam-3d-objects-mlx` runtime bundle:
+**Converted MLX bundles** (SAM3D, LiTo) — download, then validate:
 
 ```bash
-uv run hf download appautomaton/sam-3d-objects-mlx \
-  --local-dir weights/sam-3d-objects-mlx
+uv run hf download appautomaton/sam-3d-objects-mlx --local-dir weights/sam-3d-objects-mlx
 uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
-```
 
-LiTo uses the converted `appautomaton/lito-research-mlx` research bundle:
-
-```bash
-uv run hf download appautomaton/lito-research-mlx \
-  --local-dir weights/lito-research-mlx
+uv run hf download appautomaton/lito-research-mlx --local-dir weights/lito-research-mlx
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 
-TRELLIS.2, HY-WorldMirror, MapAnything, and Pixal3D do not need SAM3D-style
-conversion. They load the downloaded safetensors and JSON configs directly:
+**Direct safetensors** (TRELLIS.2, HY-WorldMirror, MapAnything, Pixal3D) — print the `hf download` command, run it, then validate:
 
 ```bash
+# 1. print the download commands
 uv run mlx-spatial-trellis2 download-command --root weights/trellis2
 uv run mlx-spatial-trellis2 rmbg-download-command --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-download-command weights/dinov3-vitl16-pretrain-lvd1689m
 uv run mlx-spatial-hyworld2 download-command weights/hy-world-2
 uv run mlx-spatial-mapanything download-command weights/map-anything
 uv run mlx-spatial-pixal3d download-command weights/pixal3d
-```
 
-Run the printed `hf download ...` commands, then validate:
-
-```bash
+# 2. run the printed commands, then validate
 uv run mlx-spatial-trellis2 validate --root weights/trellis2
 uv run mlx-spatial-trellis2 rmbg-validate --root weights/rmbg2
 uv run mlx-spatial-trellis2 dinov3-validate weights/dinov3-vitl16-pretrain-lvd1689m
@@ -161,14 +118,15 @@ uv run mlx-spatial-mapanything validate weights/map-anything
 uv run mlx-spatial-pixal3d validate weights/pixal3d
 ```
 
-Respect the licenses and access terms of the upstream model providers. The
-Python package only provides runtime code.
+Respect the licenses and access terms of the upstream model providers.
 
-## First Runs
+## Running the pipelines
 
-### SAM3D Object Reconstruction
+The examples below use the `scripts/` wrappers. Most pipelines also emit a `trace.json` describing the run.
 
-Use an image and the exact object mask you want reconstructed:
+### SAM3D — object reconstruction
+
+Provide an image and the exact object mask you want reconstructed:
 
 ```bash
 python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
@@ -176,72 +134,41 @@ python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
   --output-dir outputs/sam3d/living-room-script
 ```
 
-Expected output:
-
-```text
-outputs/sam3d/living-room-script/
-  gaussians.ply
-  trace.json
-```
-
-Inspect the trace:
+Output: `gaussians.ply`, `trace.json`. Inspect the trace with:
 
 ```bash
 python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
 ```
 
-### TRELLIS.2 Textured GLB
+### TRELLIS.2 — textured GLB
 
-Use an object-centric image. RGBA images use their alpha channel directly; RGB
-images use RMBG to estimate the foreground:
+Use an object-centric image. RGBA images use their alpha channel directly; RGB images use RMBG to estimate the foreground.
 
 ```bash
 python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \
   --output-dir outputs/trellis2/cup-of-tea-script
 ```
 
-Expected output:
+Output: `model.glb`, `trace.json`.
 
-```text
-outputs/trellis2/cup-of-tea-script/
-  model.glb
-  trace.json
-```
+Defaults are quality-oriented for Apple Silicon: 512 pipeline, model-config sampler steps, 1024 texture, 200k GLB face target, global xatlas unwrap, and kdtree texture baking. Low-step runs are useful for smoke tests but are not representative of output quality.
 
-The default settings are quality-oriented for Apple Silicon: 512 pipeline,
-model-config sampler steps, 1024 texture, 200k GLB face target, global xatlas
-unwrap, and kdtree texture baking. Low-step runs are useful for smoke tests,
-but they are not representative of output quality.
+### HY-WorldMirror — scene reconstruction
 
-### HY-WorldMirror Scene Reconstruction
-
-Use a scene image or a directory of scene frames. This pipeline does not take an
-object mask:
+Provide a scene image or a directory of scene frames. This pipeline does not take an object mask.
 
 ```bash
 python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \
   --output-dir outputs/hyworld2/kidsroom-scene-script
 ```
 
-Expected output:
+Output: `camera_params.json`, `depth/`, `normal/`, `points/points.ply`, `trace.json`.
 
-```text
-outputs/hyworld2/kidsroom-scene-script/
-  camera_params.json
-  depth/
-  normal/
-  points/points.ply
-  trace.json
-```
+Uses the verified release path (real Tencent safetensors, `large` memory profile, `camera,depth,normal,points` heads). For frame directories, use `--memory-profile balanced` when `large` hits the attention guard.
 
-The script uses the verified release path: real Tencent safetensors, `large`
-memory profile, and `camera,depth,normal,points` heads. For frame directories,
-use `--memory-profile balanced` when the `large` profile hits the attention
-guard.
+### LiTo — image → 3D Gaussian splat
 
-### LiTo Image to 3D Gaussian Splat
-
-Use an object-centric image with a useful alpha mask when possible:
+Use an object-centric image, ideally with an alpha mask.
 
 ```bash
 python scripts/lito/generate.py inputs/lito/sample.png \
@@ -251,46 +178,26 @@ python scripts/lito/generate.py inputs/lito/sample.png \
   --print-metrics
 ```
 
-Expected output:
+Output: `sample.ply`, `sample.safetensors`.
 
-```text
-outputs/lito/sample.ply
-outputs/lito/sample.safetensors
-```
+LiTo writes a Gaussian-splat PLY, not a mesh. Use a 3DGS-aware viewer such as KIRI's Blender 3DGS add-on — Blender's native PLY importer reads the container but does not render the 3DGS fields correctly.
 
-LiTo writes a Gaussian Splat PLY, not a mesh. Blender's native PLY importer can
-read the container, but it does not render the 3DGS fields correctly. Use a
-Gaussian-splat-aware viewer such as KIRI's Blender 3DGS add-on.
+### MapAnything — scene bundle
 
-### MapAnything Scene Bundle
-
-Use a directory of related scene views. The Desk example is a two-image scene:
+Provide a directory of related scene views. The Desk example is a two-image scene.
 
 ```bash
 python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
   --output-dir outputs/mapanything/desk-script
 ```
 
-Expected output:
+Output: `scene.npz`, `trace.json`.
 
-```text
-outputs/mapanything/desk-script/
-  scene.npz
-  trace.json
-```
+Uses the upstream image-only inference settings: `fixed_mapping` preprocessing, stride `1`, checkpoint-derived patch size, DINOv2 normalization, and mask/edge-mask postprocessing. `scene.npz` mirrors the original Torch scene layout (images, depth, confidence, masks, intrinsics, camera poses, world points) with clean top-level keys, and also records `extrinsics`.
 
-The script uses the upstream image-only inference settings: `fixed_mapping`
-preprocessing, stride `1`, checkpoint-derived patch size, DINOv2
-normalization, and mask/edge-mask postprocessing. `scene.npz` matches the original Torch scene layout
-semantically: images, depth, confidence, masks, intrinsics, camera poses, and
-world points. The MLX file uses clean top-level keys and also records
-`extrinsics`.
+### Pixal3D — in development
 
-### Pixal3D Implementation Track
-
-Use the vendored upstream sample image. By default, Pixal3D derives camera
-parameters from the converted MLX MoGe root; pass `--manual-fov 0.2` only when
-you want the explicit override.
+By default Pixal3D derives camera parameters from the converted MLX MoGe root; pass `--manual-fov 0.2` only when you want the explicit override.
 
 ```bash
 python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
@@ -302,52 +209,41 @@ python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --pipeline-type 1024_cascade
 ```
 
-Current expected output starts with `trace.json` plus `sparse_projection.npz`.
-When sparse-flow and sparse-decoder checkpoint assets are mapped, the runtime
-also writes `sparse_structure.npz` with `(batch, z, y, x)` coordinates. With
-converted NAF weights at `weights/naf/naf_release.safetensors`, the runtime
-builds coordinate-sampled MLX NAF features instead of materializing full
-high-resolution feature maps, then can write `shape_slat_lr.npz`,
-`shape_slat_hr_coordinates.npz`, `shape_slat_hr.npz`, and `texture_slat.npz`
-as downstream stage assets permit. Compatible decoder assets then write
-`shape_decoder_fields.npz` and `texture_decoder_pbr.npz`, followed by shared
-mesh extraction and texture baking to write `model.glb`. `max_num_tokens`
-remains the HR coordinate selection guard; `--shape-upsample-token-limit`
-separately bounds the shape-decoder upsample compute stage, and
-`--shape-decoder-token-limit` / `--texture-decoder-token-limit` bound final
-decoder compute.
+Output begins with `trace.json` and `sparse_projection.npz`, then adds staged NPZ artifacts (`sparse_structure.npz`, shape/texture SLat bundles, decoder fields) and finally `model.glb` as each stage's checkpoint assets are mapped. See [docs/pixal3d.md](docs/pixal3d.md) for the current stage boundary and the `--shape-upsample-token-limit` / `--shape-decoder-token-limit` / `--texture-decoder-token-limit` flags.
 
-## Repository Layout
+## Repository layout
 
 ```text
-src/mlx_spatial/     package code
-scripts/             readable user and maintainer wrappers
-docs/                deeper setup, release, and architecture notes
-tests/               unit and parity-oriented coverage
-weights/             ignored local model assets
-inputs/              ignored local sample inputs
-outputs/             ignored generated results
-vendors/             ignored upstream checkouts
+src/mlx_spatial/   package code
+scripts/           user and maintainer wrappers
+docs/              setup, release, and architecture notes
+tests/             unit and parity coverage
+weights/           ignored local model assets
+inputs/            ignored local sample inputs
+outputs/           ignored generated results
+vendors/           ignored upstream checkouts
 ```
 
 ## Documentation
 
-- [docs/README.md](docs/README.md): documentation map and reader contract.
-- [scripts/README.md](scripts/README.md): recommended inference scripts and their defaults.
-- [docs/sam3d.md](docs/sam3d.md): SAM3D setup, inference, quality gates, PLY expectations, and coordinate notes.
-- [docs/trellis2.md](docs/trellis2.md): TRELLIS.2 asset layout, no-conversion note, scripts, and export caveats.
-- [docs/hyworld2.md](docs/hyworld2.md): HY-WorldMirror asset layout, scene inputs, memory profiles, and outputs.
-- [docs/lito.md](docs/lito.md): LiTo setup, research-weight bundle, image-to-3DGS CLI, memory profiles, and PLY viewing notes.
-- [docs/mapanything.md](docs/mapanything.md): MapAnything asset layout, scene `.npz` schema, parity notes, and viewer/export boundary.
-- [docs/pixal3d.md](docs/pixal3d.md): Pixal3D asset layout, current MLX boundary, recommended settings, and blockers.
-- [docs/architecture.md](docs/architecture.md): module map and pipeline boundaries.
-- [docs/development.md](docs/development.md): tests, local asset rules, and contribution constraints.
-- [docs/model-publishing.md](docs/model-publishing.md): model bundles and model-card rules.
-- [docs/release.md](docs/release.md): release checklist.
+| Doc | Contents |
+| --- | --- |
+| [docs/README.md](docs/README.md) | documentation map and reader contract |
+| [scripts/README.md](scripts/README.md) | inference scripts and their defaults |
+| [docs/sam3d.md](docs/sam3d.md) | SAM3D setup, inference, quality gates, PLY and coordinate notes |
+| [docs/trellis2.md](docs/trellis2.md) | TRELLIS.2 asset layout, scripts, export caveats |
+| [docs/hyworld2.md](docs/hyworld2.md) | HY-WorldMirror asset layout, scene inputs, memory profiles |
+| [docs/lito.md](docs/lito.md) | LiTo setup, image-to-3DGS CLI, memory profiles, PLY viewing |
+| [docs/mapanything.md](docs/mapanything.md) | MapAnything `.npz` schema, parity notes, viewer boundary |
+| [docs/pixal3d.md](docs/pixal3d.md) | Pixal3D MLX boundary, recommended settings, blockers |
+| [docs/architecture.md](docs/architecture.md) | module map and pipeline boundaries |
+| [docs/development.md](docs/development.md) | tests, local asset rules, contribution constraints |
+| [docs/model-publishing.md](docs/model-publishing.md) | model bundles and model-card rules |
+| [docs/release.md](docs/release.md) | release checklist |
 
-## Release Hygiene
+## Releasing (maintainers)
 
-Before publishing, build and inspect the artifacts:
+Build and inspect the artifacts before publishing:
 
 ```bash
 uv run pytest -q
@@ -359,8 +255,10 @@ python scripts/packaging/check_release_artifacts.py \
 python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
-The build must not include local weights, generated outputs, inputs, vendor
-checkouts, caches, or agent state.
+The build must exclude local weights, generated outputs, inputs, vendor checkouts, caches, and agent state. Publishing is handled by the trusted-publishing workflow in `.github/workflows/workflow.yaml` — do not publish from local shell credentials.
 
-Publishing is handled by the trusted-publishing workflow in
-`.github/workflows/workflow.yaml`. Do not publish from local shell credentials.
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Built and maintained by [App Automaton](https://appautomaton.github.io). Explore more MLX-native tooling for Apple Silicon — including [mlx-speech](https://github.com/appautomaton/mlx-speech) — on [GitHub](https://github.com/appautomaton) and [Hugging Face](https://huggingface.co/appautomaton).
