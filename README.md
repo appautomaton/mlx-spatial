@@ -1,5 +1,10 @@
 # mlx-spatial
 
+[![PyPI](https://img.shields.io/pypi/v/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
+[![Python](https://img.shields.io/pypi/pyversions/mlx-spatial.svg)](https://pypi.org/project/mlx-spatial/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml/badge.svg)](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml)
+
 MLX-native 3D and spatial inference tooling for Apple Silicon.
 
 `mlx-spatial` is a practical runtime package for running modern 3D
@@ -79,7 +84,7 @@ pip install mlx-spatial
 
 Requirements:
 
-- Python 3.11+
+- Python 3.13
 - Apple Silicon recommended
 - MLX installed through the package dependencies
 - model weights downloaded separately under `weights/`
