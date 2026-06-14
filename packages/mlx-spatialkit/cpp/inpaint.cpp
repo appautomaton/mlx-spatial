@@ -292,14 +292,22 @@ class TeleaInpainter {
     }
   }
 
+  // Telea image update, matching OpenCV's icvTeleaInpaintFMM exactly: the
+  // weighted mean of raw neighbor values (Ia/s) plus a *separate*, magnitude-
+  // normalized gradient nudge (Jx, Jy) — NOT a full per-neighbor gradient
+  // extrapolation. The directional/distance/level weight w = |dir·dst·lev|
+  // with dir = r·gradT (unnormalized), dst = 1/|r|^3, lev = 1/(1+|T(q)-T(p)|).
   void inpaint_pixel(int i, int j) {
-    // Front normal = gradient of the marching field T at (i, j).
     float gtx = 0.0f;
     float gty = 0.0f;
     grad_t(i, j, gtx, gty);
 
-    std::vector<double> ia(static_cast<size_t>(c_), 0.0);
-    double weight_sum = 0.0;
+    const size_t channels = static_cast<size_t>(c_);
+    std::vector<double> ia(channels, 0.0);
+    std::vector<double> jx(channels, 0.0);
+    std::vector<double> jy(channels, 0.0);
+    double weight_sum = 1.0e-20;  // OpenCV seeds s with a tiny epsilon
+    int contributors = 0;
     const int r = radius_;
     const int r2 = r * r;
     for (int k = i - r; k <= i + r; ++k) {
@@ -320,30 +328,36 @@ class TeleaInpainter {
           continue;
         }
         const float len = std::sqrt(len2);
-        const float dst = 1.0f / (len2 * len);
+        const float dst = 1.0f / (len2 * len);  // 1/|r|^3
         const float lev = 1.0f / (1.0f + std::fabs(t_[idx(k, l)] - t_[idx(i, j)]));
-        float dir = (rx * gtx + ry * gty) / len;
+        float dir = rx * gtx + ry * gty;  // r . gradT (unnormalized, per OpenCV)
         if (std::fabs(dir) <= 0.01f) {
           dir = 1.0e-6f;
         }
-        const float w = std::fabs(dir * dst * lev);
+        const double w = static_cast<double>(std::fabs(dst * lev * dir));
         for (int c = 0; c < c_; ++c) {
           float gix = 0.0f;
           float giy = 0.0f;
           grad_channel(k, l, c, gix, giy);
-          const float extrapolated = static_cast<float>(pixel(k, l, c)) + gix * rx + giy * ry;
-          ia[static_cast<size_t>(c)] += static_cast<double>(w) * extrapolated;
+          ia[static_cast<size_t>(c)] += w * static_cast<double>(pixel(k, l, c));
+          jx[static_cast<size_t>(c)] -= w * static_cast<double>(gix) * rx;
+          jy[static_cast<size_t>(c)] -= w * static_cast<double>(giy) * ry;
         }
-        weight_sum += static_cast<double>(w);
+        weight_sum += w;
+        ++contributors;
       }
     }
-    if (weight_sum <= 0.0) {
-      return;  // no usable neighbor; leave the (rare) pixel as initialized
+    if (contributors == 0) {
+      return;  // no usable neighbor (does not occur for real masks); keep input
     }
     for (int c = 0; c < c_; ++c) {
-      const double value = ia[static_cast<size_t>(c)] / weight_sum;
-      int rounded = static_cast<int>(std::floor(value + 0.5));  // round-half-up
-      rounded = std::clamp(rounded, 0, 255);
+      const double mean = ia[static_cast<size_t>(c)] / weight_sum;
+      const double jxc = jx[static_cast<size_t>(c)];
+      const double jyc = jy[static_cast<size_t>(c)];
+      const double nudge = (jxc + jyc) / (std::sqrt(jxc * jxc + jyc * jyc) + 1.0e-20);
+      const double sat = mean + nudge + 0.5;  // OpenCV: Ia/s + nudge + 0.5f ...
+      long rounded = std::lrint(sat);          // ... then saturate_cast<uchar> == cvRound
+      rounded = std::clamp<long>(rounded, 0, 255);
       set_pixel(i, j, c, static_cast<uint8_t>(rounded));
     }
   }
