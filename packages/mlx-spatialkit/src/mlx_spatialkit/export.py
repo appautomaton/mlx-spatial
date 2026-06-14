@@ -1341,6 +1341,12 @@ def _stage_status(
     }
 
 
+# Maximum sparse-KNN fallback fraction for the trilinear sampling gate to stay
+# reference_matched. Measured on real fixtures the fallback is ~2e-5; this bound
+# fails the gate if fallback ever dominates the trilinear primary path.
+_TRILINEAR_FALLBACK_FRACTION_MAX = 0.05
+
+
 def _pixal3d_reference_stage_contract(
     simplify_stats: dict[str, Any],
     uv_stats: dict[str, Any],
@@ -1402,12 +1408,65 @@ def _pixal3d_reference_stage_contract(
     )
     raster_reference = bool(texture_stats.get("uv_raster_interpolate_reference"))
     projection_reference = source_projection_used is True
-    sampling_reference = sampling_mode == "trilinear"
-    postprocess_reference = seam_fill_mode in {
-        "telea-inpaint",
-        "inpaint-equivalent",
-        "reference-inpaint-equivalent",
-    }
+
+    # trilinear_pbr_sampling honest verdict (Codex P1-6): the primary measured
+    # path is trilinear AND exact counter conservation holds AND the sparse-KNN
+    # fallback fraction is bounded. Relabelling alone cannot flip the gate — a
+    # fallback-dominated or non-conserving run fails even with mode "trilinear".
+    trilinear_sampled = _maybe_int(texture_stats.get("trilinear_sampled_texel_count"))
+    trilinear_fallback = _maybe_int(texture_stats.get("source_projection_nearest_fallback_texel_count"))
+    trilinear_invalid = _maybe_int(texture_stats.get("trilinear_invalid_texel_count"))
+    trilinear_input = _maybe_int(texture_stats.get("source_projection_input_texel_count"))
+    _trilinear_counts = (trilinear_sampled, trilinear_fallback, trilinear_invalid, trilinear_input)
+    trilinear_conserved = (
+        all(value is not None for value in _trilinear_counts)
+        and (trilinear_sampled + trilinear_fallback + trilinear_invalid) == trilinear_input
+    )
+    trilinear_fallback_fraction = (
+        trilinear_fallback / trilinear_input
+        if trilinear_conserved and trilinear_input
+        else 1.0
+    )
+    sampling_reference = (
+        sampling_mode == "trilinear"
+        and projection_reference
+        and trilinear_conserved
+        and trilinear_sampled is not None
+        and trilinear_sampled > 0
+        and trilinear_fallback_fraction <= _TRILINEAR_FALLBACK_FRACTION_MAX
+    )
+
+    # texture_postprocess honest verdict (Codex P1-6): native Telea mode AND
+    # legacy fills disabled and zero AND the reference channel radii AND the raw
+    # inverse-coverage mask identity (painted texels == no_face+missing+out_of_grid).
+    telea_mask = _maybe_int(texture_stats.get("telea_mask_texel_count"))
+    telea_radius_base = _maybe_int(texture_stats.get("telea_radius_base_color_rgb"))
+    telea_radius_alpha = _maybe_int(texture_stats.get("telea_radius_alpha"))
+    telea_radius_mr = _maybe_int(texture_stats.get("telea_radius_metallic_roughness"))
+    legacy_postprocess_applied = texture_stats.get("legacy_postprocess_applied")
+    dilation_filled = _maybe_int(texture_stats.get("dilation_filled_texel_count"))
+    no_face = _maybe_int(texture_stats.get("no_face_texel_count"))
+    missing_surface = _maybe_int(texture_stats.get("missing_texel_count"))
+    out_of_grid = _maybe_int(texture_stats.get("out_of_grid_texel_count"))
+    _raw_inverse_coverage = (
+        no_face + missing_surface + out_of_grid
+        if all(value is not None for value in (no_face, missing_surface, out_of_grid))
+        else None
+    )
+    telea_mask_identity = (
+        telea_mask is not None
+        and _raw_inverse_coverage is not None
+        and telea_mask == _raw_inverse_coverage
+    )
+    postprocess_reference = (
+        seam_fill_mode == "native-telea-inpaint"
+        and legacy_postprocess_applied is False
+        and dilation_filled == 0
+        and telea_radius_base == 3
+        and telea_radius_alpha == 1
+        and telea_radius_mr == 1
+        and telea_mask_identity
+    )
 
     stages = {
         "reference_trace": _stage_status(
@@ -1500,9 +1559,18 @@ def _pixal3d_reference_stage_contract(
             passed=sampling_reference,
             status="reference_matched" if sampling_reference else "heuristic_quarantined",
             source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:258",
-            spatialkit_backend=sampling_mode,
-            required="trilinear sparse-grid PBR voxel sampling",
-            detail="Nearest-voxel sampling and broad fallback fill cannot claim Pixal3D sampling parity.",
+            spatialkit_backend={
+                "sampling_mode": sampling_mode,
+                "sampling_fallback_policy": texture_stats.get("sampling_fallback_policy"),
+                "trilinear_sampled_texel_count": trilinear_sampled,
+                "nearest_fallback_texel_count": trilinear_fallback,
+                "trilinear_invalid_texel_count": trilinear_invalid,
+                "counter_conservation": trilinear_conserved,
+                "fallback_fraction": trilinear_fallback_fraction,
+                "fallback_fraction_max": _TRILINEAR_FALLBACK_FRACTION_MAX,
+            },
+            required="trilinear sparse-grid PBR voxel sampling (bounded sparse-KNN fallback)",
+            detail="reference_matched requires sampling_mode 'trilinear', exact texel counter conservation, and a bounded fallback fraction; nearest-only or fallback-dominated sampling stays quarantined.",
         ),
         "texture_postprocess": _stage_status(
             passed=postprocess_reference,
@@ -1510,11 +1578,19 @@ def _pixal3d_reference_stage_contract(
             source="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:287",
             spatialkit_backend={
                 "postprocess_mode": seam_fill_mode,
-                "surface_fill_enabled": texture_stats.get("surface_fill_enabled"),
-                "gutter_fill_enabled": texture_stats.get("gutter_fill_enabled"),
+                "legacy_postprocess_applied": legacy_postprocess_applied,
+                "dilation_filled_texel_count": dilation_filled,
+                "telea_mask_texel_count": telea_mask,
+                "raw_inverse_coverage_texel_count": _raw_inverse_coverage,
+                "telea_mask_identity": telea_mask_identity,
+                "telea_radii": {
+                    "base_color_rgb": telea_radius_base,
+                    "alpha": telea_radius_alpha,
+                    "metallic_roughness": telea_radius_mr,
+                },
             },
-            required="reference-like texture inpaint/fill with sample/fill diagnostics",
-            detail="Native dilation, BFS surface fill, and gutter fill are useful diagnostics but remain quarantined until reference-equivalent.",
+            required="reference Telea inpaint over the raw inverse-coverage mask with disabled legacy fills",
+            detail="reference_matched requires postprocess_mode 'native-telea-inpaint', legacy fills disabled (zero), reference channel radii (base 3; alpha/metallic/roughness 1), and painted-texels == raw inverse-coverage mask identity. Legacy dilation/BFS/gutter fill stays quarantined.",
         ),
     }
     required_stage_names = tuple(stages)

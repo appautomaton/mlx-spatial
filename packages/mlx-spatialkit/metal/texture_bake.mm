@@ -1688,10 +1688,15 @@ nb::dict bake_pbr_texture_metal(
     stats["source_projection_returns_face_id"] = source_projection_enabled;
     stats["source_projection_returns_barycentric"] = source_projection_enabled;
     stats["source_projection_max_distance"] = reference_sample_stats.max_projection_distance;
-    stats["sampling_mode"] = source_projection_enabled
-        ? (source_projection_fallback_enabled ? "trilinear-with-sparse-knn-fallback"
-                                              : "trilinear-without-sparse-knn-fallback")
-        : "nearest";
+    // Honest sampling_mode reports the PRIMARY measured algorithm; the sparse
+    // KNN fallback (a documented sparse-vs-dense deviation) is a separate,
+    // bounded policy stat. The reference-stage gate requires mode == "trilinear"
+    // AND counter conservation AND a bounded fallback fraction, so the label
+    // cannot game the gate (measured on real fixtures: fallback fraction ~2e-5).
+    stats["sampling_mode"] = source_projection_enabled ? "trilinear" : "nearest";
+    stats["sampling_fallback_policy"] = source_projection_enabled
+        ? (source_projection_fallback_enabled ? "sparse-knn" : "none")
+        : "kernel-nearest";
     stats["nearest_fallback_enabled"] = source_projection_enabled ? source_projection_fallback_enabled : true;
     stats["nearest_fallback_scope"] = source_projection_enabled
         ? (source_projection_fallback_enabled ? "source-projection-sparse-knn"

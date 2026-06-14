@@ -1398,7 +1398,20 @@ def test_export_quality_summary_separates_artifact_and_production_readiness() ->
             "source_projection_used": True,
             "source_projection_detail": "native_bvh",
             "sampling_mode": "trilinear",
-            "postprocess_mode": "inpaint-equivalent",
+            "trilinear_sampled_texel_count": 1000,
+            "source_projection_nearest_fallback_texel_count": 0,
+            "trilinear_invalid_texel_count": 0,
+            "source_projection_input_texel_count": 1000,
+            "postprocess_mode": "native-telea-inpaint",
+            "legacy_postprocess_applied": False,
+            "dilation_filled_texel_count": 0,
+            "telea_mask_texel_count": 300,
+            "telea_radius_base_color_rgb": 3,
+            "telea_radius_alpha": 1,
+            "telea_radius_metallic_roughness": 1,
+            "no_face_texel_count": 200,
+            "missing_texel_count": 50,
+            "out_of_grid_texel_count": 50,
         },
         {"final_faces": 212_542, "coverage_ratio": 1.0, "raw_coverage_ratio": 0.40},
         quality_preset="reference-target",
@@ -3135,3 +3148,125 @@ def test_export_telea_postprocess_real_fixture_paints_gutter_without_black_seam(
     seam_rgb = painted[seam]
     black = ~seam_rgb.any(axis=1)
     assert black.mean() < 0.01, f"black-seam texels adjacent to coverage: {black.mean():.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 / Slice 5: honest gate flips with anti-gaming invariants (TPP-05)
+# ---------------------------------------------------------------------------
+
+
+def _reference_passing_texture_stats() -> dict:
+    return {
+        "uv_raster_interpolate_reference": True,
+        "source_projection_used": True,
+        "source_projection_detail": "native_bvh",
+        "sampling_mode": "trilinear",
+        "sampling_fallback_policy": "sparse-knn",
+        "trilinear_sampled_texel_count": 1000,
+        "source_projection_nearest_fallback_texel_count": 5,
+        "trilinear_invalid_texel_count": 0,
+        "source_projection_input_texel_count": 1005,
+        "postprocess_mode": "native-telea-inpaint",
+        "legacy_postprocess_applied": False,
+        "dilation_filled_texel_count": 0,
+        "telea_mask_texel_count": 300,
+        "telea_radius_base_color_rgb": 3,
+        "telea_radius_alpha": 1,
+        "telea_radius_metallic_roughness": 1,
+        "no_face_texel_count": 200,
+        "missing_texel_count": 50,
+        "out_of_grid_texel_count": 50,
+    }
+
+
+def _gate_status(texture_stats: dict, stage: str) -> str:
+    from mlx_spatialkit.export import _pixal3d_reference_stage_contract
+
+    contract = _pixal3d_reference_stage_contract(
+        {
+            "backend": "native-qem",
+            "algorithm": "qem-edge-collapse",
+            "quality_tier": "production",
+            "remesh_backend": "narrow-band-dc",
+            "small_boundary_loop_fill_algorithm": "perimeter-centroid-fan",
+        },
+        {"backend": "xatlas-equivalent-native", "uv_overlap_count": 0, "uv_flipped_count": 0, "lscm_unconverged_count": 0},
+        texture_stats,
+        None,
+        quality_preset="reference-target",
+    )
+    return str(contract["stages"][stage]["status"])
+
+
+def test_trilinear_sampling_gate_passes_then_anti_gaming_flips_back() -> None:
+    base = _reference_passing_texture_stats()
+    assert _gate_status(base, "trilinear_pbr_sampling") == "reference_matched"
+    # Relabel away from trilinear -> quarantined.
+    assert _gate_status({**base, "sampling_mode": "nearest"}, "trilinear_pbr_sampling") == "heuristic_quarantined"
+    # Broken counter conservation -> quarantined.
+    assert _gate_status({**base, "trilinear_invalid_texel_count": 999}, "trilinear_pbr_sampling") == "heuristic_quarantined"
+    # Fallback-dominated sampling -> quarantined.
+    flooded = {**base, "source_projection_nearest_fallback_texel_count": 900, "trilinear_sampled_texel_count": 105, "source_projection_input_texel_count": 1005}
+    assert _gate_status(flooded, "trilinear_pbr_sampling") == "heuristic_quarantined"
+    # No source projection -> quarantined even with the label.
+    assert _gate_status({**base, "source_projection_used": False}, "trilinear_pbr_sampling") == "heuristic_quarantined"
+
+
+def test_texture_postprocess_gate_passes_then_anti_gaming_flips_back() -> None:
+    base = _reference_passing_texture_stats()
+    assert _gate_status(base, "texture_postprocess") == "reference_matched"
+    # Legacy dilation mode -> quarantined.
+    assert _gate_status({**base, "postprocess_mode": "native-dilation-and-surface-fill"}, "texture_postprocess") == "heuristic_quarantined"
+    # Legacy fills not actually disabled -> quarantined.
+    assert _gate_status({**base, "legacy_postprocess_applied": True}, "texture_postprocess") == "heuristic_quarantined"
+    assert _gate_status({**base, "dilation_filled_texel_count": 7}, "texture_postprocess") == "heuristic_quarantined"
+    # Wrong reference channel radius -> quarantined.
+    assert _gate_status({**base, "telea_radius_base_color_rgb": 1}, "texture_postprocess") == "heuristic_quarantined"
+    # Painted-vs-raw mask identity mismatch -> quarantined.
+    assert _gate_status({**base, "telea_mask_texel_count": 250}, "texture_postprocess") == "heuristic_quarantined"
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize(
+    "fixture_key,fixture_subpath",
+    [
+        ("main", "pixal3d-1024-cascade-decoded-pbr"),
+        ("violin_bow", "violin-bow/pixal3d-1024-cascade-decoded-pbr"),
+    ],
+)
+def test_export_4096_telea_reference_path_within_budgets(fixture_key: str, fixture_subpath: str) -> None:
+    # TPP-06: 4096 export on the reference path (Telea + trilinear) succeeds on
+    # both fixtures within pinned wall-time + peak-RSS budgets, flips the two
+    # honest gates to reference_matched, and writes a GLB for visual inspection.
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+    import time
+
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / fixture_subpath
+    if not fixture.exists():
+        pytest.skip(f"fixture not present: {fixture}")
+
+    out_dir = Path("/tmp") / f"mlx-spatialkit-4096-telea-budget-{fixture_key}-{os.getpid()}"
+    start = time.perf_counter()
+    result = export_pixal3d_glb(
+        fixture, out_dir, quality_preset="reference-target", texture_size=4096, texture_postprocess="telea"
+    )
+    wall_s = time.perf_counter() - start
+
+    assert result.glb.path.read_bytes()[:4] == b"glTF"
+    assert result.glb.bytes_written > 10_000_000
+    diagnostics = json.loads(result.diagnostics_path.read_text())
+    stats = diagnostics["stages"]["texture_bake"]["stats"]
+    assert stats["texture_size"] == 4096
+    assert stats["postprocess_mode"] == "native-telea-inpaint"
+    assert stats["sampling_mode"] == "trilinear"
+
+    # The honest gates flip on the real reference-path 4096 data.
+    stages = diagnostics["quality"]["reference_stage_contract"]["stages"]
+    assert stages["trilinear_pbr_sampling"]["status"] == "reference_matched"
+    assert stages["texture_postprocess"]["status"] == "reference_matched"
+
+    # Budgets: measured main 140s / violin 116s, peak RSS ~5 GB; pinned generously.
+    assert wall_s < 600.0, f"4096 telea wall time {wall_s:.0f}s exceeds budget"
+    peak_rss = max(int(s.get("max_rss_bytes", 0)) for s in diagnostics["memory_samples"].values())
+    assert peak_rss < 12 * 1024**3, f"4096 telea peak RSS {peak_rss / 1e9:.1f}GB exceeds budget"

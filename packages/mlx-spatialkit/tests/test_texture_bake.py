@@ -314,7 +314,8 @@ def test_bake_pbr_texture_projects_to_source_mesh_and_samples_trilinear() -> Non
     assert baked.stats["source_projection_projected_texel_count"] > 0
     assert baked.stats["source_projection_returns_face_id"] is True
     assert baked.stats["source_projection_returns_barycentric"] is True
-    assert baked.stats["sampling_mode"] == "trilinear-with-sparse-knn-fallback"
+    assert baked.stats["sampling_mode"] == "trilinear"
+    assert baked.stats["sampling_fallback_policy"] == "sparse-knn"
     assert baked.stats["nearest_fallback_enabled"] is True
     assert baked.stats["nearest_fallback_scope"] == "source-projection-sparse-knn"
     assert baked.stats["source_projection_nearest_fallback_enabled"] is True
@@ -445,7 +446,8 @@ def test_bake_pbr_texture_source_projection_can_disable_sparse_knn_for_isolation
     assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 0
     assert baked.stats["source_projection_nearest_fallback_texel_count"] == 0
     assert baked.stats["source_projection_nearest_fallback_missing_texel_count"] > 0
-    assert baked.stats["sampling_mode"] == "trilinear-without-sparse-knn-fallback"
+    assert baked.stats["sampling_mode"] == "trilinear"
+    assert baked.stats["sampling_fallback_policy"] == "none"
     assert baked.stats["nearest_fallback_scope"] == "disabled-source-projection-trilinear-only"
     assert baked.stats["trilinear_invalid_texel_count"] > 0
     assert baked.coverage_status[0, 0] == 2
@@ -490,6 +492,7 @@ def test_bake_pbr_texture_can_disable_source_projection_for_isolation() -> None:
     assert baked.stats["source_projection_nearest_fallback_enabled"] is False
     assert baked.stats["source_projection_nearest_fallback_k_neighbors"] == 0
     assert baked.stats["sampling_mode"] == "nearest"
+    assert baked.stats["sampling_fallback_policy"] == "kernel-nearest"
     assert baked.stats["nearest_fallback_scope"] == "metal-kernel-missing-voxel"
 
 
@@ -1114,3 +1117,34 @@ def test_bake_legacy_postprocess_is_default_and_unchanged() -> None:
     assert default.stats["postprocess_mode"] == explicit.stats["postprocess_mode"]
     assert default.stats["postprocess_mode"].startswith("native-dilation")
     assert default.stats["legacy_postprocess_applied"] is True
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 / Slice 7: determinism + dependency-light proof (TPP-07, TPP-09)
+# ---------------------------------------------------------------------------
+
+
+def test_telea_bake_path_is_deterministic() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+    mesh, coords, attrs = _gutter_mesh_and_fields()
+    kw = dict(texture_size=16, origin=(0, 0, 0), voxel_size=1.0, decode_resolution=2, postprocess="telea")
+    first = bake_pbr_texture(mesh, coords, attrs, **kw)
+    second = bake_pbr_texture(mesh, coords, attrs, **kw)
+    assert np.array_equal(first.base_color_rgba, second.base_color_rgba)
+    assert np.array_equal(first.metallic_roughness, second.metallic_roughness)
+
+
+def test_reference_telea_path_is_dependency_light() -> None:
+    # TPP-09: the reference Telea path must not require cv2 (oracle-only) or torch.
+    import importlib.util
+
+    assert importlib.util.find_spec("cv2") is None, "cv2 must remain a dev-time oracle, not a runtime dep"
+    assert importlib.util.find_spec("torch") is None, "torch must not be a runtime dep of the telea path"
+    # And telea_inpaint works with neither importable.
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    image[2:6, 2:6] = 200
+    mask = np.zeros((8, 8), dtype=np.uint8)
+    mask[0, 0] = 1
+    out = telea_inpaint(image, mask, 3)
+    assert out.dtype == np.uint8 and out.shape == image.shape

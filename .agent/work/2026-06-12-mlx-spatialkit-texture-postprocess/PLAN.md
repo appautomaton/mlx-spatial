@@ -10,6 +10,19 @@ sampling, 4096 unblocked, texture gates flipped honestly. Architecture: DESIGN.m
 > gains a delta-RSS budget; Slice 5 gate verdicts gain counter-conservation + raw-mask
 > identity + legacy-fill-disabled invariants; Slice 2 anchors gain richer provenance.
 
+> **EXECUTION NOTE (2026-06-14):** Executed in value/risk order **1 → 2 → 3 → 5 → 6 → 7**,
+> with **Slice 4 (GPU trilinear) deferred** as a recorded follow-on. Rationale: the honest
+> `sampling_mode == "trilinear"` gate (Slice 5) is achieved on the existing **CPU**
+> trilinear path — verified on real 4096 data (counter conservation exact; sparse-KNN
+> fallback fraction ~2e-5; gate flips to reference_matched). Moving the sampling leg to a
+> Metal kernel is therefore a **pure performance optimization with no visual, correctness,
+> or honesty impact**; porting the double-precision CPU trilinear to Metal float risks
+> sub-LSB sampling divergence for zero functional gain, so it is not worth destabilizing a
+> working, gate-passing bake without a measured performance need. Deferred follow-on:
+> "GPU trilinear sampling kernel (perf): port `trilinear_sample_attributes` to a second
+> Metal pass, prove GPU≈CPU within ≤1 LSB, add `sampling_device` stat." The CPU
+> `trilinear_sample_attributes` remains the verified reference/oracle.
+
 ## Execution routing and topology
 
 - Route: **direct** (coordinator implements; standing user preference from the
