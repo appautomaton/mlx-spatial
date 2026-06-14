@@ -357,6 +357,7 @@ def export_pixal3d_glb(
     remesh_repair_nonmanifold: bool = False,
     simplify_backend: str | None = None,
     diagnostics_path: str | Path | None = None,
+    texture_postprocess: str = "legacy-dilation",
     expose_raw_postprocess_inputs: bool = False,
 ) -> Pixal3DGlbExportResult:
     """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
@@ -655,6 +656,7 @@ def export_pixal3d_glb(
             source_projection_fallback_neighbors=source_projection_fallback_neighbors,
             source_projection_fallback_max_distance_voxels=source_projection_fallback_max_distance_voxels,
             render_padding=render_padding,
+            postprocess=texture_postprocess,
             expose_raw_postprocess_inputs=expose_raw_postprocess_inputs,
         ),
         memory_monitor=memory_monitor,

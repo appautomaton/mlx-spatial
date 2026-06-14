@@ -46,6 +46,48 @@ class NativeTextureBakeResult:
     raw_coverage_status: np.ndarray | None = None
 
 
+# Reference inverse-coverage statuses (o_voxel.postprocess.to_glb inpaints
+# every texel with no valid sample): no_face, missing_surface, out_of_grid.
+_TELEA_INVERSE_COVERAGE_STATUSES = (0, 2, 3)
+
+
+def _apply_reference_telea_postprocess(
+    base_color_rgba: np.ndarray,
+    metallic_roughness: np.ndarray,
+    coverage_status: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Reference Telea postprocess over the raw inverse-coverage mask.
+
+    Inpaints base_color RGB (radius 3) and alpha + each metallic/roughness channel
+    (radius 1) over texels with no valid sample (coverage status in {0,2,3}),
+    leaving covered texels' exact samples untouched. Alpha is inpainted, not
+    shortcut to 255 (the GLB writer emits an OPAQUE material).
+    """
+    mask = np.isin(coverage_status, _TELEA_INVERSE_COVERAGE_STATUSES).astype(np.uint8)
+    out_base = base_color_rgba.copy()
+    out_mr = metallic_roughness.copy()
+    out_base[:, :, :3] = telea_inpaint(np.ascontiguousarray(base_color_rgba[:, :, :3]), mask, 3)
+    out_base[:, :, 3] = telea_inpaint(np.ascontiguousarray(base_color_rgba[:, :, 3]), mask, 1)
+    for channel in range(out_mr.shape[2]):
+        out_mr[:, :, channel] = telea_inpaint(
+            np.ascontiguousarray(metallic_roughness[:, :, channel]), mask, 1
+        )
+    band = int(mask.sum())
+    stats: dict[str, Any] = {
+        "postprocess_mode": "native-telea-inpaint",
+        "telea_inverse_coverage_statuses": list(_TELEA_INVERSE_COVERAGE_STATUSES),
+        "telea_mask_texel_count": band,
+        "telea_painted_texel_count_base_color_rgb": band,
+        "telea_painted_texel_count_alpha": band,
+        "telea_painted_texel_count_metallic_roughness": band,
+        "telea_radius_base_color_rgb": 3,
+        "telea_radius_alpha": 1,
+        "telea_radius_metallic_roughness": 1,
+        "legacy_postprocess_applied": False,
+    }
+    return out_base, out_mr, stats
+
+
 def bake_pbr_texture(
     mesh: NativeUvMesh,
     texture_coordinates: np.ndarray,
@@ -64,9 +106,20 @@ def bake_pbr_texture(
     source_projection_fallback_max_distance_voxels: float = 12.0,
     surface_fill: bool = True,
     render_padding: bool = True,
+    postprocess: str = "legacy-dilation",
     expose_raw_postprocess_inputs: bool = False,
 ) -> NativeTextureBakeResult:
     """Bake Pixal3D/TRELLIS-style PBR textures through the native Metal backend.
+
+    ``postprocess`` selects the texel-fill postprocess:
+
+    - ``"legacy-dilation"`` (default): the legacy dilation + surface-fill + gutter
+      + render-padding fills (byte-identical to prior behaviour).
+    - ``"telea"``: the reference application — skip the legacy fills and inpaint
+      the raw inverse-coverage mask (status in {0,2,3}) with native Telea
+      (base_color RGB radius 3; metallic/roughness/alpha radius 1 each), matching
+      ``o_voxel.postprocess.to_glb``. ``postprocess_mode`` reports
+      ``"native-telea-inpaint"`` and the legacy fill counters are zero.
 
     When ``expose_raw_postprocess_inputs`` is True the result additionally carries
     the raw pre-postprocess channels and coverage status (``raw_base_color_rgba``,
@@ -74,6 +127,9 @@ def bake_pbr_texture(
     reference Telea inpaint operates on, before dilation/surface-fill/gutter.
     """
 
+    if postprocess not in {"legacy-dilation", "telea"}:
+        raise ValueError("postprocess must be 'legacy-dilation' or 'telea'")
+    apply_legacy_postprocess = postprocess == "legacy-dilation"
     if source_projection_fallback_mode not in {"knn", "disabled"}:
         raise ValueError("source_projection_fallback_mode must be 'knn' or 'disabled'")
     if source_projection_fallback_neighbors <= 0:
@@ -110,9 +166,17 @@ def bake_pbr_texture(
         bool(render_padding),
         bool(surface_fill),
         bool(expose_raw_postprocess_inputs),
+        bool(apply_legacy_postprocess),
     )
     stats = dict(result["stats"])
     coverage_status = np.asarray(result["coverage_mask"], dtype=np.uint8)
+    base_color_rgba = np.asarray(result["base_color_rgba"], dtype=np.uint8)
+    metallic_roughness = np.asarray(result["metallic_roughness"], dtype=np.uint8)
+    if postprocess == "telea":
+        base_color_rgba, metallic_roughness, telea_stats = _apply_reference_telea_postprocess(
+            base_color_rgba, metallic_roughness, coverage_status
+        )
+        stats.update(telea_stats)
     stats["coverage_status_legend"] = dict(COVERAGE_STATUS_LABELS)
     stats["coverage_status_histogram"] = coverage_status_histogram(coverage_status)
     raw_base_color = (
@@ -134,8 +198,8 @@ def bake_pbr_texture(
         vertices=mesh.vertices,
         faces=mesh.faces,
         uvs=mesh.uvs,
-        base_color_rgba=np.asarray(result["base_color_rgba"], dtype=np.uint8),
-        metallic_roughness=np.asarray(result["metallic_roughness"], dtype=np.uint8),
+        base_color_rgba=base_color_rgba,
+        metallic_roughness=metallic_roughness,
         coverage_mask=coverage_status == 1,
         coverage_status=coverage_status,
         texture_size=int(stats["texture_size"]),

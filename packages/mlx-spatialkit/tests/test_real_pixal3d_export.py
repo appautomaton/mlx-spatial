@@ -3079,3 +3079,59 @@ def test_inpaint_oracle_parity_against_cv2_telea() -> None:
             "no inpaint oracle cache present under /tmp/inpaint-oracle-cache; "
             "regenerate via tests/tools/gen_inpaint_oracle_anchors.py"
         )
+
+
+@pytest.mark.heavy
+def test_export_telea_postprocess_real_fixture_paints_gutter_without_black_seam() -> None:
+    # TPP-03: the reference Telea postprocess runs end-to-end on a real fixture,
+    # painting the inverse-coverage gutter with no black-seam texels adjacent to
+    # coverage (the residual the user flagged on the unwrap visual checkpoint).
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+    fixture = _repo_root() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-decoded-pbr"
+    if not fixture.exists():
+        pytest.skip(f"real Pixal3D decoded fixture not present: {fixture}")
+
+    from mlx_spatialkit import telea_inpaint
+
+    out_dir = Path("/tmp") / f"mlx-spatialkit-telea-postprocess-{os.getpid()}"
+    result = export_pixal3d_glb(
+        fixture,
+        out_dir,
+        texture_size=1024,
+        target_faces=50_000,
+        texture_postprocess="telea",
+        expose_raw_postprocess_inputs=True,
+    )
+
+    # Valid GLB through the telea path.
+    assert result.glb.path.read_bytes()[:4] == b"glTF"
+    assert result.glb.bytes_written > 1_000_000
+
+    # Honest telea stats in diagnostics; legacy fills disabled and zero.
+    stats = result.diagnostics["stages"]["texture_bake"]["stats"]
+    assert stats["postprocess_mode"] == "native-telea-inpaint"
+    assert stats["legacy_postprocess_applied"] is False
+    assert stats["dilation_filled_texel_count"] == 0
+    assert stats["surface_filled_texel_count"] == 0
+    assert stats["telea_mask_texel_count"] > 0
+
+    # Real-data seam probe: reproduce the export's deterministic base_color telea
+    # over the raw inverse-coverage mask and assert no black seam at the boundary.
+    raw = result.raw_texture_inputs
+    assert raw is not None
+    base = raw["raw_base_color_rgba"]
+    status = raw["raw_coverage_status"]
+    mask = np.isin(status, (0, 2, 3)).astype(np.uint8)
+    painted = telea_inpaint(np.ascontiguousarray(base[:, :, :3]), mask, 3)
+    covered = ~mask.astype(bool)
+    adj = np.zeros_like(covered)
+    adj[1:, :] |= covered[:-1, :]
+    adj[:-1, :] |= covered[1:, :]
+    adj[:, 1:] |= covered[:, :-1]
+    adj[:, :-1] |= covered[:, 1:]
+    seam = mask.astype(bool) & adj
+    assert seam.any(), "expected gutter texels adjacent to coverage"
+    seam_rgb = painted[seam]
+    black = ~seam_rgb.any(axis=1)
+    assert black.mean() < 0.01, f"black-seam texels adjacent to coverage: {black.mean():.4f}"

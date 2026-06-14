@@ -1261,7 +1261,8 @@ nb::dict bake_pbr_texture_metal(
     double source_projection_fallback_max_distance_voxels,
     bool render_padding,
     bool surface_fill,
-    bool expose_raw_postprocess_inputs) {
+    bool expose_raw_postprocess_inputs,
+    bool apply_legacy_postprocess) {
   if (texture_size <= 0) {
     throw nb::value_error("texture_size must be positive");
   }
@@ -1525,44 +1526,52 @@ nb::dict bake_pbr_texture_metal(
       raw_coverage = coverage;
     }
 
+    // Legacy dilation/surface-fill/gutter/render-padding postprocess. Skipped
+    // whole when apply_legacy_postprocess is false (the Slice-3 reference Telea
+    // path runs its own postprocess over the raw channels in Python), leaving the
+    // channels + coverage raw and all legacy fill counters honestly zero.
     int64_t dilation_passes = 0;
     const int64_t dilation_max_passes = resolve_dilation_max_passes(texture_size, atlas_cols, atlas_rows);
-    const int64_t dilation_filled = dilate_missing_surface_texels(
-        base_color,
-        metallic_roughness,
-        coverage,
-        texture_size,
-        dilation_max_passes,
-        &dilation_passes);
+    int64_t dilation_filled = 0;
     int64_t surface_fill_seed_texels = 0;
     int64_t surface_fill_cross_gap_prevented = 0;
     int64_t surface_filled = 0;
-    if (surface_fill) {
-      surface_filled = fill_remaining_surface_texels(
+    constexpr int64_t gutter_fill_max_passes = 4;
+    int64_t gutter_fill_passes = 0;
+    int64_t gutter_filled = 0;
+    int64_t render_padding_seed_texels = 0;
+    int64_t render_padding_filled = 0;
+    if (apply_legacy_postprocess) {
+      dilation_filled = dilate_missing_surface_texels(
           base_color,
           metallic_roughness,
           coverage,
           texture_size,
-          &surface_fill_seed_texels,
-          &surface_fill_cross_gap_prevented);
-    }
-    constexpr int64_t gutter_fill_max_passes = 4;
-    int64_t gutter_fill_passes = 0;
-    const int64_t gutter_filled = fill_no_face_gutter_texels(
-        base_color,
-        metallic_roughness,
-        coverage,
-        texture_size,
-        gutter_fill_max_passes,
-        &gutter_fill_passes);
-    int64_t render_padding_seed_texels = 0;
-    int64_t render_padding_filled = 0;
-    if (render_padding) {
-      render_padding_filled = fill_render_padding_texels(
+          dilation_max_passes,
+          &dilation_passes);
+      if (surface_fill) {
+        surface_filled = fill_remaining_surface_texels(
+            base_color,
+            metallic_roughness,
+            coverage,
+            texture_size,
+            &surface_fill_seed_texels,
+            &surface_fill_cross_gap_prevented);
+      }
+      gutter_filled = fill_no_face_gutter_texels(
           base_color,
           metallic_roughness,
+          coverage,
           texture_size,
-          &render_padding_seed_texels);
+          gutter_fill_max_passes,
+          &gutter_fill_passes);
+      if (render_padding) {
+        render_padding_filled = fill_render_padding_texels(
+            base_color,
+            metallic_roughness,
+            texture_size,
+            &render_padding_seed_texels);
+      }
     }
 
     int64_t no_face = 0;
@@ -1705,7 +1714,10 @@ nb::dict bake_pbr_texture_metal(
     stats["trilinear_missing_corner_texel_count"] = reference_sample_stats.trilinear_missing_corner_texels;
     stats["trilinear_out_of_grid_corner_texel_count"] = reference_sample_stats.trilinear_out_of_grid_corner_texels;
     stats["trilinear_invalid_texel_count"] = reference_sample_stats.trilinear_invalid_texels;
-    stats["postprocess_mode"] = surface_fill ? "native-dilation-and-surface-fill" : "native-dilation-only";
+    stats["postprocess_mode"] = !apply_legacy_postprocess
+                                    ? "raw-passthrough"
+                                    : (surface_fill ? "native-dilation-and-surface-fill" : "native-dilation-only");
+    stats["legacy_postprocess_applied"] = apply_legacy_postprocess;
 
     nb::dict result;
     result["base_color_rgba"] = mesh_common::make_uint8_array(std::move(base_color), static_cast<size_t>(texture_size), static_cast<size_t>(texture_size), 4);

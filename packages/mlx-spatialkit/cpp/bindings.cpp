@@ -195,6 +195,7 @@ NB_MODULE(_native, module) {
              nb::arg("render_padding") = true,
              nb::arg("surface_fill") = true,
              nb::arg("expose_raw_postprocess_inputs") = false,
+             nb::arg("apply_legacy_postprocess") = true,
              "Bake PBR texture buffers with the Metal backend.");
 
   module.def("telea_inpaint",

@@ -1038,3 +1038,79 @@ def test_inpaint_synthetic_oracle() -> None:
         assert err.max() <= case["tolerance_max_abs_err"], (
             f"{case['name']}: max|ours-cv2|={int(err.max())} > tol {case['tolerance_max_abs_err']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 / Slice 3: reference-path Telea postprocess application (TPP-03)
+# ---------------------------------------------------------------------------
+
+
+def _gutter_mesh_and_fields():
+    vertices = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64)
+    mesh = make_face_atlas_uvs(vertices, faces, tile_padding=0.2)  # padding => real gutter
+    coords, attrs = _texture_fields()
+    return mesh, coords, attrs
+
+
+def test_bake_rejects_unknown_postprocess() -> None:
+    mesh, coords, attrs = _gutter_mesh_and_fields()
+    with pytest.raises(ValueError, match="postprocess must be"):
+        bake_pbr_texture(mesh, coords, attrs, texture_size=8, origin=(0, 0, 0), voxel_size=1.0, decode_resolution=2, postprocess="bogus")
+
+
+def test_bake_telea_postprocess_reference_application() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+    mesh, coords, attrs = _gutter_mesh_and_fields()
+    kw = dict(texture_size=16, origin=(0, 0, 0), voxel_size=1.0, decode_resolution=2)
+    baked = bake_pbr_texture(mesh, coords, attrs, postprocess="telea", expose_raw_postprocess_inputs=True, **kw)
+
+    mask = np.isin(baked.raw_coverage_status, (0, 2, 3))
+    covered = ~mask
+    assert mask.sum() > 0 and covered.sum() > 0, "need both gutter and covered texels"
+
+    # Path selection + honest stats: telea mode, legacy fills disabled/zero.
+    assert baked.stats["postprocess_mode"] == "native-telea-inpaint"
+    assert baked.stats["legacy_postprocess_applied"] is False
+    assert baked.stats["dilation_filled_texel_count"] == 0
+    assert baked.stats["surface_filled_texel_count"] == 0
+    assert baked.stats["telea_mask_texel_count"] == int(mask.sum())
+    assert baked.stats["telea_radius_base_color_rgb"] == 3
+    assert baked.stats["telea_radius_alpha"] == 1
+
+    # Covered texels keep their exact raw samples (Telea writes only masked texels).
+    assert np.array_equal(baked.base_color_rgba[covered], baked.raw_base_color_rgba[covered])
+    assert np.array_equal(baked.metallic_roughness[covered], baked.raw_metallic_roughness[covered])
+
+    # Gutter texels were painted (raw gutter base RGB is 0; telea fills from neighbours).
+    changed = (baked.base_color_rgba[:, :, :3] != baked.raw_base_color_rgba[:, :, :3]).any(axis=2)
+    assert changed[mask].any()
+
+    # No black seam: masked texels 4-adjacent to coverage must be painted nonzero RGB.
+    adj = np.zeros_like(covered)
+    adj[1:, :] |= covered[:-1, :]
+    adj[:-1, :] |= covered[1:, :]
+    adj[:, 1:] |= covered[:, :-1]
+    adj[:, :-1] |= covered[:, 1:]
+    seam = mask & adj
+    if seam.any():
+        seam_rgb = baked.base_color_rgba[:, :, :3][seam]
+        assert np.all(seam_rgb.any(axis=1)), "black seam texel adjacent to coverage"
+
+
+def test_bake_legacy_postprocess_is_default_and_unchanged() -> None:
+    if not metal_device_available():
+        pytest.skip("Metal device unavailable")
+    mesh, coords, attrs = _gutter_mesh_and_fields()
+    kw = dict(texture_size=16, origin=(0, 0, 0), voxel_size=1.0, decode_resolution=2)
+    default = bake_pbr_texture(mesh, coords, attrs, **kw)
+    explicit = bake_pbr_texture(mesh, coords, attrs, postprocess="legacy-dilation", **kw)
+    assert np.array_equal(default.base_color_rgba, explicit.base_color_rgba)
+    assert np.array_equal(default.metallic_roughness, explicit.metallic_roughness)
+    assert default.stats["postprocess_mode"] == explicit.stats["postprocess_mode"]
+    assert default.stats["postprocess_mode"].startswith("native-dilation")
+    assert default.stats["legacy_postprocess_applied"] is True
