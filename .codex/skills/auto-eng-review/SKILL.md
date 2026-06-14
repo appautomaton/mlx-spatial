@@ -17,7 +17,7 @@ Execution safety review. Architecture, data flow, edge cases, test strategy, not
 
 A good review names the riskiest slice, the most likely failure mode, and whether the test strategy catches it. A bad review lists generic concerns.
 
-Loading discipline: one PLAN.md read, optional DESIGN.md when `canonical_design` exists, one risk matrix, one verdict. Read source files when assessing technical risk — slice boundaries, dependency assumptions, and blast radius claims are only verifiable against the actual code.
+Loading discipline: one PLAN.md read, optional DESIGN.md when `canonical_design` exists, one risk matrix, one verdict. Read source files when assessing technical risk: slice boundaries, dependency assumptions, and blast radius claims are only verifiable against the actual code.
 
 ## Quality Gate
 
@@ -78,6 +78,10 @@ Use strict vocabulary. No synonyms.
 | `approved_with_risks` | Implementation is safe but carries known risks. Document them. | `auto-execute` |
 | `needs_correction` | Plan is flawed or unsafe. Return to planning. | `auto-plan` |
 
+### Outside Voice
+
+Optional. When a second model is reachable from this session and the plan carries non-trivial risk, read `references/outside-voice.md` after rendering the verdict: a bounded cross-model pass that surfaces tension to the user and never auto-applies anything.
+
 ### Append Review
 
 Add a `## Review: Engineering` section to `PLAN.md` using the exact template in `references/review-template.md`.
@@ -94,7 +98,7 @@ State the next skill based on the verdict.
 
 - `PLAN.md` with appended `## Review: Engineering` section
 - `.agent/.automaton/state/current.json` updated through `sync-status.mjs` with `engineering_review`; `stage` is unchanged by this skill
-- Next handoff, mapped from verdict: `approved` or `approved_with_risks` → stop, recommend `auto-execute`; `needs_correction` → stop, recommend `auto-plan`. Entering `auto-execute` starts code changes, so the user or host invokes it.
+- Handoff (verdict-mapped, always stops): `approved`/`approved_with_risks` → `Next: auto-execute`; `needs_correction` → `Next: auto-plan`.
 
 ## Rules
 

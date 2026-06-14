@@ -39,6 +39,8 @@ Determine three internal axes:
 
 Hold this classification internally to steer questioning. Confirm the read in plain language grounded in the user's words, not by naming the taxonomy. If the user corrects any dimension, adjust before continuing. For bug-sized goals with a known fix, consider whether `auto-frame` is the better entry point. For Startup or Builder mode, read `references/operating-principles.md` for doctrine; for Content mode, read `references/content-intake.md`; for roadmap-sized goals, read `.agent/.automaton/references/ROADMAP-CONTRACT.md`.
 
+Read `.agent/wiki/LEARNINGS.md` when it exists: known project facts sharpen scope and feasibility questions before the diagnostic asks them.
+
 ### Run Diagnostic
 
 Ask only questions that make the objective frameable. Use the active reference:
@@ -112,11 +114,11 @@ Approved path:
 - Deferred scope is named for later work in `INTAKE.md`; it is promoted to `ROADMAP.md` only on a user-approved phased decomposition.
 - `stage: frame` and `active_change` are recorded through `sync-status.mjs`.
 - `.agent/steering/ROADMAP.md` is updated only when the user approves a phased decomposition.
-- Approved, complete intake should flow into `auto-frame` without another user prompt when frame-ready.
+- Approved, complete intake continues inline into `auto-frame` without another user prompt when frame-ready.
 
 The INTAKE.md is a decision record, not a transcript. It is a faithful record of what the user approved, not the agent's editorial rewrite.
 
-If the user does not approve an approach, output a short discussion summary, why no approach was selected, deferred scope worth preserving, a recommended next step, and no file writes.
+If the user does not approve an approach, output a short discussion summary, why no approach was selected, deferred scope worth preserving, a `Next:` line, and no file writes.
 
 ## Rules
 

@@ -36,6 +36,8 @@ Read `.agent/work/<active_change>/INTAKE.md` if it exists. `INTAKE.md` is prefer
 
 Adopt settled office-hours context: work scale, work shape, Broader intent, target user or stakeholder, scope coverage, rejected framings, and anti-goals. Do not re-ask settled context or reintroduce rejected directions.
 
+Read `.agent/wiki/LEARNINGS.md` when it exists: facts earlier changes paid to learn often bound feasibility, constraints, and risks before new discovery does.
+
 State the goal in one sentence. If you cannot, ask one clarifying question. If the request still needs objective discovery or multiple material decisions before any useful SPEC can be written, continue into `auto-office-hours`'s diagnostic and intake flow in the same session.
 
 If your SPEC would be narrower than the user's stated goal or office-hours broader intent, widen the SPEC, ask for confirmation, or record the deferred scope as a `Deferred / Not in scope` note inside this change's SPEC. Do not create `ROADMAP.md` phases from a narrowed SPEC; phased decomposition belongs to `auto-office-hours` after the user approves it. Silent narrowing is a framing failure.
@@ -87,7 +89,7 @@ Do NOT write `SPEC.md` while a needs-decision item would change scope, approach,
 
 Read `references/spec-shape.md` and write the SPEC with its **core** fields and **conditional** fields. Conditional fields appear only when their named trigger applies.
 
-Apply `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` while writing: no mirror sections, index over transcript, append-replace repeated sections, and replace prior `## Review:` sections on refresh.
+Apply the Artifact Signal Discipline rules from `.agent/.automaton/references/FRAMEWORK.md` while writing, and replace prior `## Review:` sections on refresh. For large coherent work, follow the spec layout in `.agent/.automaton/references/ARTIFACT-LIFECYCLE.md` (Progressive Disclosure).
 </GATE>
 
 ### Update State
@@ -100,7 +102,7 @@ After writing SPEC.md, run `node .agent/.automaton/scripts/sync-status.mjs --act
 
 - Frameable path: **SPEC.md** written to `.agent/work/<change>/SPEC.md`; `canonical_spec` and frame state recorded through `sync-status.mjs`.
 - Not-frameable path: continue into `auto-office-hours`'s contract and do not report framing complete until an approved intake exists and SPEC.md can be written.
-- Handoff: after SPEC.md, continue inline into `auto-plan` when no review is needed and context is healthy. `auto-ceo-review` is an optional review — recommend it and stop rather than auto-running it on the spec just written. If not frameable, continue inline into `auto-office-hours` with the concrete blocker.
+- Handoff: after SPEC.md, continue inline into `auto-plan` when no review is needed and context is healthy; for the optional `auto-ceo-review`, stop with `Next: auto-ceo-review` rather than auto-running it. If not frameable, continue inline into `auto-office-hours` with the concrete blocker.
 
 ## Rules
 
