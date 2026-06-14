@@ -9,6 +9,7 @@ import numpy as np
 
 from ._native import bake_pbr_texture_metal as _bake_pbr_texture_metal
 from ._native import metal_device_available, validate_pixal3d_texture_attributes
+from ._native import telea_inpaint as _telea_inpaint
 from .export import NativeUvMesh
 
 
@@ -117,6 +118,22 @@ def bake_pbr_texture(
     )
 
 
+def telea_inpaint(image: np.ndarray, mask: np.ndarray, radius: int = 3) -> np.ndarray:
+    """Telea fast-marching inpaint, dependency-light cv2.INPAINT_TELEA equivalent.
+
+    ``image`` is a uint8 array of shape ``(H, W)`` or ``(H, W, C)`` with
+    ``C in {1, 3, 4}``; ``mask`` is a uint8 ``(H, W)`` array whose nonzero
+    entries mark pixels to fill. Returns a uint8 array of the same shape as
+    ``image`` in which only masked pixels are overwritten (unmasked bytes are
+    bit-identical to the input). The marching order is deterministic, so the
+    result is byte-stable across processes.
+    """
+
+    image_u8 = np.ascontiguousarray(image, dtype=np.uint8)
+    mask_u8 = np.ascontiguousarray(mask, dtype=np.uint8)
+    return np.asarray(_telea_inpaint(image_u8, mask_u8, int(radius)), dtype=np.uint8)
+
+
 def coverage_status_histogram(coverage_status: np.ndarray) -> dict[str, int]:
     """Count every known texture coverage status plus unknown native values."""
 
@@ -139,5 +156,6 @@ __all__ = [
     "bake_pbr_texture",
     "coverage_status_histogram",
     "metal_device_available",
+    "telea_inpaint",
     "validate_pixal3d_texture_attributes",
 ]

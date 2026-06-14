@@ -3,6 +3,7 @@
 
 #include "flexi_dual_grid.hpp"
 #include "glb_writer.hpp"
+#include "inpaint.hpp"
 #include "metal_probe.hpp"
 #include "mesh_processing.hpp"
 #include "pixal3d_contracts.hpp"
@@ -194,4 +195,13 @@ NB_MODULE(_native, module) {
              nb::arg("render_padding") = true,
              nb::arg("surface_fill") = true,
              "Bake PBR texture buffers with the Metal backend.");
+
+  module.def("telea_inpaint",
+             &mlx_spatialkit::telea_inpaint,
+             nb::arg("image"),
+             nb::arg("mask"),
+             nb::arg("radius") = 3,
+             "Native Telea (FMM) inpaint: fill masked uint8 pixels, dependency-light "
+             "equivalent of cv2.inpaint(..., INPAINT_TELEA). Masked-only writes, "
+             "deterministic (T, y, x) marching order.");
 }

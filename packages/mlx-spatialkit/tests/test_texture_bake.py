@@ -12,6 +12,7 @@ from mlx_spatialkit import (
     make_face_atlas_uvs,
     make_native_chart_uvs,
     metal_device_available,
+    telea_inpaint,
 )
 
 
@@ -872,3 +873,132 @@ def test_bake_pbr_texture_rejects_invalid_texture_contracts() -> None:
             attributes,
             texture_size=4,
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 / Slice 1: native Telea (FMM) inpaint core (TPP-01, unit-level TPP-07)
+# ---------------------------------------------------------------------------
+
+
+def _ramp_image(height: int, width: int, slope: float, base: float = 20.0) -> np.ndarray:
+    cols = np.arange(width, dtype=np.float32)
+    row = np.clip(base + slope * cols, 0, 255)
+    return np.repeat(row[None, :], height, axis=0).astype(np.uint8)
+
+
+def test_telea_inpaint_writes_only_masked_pixels() -> None:
+    rng = np.arange(12 * 10, dtype=np.uint8).reshape(12, 10)
+    for channels in (None, 1, 3, 4):
+        image = rng if channels is None else np.stack([rng + c for c in range(channels)], axis=-1)
+        image = image.astype(np.uint8)
+        mask = np.zeros((12, 10), dtype=np.uint8)
+        mask[5:7, 4:6] = 1
+        out = telea_inpaint(image, mask, radius=3)
+        assert out.shape == image.shape
+        assert out.dtype == np.uint8
+        # Unmasked bytes are bit-identical to the input.
+        unmasked = mask == 0
+        assert np.array_equal(out[unmasked], image[unmasked])
+        # Masked pixels were actually filled (not left at their input value here,
+        # where the surrounding gradient differs from the masked input).
+        assert out[mask != 0].shape[0] > 0
+
+
+def test_telea_inpaint_radius_respected_for_isolated_pixel() -> None:
+    # A single isolated masked pixel: pixels beyond the inpaint window must not
+    # influence its filled value (windowed-weight test, Codex P1 scope). The
+    # Telea gradient-extrapolation term reads the immediate neighbors of window
+    # pixels, so the true influence reach is radius B + 1 (this matches OpenCV's
+    # INPAINT_TELEA); pixels strictly beyond (B+1) cannot contribute.
+    size = 15
+    radius = 3
+    reach2 = (radius + 1) ** 2
+    cy = cx = size // 2
+    yy, xx = np.mgrid[0:size, 0:size]
+    dist2 = (yy - cy) ** 2 + (xx - cx) ** 2
+    base = np.full((size, size), 100, dtype=np.uint8)
+    far = base.copy()
+    far[dist2 > reach2] = 200  # differ only beyond the (B+1) influence reach
+    mask = np.zeros((size, size), dtype=np.uint8)
+    mask[cy, cx] = 1
+    out_base = telea_inpaint(base, mask, radius=radius)
+    out_far = telea_inpaint(far, mask, radius=radius)
+    assert out_base[cy, cx] == out_far[cy, cx]
+
+
+def test_telea_inpaint_continues_linear_gradient() -> None:
+    # Inpainting a band in a linear ramp continues the gradient (the Telea
+    # gradient-extrapolation term); a dilation/constant fill would not.
+    slope = 6.0
+    image = _ramp_image(8, 20, slope=slope)
+    mask = np.zeros((8, 20), dtype=np.uint8)
+    mask[:, 8:12] = 1
+    out = telea_inpaint(image, mask, radius=3)
+    expected_cols = np.clip(20.0 + slope * np.arange(8, 12), 0, 255)
+    for offset, col in enumerate(range(8, 12)):
+        band = out[:, col].astype(np.float32)
+        assert np.all(np.abs(band - expected_cols[offset]) <= 8), (
+            f"col {col}: {band.tolist()} vs expected ~{expected_cols[offset]}"
+        )
+    # Monotone across the band: clearly not a constant fill.
+    assert out[:, 11].mean() - out[:, 8].mean() > 8
+
+
+def test_telea_inpaint_is_repeatable() -> None:
+    image = _ramp_image(16, 24, slope=4.0)
+    mask = np.zeros((16, 24), dtype=np.uint8)
+    mask[4:12, 9:15] = 1
+    first = telea_inpaint(image, mask, radius=3)
+    second = telea_inpaint(image, mask, radius=3)
+    assert np.array_equal(first, second)
+
+
+def test_telea_inpaint_deterministic_across_pythonhashseed() -> None:
+    # Unit-level TPP-07: byte-identical output across PYTHONHASHSEED 0/1 subprocesses.
+    import hashlib
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "import numpy as np, hashlib;"
+        "from mlx_spatialkit import telea_inpaint;"
+        "cols=np.clip(20+4*np.arange(24),0,255).astype(np.uint8);"
+        "img=np.repeat(cols[None,:],16,axis=0).astype(np.uint8);"
+        "m=np.zeros((16,24),np.uint8);m[4:12,9:15]=1;"
+        "o=telea_inpaint(img,m,3);"
+        "print(hashlib.sha256(np.ascontiguousarray(o).tobytes()).hexdigest())"
+    )
+    digests = []
+    for seed in ("0", "1"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+        digests.append(result.stdout.strip())
+    assert digests[0] == digests[1]
+
+
+def test_telea_inpaint_rejects_invalid_radius() -> None:
+    image = np.zeros((6, 6), dtype=np.uint8)
+    mask = np.zeros((6, 6), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        telea_inpaint(image, mask, radius=0)
+
+
+def test_telea_inpaint_rejects_mask_shape_mismatch() -> None:
+    image = np.zeros((6, 6, 3), dtype=np.uint8)
+    mask = np.zeros((6, 5), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        telea_inpaint(image, mask, radius=3)
+
+
+def test_telea_inpaint_rejects_unsupported_channel_count() -> None:
+    image = np.zeros((6, 6, 2), dtype=np.uint8)
+    mask = np.zeros((6, 6), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        telea_inpaint(image, mask, radius=3)

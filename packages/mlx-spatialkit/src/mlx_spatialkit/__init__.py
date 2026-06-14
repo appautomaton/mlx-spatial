@@ -23,7 +23,13 @@ from .export import (
 )
 from .glb_compare import compare_textured_glbs, inspect_glb, parse_glb, png_coverage
 from .mesh import NativeMesh, clean_mesh, extract_flexi_dual_grid, mesh_metrics, simplify_mesh
-from .texture import COVERAGE_STATUS_LABELS, NativeTextureBakeResult, bake_pbr_texture, coverage_status_histogram
+from .texture import (
+    COVERAGE_STATUS_LABELS,
+    NativeTextureBakeResult,
+    bake_pbr_texture,
+    coverage_status_histogram,
+    telea_inpaint,
+)
 
 __all__ = [
     "NativeMesh",
@@ -49,6 +55,7 @@ __all__ = [
     "parse_glb",
     "png_coverage",
     "simplify_mesh",
+    "telea_inpaint",
     "textured_glb_payload",
     "validate_pixal3d_decoded",
     "validate_pixal3d_shape_fields",
