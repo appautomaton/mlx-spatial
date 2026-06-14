@@ -95,6 +95,9 @@ class Pixal3DGlbExportResult:
     glb: NativeGlbArtifact
     diagnostics_path: Path
     diagnostics: dict[str, Any]
+    # Populated only when export_pixal3d_glb(..., expose_raw_postprocess_inputs=True):
+    # the raw pre-postprocess bake channels + coverage status (Slice-2 oracle contract).
+    raw_texture_inputs: dict[str, np.ndarray] | None = None
 
 
 def validate_pixal3d_decoded(
@@ -354,6 +357,7 @@ def export_pixal3d_glb(
     remesh_repair_nonmanifold: bool = False,
     simplify_backend: str | None = None,
     diagnostics_path: str | Path | None = None,
+    expose_raw_postprocess_inputs: bool = False,
 ) -> Pixal3DGlbExportResult:
     """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
 
@@ -651,10 +655,18 @@ def export_pixal3d_glb(
             source_projection_fallback_neighbors=source_projection_fallback_neighbors,
             source_projection_fallback_max_distance_voxels=source_projection_fallback_max_distance_voxels,
             render_padding=render_padding,
+            expose_raw_postprocess_inputs=expose_raw_postprocess_inputs,
         ),
         memory_monitor=memory_monitor,
     )
     diagnostics["stages"]["texture_bake"].update(_texture_shape(baked))
+    raw_texture_inputs: dict[str, np.ndarray] | None = None
+    if expose_raw_postprocess_inputs and baked.raw_base_color_rgba is not None:
+        raw_texture_inputs = {
+            "raw_base_color_rgba": baked.raw_base_color_rgba,
+            "raw_metallic_roughness": baked.raw_metallic_roughness,
+            "raw_coverage_status": baked.raw_coverage_status,
+        }
     del texture_coordinates, texture_attributes, source_projection_vertices, source_projection_faces
     gc.collect()
     sample("after_texture_bake")
@@ -793,7 +805,12 @@ def export_pixal3d_glb(
     memory_monitor.stop()
     diagnostics["memory"] = memory_monitor.summary()
     _write_json_atomic(resolved_diagnostics_path, diagnostics)
-    return Pixal3DGlbExportResult(glb=glb, diagnostics_path=resolved_diagnostics_path, diagnostics=diagnostics)
+    return Pixal3DGlbExportResult(
+        glb=glb,
+        diagnostics_path=resolved_diagnostics_path,
+        diagnostics=diagnostics,
+        raw_texture_inputs=raw_texture_inputs,
+    )
 
 
 def _load_npz_array(payload: np.lib.npyio.NpzFile, key: str, path: Path) -> np.ndarray:

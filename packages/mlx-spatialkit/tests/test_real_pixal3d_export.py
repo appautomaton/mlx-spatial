@@ -3020,3 +3020,62 @@ def test_reference_uv_e2e_proof_violin_fixture() -> None:
         label="violin",
     )
     print(f"\n[violin reference-uv e2e proof] {summary}")
+
+
+@pytest.mark.heavy
+def test_inpaint_oracle_parity_against_cv2_telea() -> None:
+    # TPP-02: our native Telea matches the cv2 INPAINT_TELEA oracle on the real
+    # fixture inverse-coverage masks, within pinned tolerances (tight near the
+    # coverage band that bilinear rendering samples; looser, documented, over the
+    # full mask for long-range gutter extrapolation). Consumes the regenerable
+    # /tmp cache from gen_inpaint_oracle_anchors.py; no cv2 import at runtime.
+    import hashlib
+
+    from mlx_spatialkit import telea_inpaint
+
+    anchors_path = Path(__file__).resolve().parent / "data" / "inpaint_oracle_anchors.json"
+    if not anchors_path.exists():
+        pytest.skip("inpaint oracle anchors not generated")
+    anchors = json.loads(anchors_path.read_text())
+    cache_dir = Path("/tmp/inpaint-oracle-cache")
+
+    checked = 0
+    for key, fixture_anchor in anchors["fixtures"].items():
+        cache = cache_dir / f"{key}.npz"
+        if not cache.exists():
+            continue
+        data = np.load(cache)
+        mask = data["mask"]
+        band = data["band"].astype(bool)
+        # Cache integrity: the cached mask must match the committed anchor.
+        assert (
+            hashlib.sha256(np.ascontiguousarray(mask).tobytes()).hexdigest()
+            == fixture_anchor["mask_sha256"]
+        ), f"{key}: cached mask does not match anchors; regenerate the oracle cache"
+        sel = mask.astype(bool)
+        for name, group in fixture_anchor["groups"].items():
+            image = data[f"img__{name}"]
+            radius = int(data[f"radius__{name}"])
+            cv2_out = data[f"cv2__{name}"]
+            ours = telea_inpaint(image, mask, radius)
+            assert ours.shape == cv2_out.shape
+            if ours.ndim == 3:
+                m_full = np.repeat(sel[:, :, None], ours.shape[2], axis=2)
+                m_band = np.repeat(band[:, :, None], ours.shape[2], axis=2)
+            else:
+                m_full, m_band = sel, band
+            diff = np.abs(ours.astype(np.int32) - cv2_out.astype(np.int32))
+            band_p99 = float(np.percentile(diff[m_band], 99)) if m_band.sum() else 0.0
+            full_p99 = float(np.percentile(diff[m_full], 99)) if m_full.sum() else 0.0
+            assert band_p99 <= group["tolerance_near_band_p99"], (
+                f"{key}/{name}: near-band p99 {band_p99} > tol {group['tolerance_near_band_p99']}"
+            )
+            assert full_p99 <= group["tolerance_full_mask_p99"], (
+                f"{key}/{name}: full-mask p99 {full_p99} > tol {group['tolerance_full_mask_p99']}"
+            )
+            checked += 1
+    if checked == 0:
+        pytest.skip(
+            "no inpaint oracle cache present under /tmp/inpaint-oracle-cache; "
+            "regenerate via tests/tools/gen_inpaint_oracle_anchors.py"
+        )
