@@ -21,7 +21,7 @@ Close the first of two recorded geometry-quality defects (`.agent/wiki/LEARNINGS
 4. The bounded pre-QEM filler closes only simple/small loops; the reference-clean filler **appends centroid-fan faces with NO patch validation** (`cpp/simplify.cpp:1055`) — the `PatchRejectReason` guards belong to a *different* filler (`fill_small_boundary_loops`, `:1100`).
 5. Tests pin the residual as topology-preserved (`:2031,:2198,:2132`: `boundary_loop_count == qem_pre_fill_residual_boundary_loops`, residual ≤ 64).
 
-**Reference reality:** the ground-truth reference is **not watertight** — `boundary_edges: 25105` (`inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/trace.json:135`) — and its remesh branch skips the final cleanup/fill (`vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:164-187`). It renders watertight *because the boundary edges are coincident seams, not visible gaps.*
+**Baseline reality:** the comparison-baseline GLB (a prior MLX export, not ground truth) is **not watertight** — `boundary_edges: 25105` (`inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/trace.json:135`) — and its remesh branch skips the final cleanup/fill (`vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:164-187`). It renders watertight *because the boundary edges are coincident seams, not visible gaps.*
 
 ## Required outcome
 

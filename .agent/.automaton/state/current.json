@@ -1,6 +1,6 @@
 {
   "active_change": "2026-06-14-mlx-spatialkit-watertightness",
-  "stage": "execute",
+  "stage": "verified",
   "canonical_spec": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/SPEC.md",
   "canonical_design": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/DESIGN.md",
   "canonical_plan": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/PLAN.md"
