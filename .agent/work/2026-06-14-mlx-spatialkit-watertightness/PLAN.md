@@ -113,3 +113,13 @@ Build note: `rm -rf /tmp/mlx-spatialkit-build` before a clean rebuild; heavy art
 Verdict: **aligned_with_gaps** → edits applied. Codex confirmed the plan keeps thin-feature out of scope and the decomposition is sound, but flagged that the plan gated on *metrics* while the user judges by *eye*. Folded in: (1) Slice 1 renders the current output as a visual baseline (verified machinery: `scripts/spatialkit/render_glb_visual_parity.cjs`, export `visual_compare` stage); (2) the Slice 1 checkpoint now requires user visual confirmation of the defect + the seam-vs-genuine decision; (3) Slice 4's primary acceptance is the **browser render-proof** (human-confirmed no visible holes), metrics demoted to supporting; (4) Slice 3 filler-hardening made explicitly non-blocking when `genuine == 0` and Slice 2's render passes; (5) violin-string non-regression guard added to Slices 2/3.
 
 User decisions (2026-06-15): **done = visual watertightness** (render-proof is the gate, not raw metrics); **visual baseline = render current output, user confirms** the real defect before geometry mutation.
+
+## Outcome / Verification — change complete (2026-06-15)
+
+Slice 1 characterization settled the change: on the reference-target QEM path **both fixtures are geometrically watertight (0 genuine open boundaries) and render with no visible holes** (Slice 1 evidence + `/tmp/watertight-baseline/*/visual_parity/comparison.png`). The bounded goal — render watertight, no visible holes — is **already satisfied by current code**; no geometry mutation was needed.
+
+- **Acceptance:** "renders watertight on both fixtures" → MET (render-proof, user-confirmed); "genuine open boundary == 0" → MET (0 on both via position-weld); manifold preserved (code unchanged).
+- **Slices 2–4: not executed (superseded).** No genuine gaps to close and the asset already renders solid, so seam reconciliation / gap closure / gate work are unnecessary for the goal.
+- **Deferred (optional, non-blocking follow-on):** an honest-metric/gate fix so `boundary_loop_count` stops reporting coincident seams as non-watertight. It needs the seam-classification metric (not "tiny"), so deferred rather than folded in.
+
+User decision (2026-06-15): **close watertightness** (already render-watertight); **pivot to the thin-feature (violin-string) change** — the real remaining visible defect.
