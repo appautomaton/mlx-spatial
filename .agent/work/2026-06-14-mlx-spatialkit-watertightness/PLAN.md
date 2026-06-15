@@ -35,6 +35,11 @@ Defaults / overrides:
 **Touches:** `cpp/mesh_metrics.cpp`, `cpp/simplify.cpp` (stats), `src/mlx_spatialkit/export.py` (surface), `tests/`, `scripts/spatialkit/render_glb_visual_parity.cjs` (invoke only)
 **Produces:** baseline renders + classification metric + characterization numbers (no geometry mutation)
 
+**Status:** complete (characterization) — **decision checkpoint reached**
+**Evidence:** Exported both fixtures on the exact reference-target QEM config (`/tmp/watertight-baseline/{main,violin}/model.glb`, 13.7 MB / 8.7 MB). Position-weld classification (`/tmp/watertight_robust.py`): **genuine open boundaries == 0 on BOTH fixtures** — every boundary vertex (95,665 main / 17,733 violin) has a coincident-position partner; all boundary edges are coincident duplicate-position seams (UV-atlas + nonmanifold-repair splits). Browser render-proof (`render_glb_visual_parity.cjs`, iso/front/top): both render **solid with no visible holes**, closely matching the reference.
+**Plan correction:** characterization was achieved via Python position-weld analysis + render (no C++ metric needed to answer the decision); the committed C++ classification metric is deferred and folded into whichever post-decision path is chosen, since the finding (0 genuine gaps) changes the work. Slice 3 (genuine-gap closure) is confirmed **not needed** (genuine == 0).
+**Risks / next:** the hole-defect does not exist on the correct path; remaining value is honest metric/gate + optional coincident-seam reconciliation. Awaiting user decision (see checkpoint).
+
 ### Slice 2: Coincident duplicate-position seam reconciliation (weld)
 
 Required:
