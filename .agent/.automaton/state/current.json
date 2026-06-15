@@ -1,7 +1,7 @@
 {
-  "active_change": "2026-06-12-mlx-spatialkit-texture-postprocess",
-  "stage": "verified",
-  "canonical_spec": ".agent/work/2026-06-12-mlx-spatialkit-texture-postprocess/SPEC.md",
-  "canonical_design": ".agent/work/2026-06-12-mlx-spatialkit-texture-postprocess/DESIGN.md",
-  "canonical_plan": ".agent/work/2026-06-12-mlx-spatialkit-texture-postprocess/PLAN.md"
+  "active_change": "2026-06-14-mlx-spatialkit-watertightness",
+  "stage": "execute",
+  "canonical_spec": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/SPEC.md",
+  "canonical_design": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/DESIGN.md",
+  "canonical_plan": ".agent/work/2026-06-14-mlx-spatialkit-watertightness/PLAN.md"
 }
