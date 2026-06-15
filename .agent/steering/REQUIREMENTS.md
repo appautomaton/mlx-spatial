@@ -28,6 +28,7 @@
 - Python >=3.11, MLX as sole ML runtime (`pyproject.toml:10-11`).
 - safetensors-only checkpoint loading at runtime (`README.md:116`).
 - No PyTorch, CUDA, flash-attn, or gsplat as runtime dependencies (`README.md:363`).
+- Local M5 Max torch wheels (`torch==…+m5max`) are dev-only — isolated to the opt-in `torch-ref` group + gated parity tests (`MLX_SPATIAL_RUN_TORCH_PARITY=1`), never in default resolution. A leak via `[tool.uv.sources]` / `override-dependencies` was fixed in 0.0.3 (`uv.lock` clean).
 - xatlas and fast-simplification are runtime dependencies for mesh export (`pyproject.toml:14,19`).
 - Checkpoint formats: safetensors for MLX, with a dev-only conversion path from PyTorch `.ckpt`/`.pt` via `pt-safe-loader`.
 - Weights, inputs, outputs, and vendors are gitignored (`.gitignore:8-11`).
