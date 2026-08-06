@@ -7,7 +7,13 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-.claude/settings.local.json
+# Local agent tooling. Keep only durable change artifacts in Git.
+/.agent/*
+!/.agent/work/
+!/.agent/work/**
+/.claude/
+/.codex/
+/.opencode/
 
 weights/
 inputs/
