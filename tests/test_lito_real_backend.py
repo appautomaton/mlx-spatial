@@ -12,6 +12,7 @@ from PIL import Image
 from safetensors.numpy import save_file
 
 from mlx_spatial.lito import LitoInferencePipeline
+from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
 from mlx_spatial.lito_inference import LITO_REAL_TENSOR_SENTINELS
 
 
@@ -1191,6 +1192,11 @@ def _write_fake_lito_weights(root: Path) -> Path:
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         save_file(tensors, path)
+    trellis_root = root.parent / "trellis2" / "microsoft" / "TRELLIS-image-large"
+    for relative_path in LITO_TRELLIS_REQUIRED_FILES:
+        path = trellis_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
     return root
 
 

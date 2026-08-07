@@ -100,6 +100,10 @@ def test_pixal3d_fixture_manifests_bind_decoded_and_reference_lineages() -> None
             "upstream-preprocessed-black",
         ),
     )
+    missing = tuple(decoded_dir for decoded_dir, _, _ in fixtures if not decoded_dir.is_dir())
+    if missing:
+        pytest.skip("local Pixal3D fixture bundle not installed: " + ", ".join(str(path) for path in missing))
+
     for decoded_dir, lineage_id, preprocess_variant in fixtures:
         manifest = _load_pixal3d_fixture_manifest(decoded_dir)
         assert manifest is not None

@@ -260,6 +260,7 @@ def test_cli_generate_fails_closed_without_smoke_flag(tmp_path, capsys):
 
 def test_cli_generate_rejects_placeholder_weights_without_smoke_flag(tmp_path, capsys):
     root = _write_valid_weights(tmp_path / "weights")
+    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
     image = _write_synthetic_image(tmp_path / "input.png")
     output = tmp_path / "test.ply"
 

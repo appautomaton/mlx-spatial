@@ -10,6 +10,7 @@ from safetensors.numpy import save_file
 from safetensors.numpy import load_file
 
 from mlx_spatial.lito import LitoInferencePipeline
+from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
 from mlx_spatial.lito_inference import (
     LITO_RECOMMENDED_CFG_SCALE,
     LITO_RECOMMENDED_NUM_STEPS,
@@ -197,6 +198,7 @@ def test_generate_rejects_placeholder_weight_files_by_default(tmp_path):
     root = tmp_path / "weights"
     (root / "tokenizer").mkdir(parents=True)
     (root / "image_to_3d").mkdir(parents=True)
+    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
     save_file({"tokenizer.weight": np.ones((1,), dtype=np.float32)}, root / "tokenizer" / "lito_new.safetensors")
     save_file(
         {"dit.weight": np.ones((1,), dtype=np.float32)},
@@ -205,6 +207,13 @@ def test_generate_rejects_placeholder_weight_files_by_default(tmp_path):
 
     with pytest.raises(ValueError, match="missing required real tensor keys"):
         LitoInferencePipeline(root, memory_profile="safe")
+
+
+def _write_trellis_runtime_assets(root: Path) -> None:
+    for relative_path in LITO_TRELLIS_REQUIRED_FILES:
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
 
 
 @pytest.mark.heavy
