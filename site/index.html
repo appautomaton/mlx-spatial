@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>mlx-spatial · Image to 3D on Apple silicon</title>
+<meta name="description" content="An MLX-native library for 3D and spatial inference on Apple silicon. Object reconstruction, image-to-mesh, scene geometry, Gaussian splats, and multi-view bundles — every run leaves a GLB, PLY, or NPZ you can open.">
+<meta name="author" content="App Automaton">
+<link rel="canonical" href="https://appautomaton.renocrypt.com/mlx-spatial/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="mlx-spatial">
+<meta property="og:url" content="https://appautomaton.renocrypt.com/mlx-spatial/">
+<meta property="og:title" content="mlx-spatial · Image to 3D on Apple silicon">
+<meta property="og:description" content="Object reconstruction, image-to-mesh, scene geometry, and Gaussian splats in pure MLX. Every run leaves a file you can open.">
+<meta property="og:image" content="https://appautomaton.renocrypt.com/mlx-spatial/assets/og.png">
+<meta property="og:image:width" content="2400">
+<meta property="og:image:height" content="1260">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="mlx-spatial — pixels in, geometry out. The headline sits inside a wireframe bounding box with an XYZ axis gizmo.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="mlx-spatial · Image to 3D on Apple silicon">
+<meta name="twitter:description" content="Object reconstruction, image-to-mesh, scene geometry, and Gaussian splats in pure MLX. Every run leaves a file you can open.">
+<meta name="twitter:image" content="https://appautomaton.renocrypt.com/mlx-spatial/assets/og.png">
+
+<meta name="theme-color" content="#E8EAED" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F1116" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "mlx-spatial",
+  "description": "MLX-native 3D and spatial inference for Apple silicon: object reconstruction, image-to-mesh, scene geometry, Gaussian splats, and multi-view bundles.",
+  "codeRepository": "https://github.com/appautomaton/mlx-spatial",
+  "programmingLanguage": ["Python", "C++", "Metal"],
+  "runtimePlatform": "MLX",
+  "operatingSystem": "macOS",
+  "license": "https://opensource.org/licenses/MIT",
+  "author": { "@type": "Organization", "name": "App Automaton", "url": "https://appautomaton.renocrypt.com/" }
+}
+</script>
+
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=zodiak@700,400&f[]=synonym@400,500,600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&display=swap">
+
+<style>
+/* ---------------------------------------------------------------- tokens */
+/* The palette is the XYZ axis convention every 3D tool shares: X red,
+   Y green, Z blue, on the neutral grey of a viewport. It is a semantic
+   choice, not three colours picked to look nice — anyone who has opened a
+   3D application reads the gizmo before they read the words. */
+:root {
+  --bg: #E8EAED;
+  --raise: #F2F4F7;
+  --ink: #12151A;
+  --muted: #4F5560;
+  --line: #CFD4DC;
+  --line-soft: #DEE2E8;
+  /* The ground plane needs its own value: --line is tuned for 1px borders on
+     solid panels and disappears once it is drawn as a sparse lattice. */
+  --iso-line: #BEC5D0;
+
+  --x: #B3382C;
+  --y: #2F6B22;
+  --z: #2749C4;
+
+  --display: 'Zodiak', 'Iowan Old Style', Georgia, serif;
+  --body: 'Synonym', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --mono: 'DM Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --pad: clamp(1.25rem, 4vw, 4.5rem);
+  --ease: cubic-bezier(.2, .7, .2, 1);
+}
+[data-theme="dark"] {
+  --bg: #0F1116;
+  --raise: #171A21;
+  --ink: #E9ECF2;
+  --muted: #949BA8;
+  --line: #262B35;
+  --line-soft: #1A1E26;
+  --iso-line: #333A47;
+
+  --x: #FF8375;
+  --y: #7FD25C;
+  --z: #86ACFF;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: clamp(1rem, .96rem + .18vw, 1.075rem);
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+img, svg { display: block; max-width: 100%; }
+a { color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--accent, var(--z));
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.skip {
+  position: absolute; left: -999px; top: 0; z-index: 99;
+  background: var(--ink); color: var(--bg);
+  padding: .7rem 1rem; font: 500 .8rem/1 var(--mono);
+}
+.skip:focus { left: .5rem; top: .5rem; }
+
+/* ---------------------------------------------------------------- type */
+.display {
+  font-family: var(--display);
+  font-weight: 700;
+  line-height: .96;
+  letter-spacing: -.018em;
+  text-wrap: balance;
+}
+h2.display { font-size: clamp(1.9rem, 1.1rem + 2.9vw, 3.3rem); margin: .7rem 0 0; }
+h3 { font-size: 1.02rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+
+.eyebrow {
+  /* 1.5, not 1: the hero eyebrow wraps on a phone and the two uppercase
+     lines collide at a unit line-height. Centred items keep the single-line
+     eyebrows looking identical. */
+  font: 500 .68rem/1.5 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex; align-items: center; gap: .75rem;
+  margin: 0;
+}
+.eyebrow::before {
+  content: ""; width: 1.75rem; height: 2px;
+  background: var(--accent, var(--z)); flex: none;
+}
+.lede {
+  font-size: clamp(1.02rem, .95rem + .4vw, 1.22rem);
+  color: var(--muted);
+  max-width: 46ch;
+  text-wrap: pretty;
+}
+/* Section ledes run wider than the hero's: at 46ch these sentences break
+   after a single-letter word, which `text-wrap: pretty` does not fix
+   because it only protects the last line. */
+.lede-wide { max-width: 58ch; margin-top: 1.2rem; }
+
+/* ---------------------------------------------------------------- chrome */
+.head {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in oklab, var(--bg) 96%, transparent);
+  backdrop-filter: saturate(1.4) blur(18px);
+  -webkit-backdrop-filter: saturate(1.4) blur(18px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.head-in {
+  display: flex; align-items: center; gap: 1rem;
+  padding: .85rem var(--pad);
+}
+.brand {
+  display: flex; align-items: center; gap: .6rem;
+  font-family: var(--display); font-weight: 700;
+  font-size: 1.12rem; letter-spacing: -.01em;
+  text-decoration: none; margin-right: auto;
+}
+.brand svg { width: 1.5rem; height: 1.5rem; }
+.nav { display: flex; align-items: center; gap: 1.4rem; }
+.nav a {
+  font: 500 .78rem/1 var(--mono);
+  letter-spacing: .06em; text-transform: uppercase;
+  text-decoration: none; color: var(--muted);
+  transition: color .2s var(--ease);
+}
+.nav a:hover { color: var(--ink); }
+
+.icon-btn {
+  appearance: none; border: 1px solid var(--line);
+  background: transparent; color: var(--ink);
+  width: 2.15rem; height: 2.15rem; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  transition: border-color .2s var(--ease);
+}
+.icon-btn:hover { border-color: var(--ink); }
+.icon-btn svg { width: 1.05rem; height: 1.05rem; }
+.menu-btn { display: none; }
+[data-theme="dark"] .sun { display: none; }
+.moon { display: none; }
+[data-theme="dark"] .moon { display: block; }
+
+/* ---------------------------------------------------------------- layout */
+.wrap { max-width: 76rem; margin: 0 auto; padding-inline: var(--pad); }
+.band { --accent: var(--z); padding-block: clamp(3.5rem, 6vw, 6rem); }
+.band-x { --accent: var(--x); }
+.band-y { --accent: var(--y); }
+.rule { border-top: 1px solid var(--line-soft); }
+
+/* ---------------------------------------------------------------- hero */
+.hero {
+  /* --accent must be declared here too: the hero is not a .band, and without
+     it the bounding-box corners fall back to currentColor and lose the one
+     thing that makes them read as an axis-coloured selection. */
+  --accent: var(--z);
+  position: relative; overflow: hidden;
+  padding: clamp(2.5rem, 4.5vw, 4rem) 0 clamp(3rem, 5.5vw, 5rem);
+}
+/* An isometric ground plane, not a flat grid: three axes at 30 degrees is
+   how a 3D viewport tells you which way is up before anything is drawn. */
+.iso {
+  position: absolute; inset: -20% -10% auto; height: 130%; z-index: 0;
+  background-image:
+    repeating-linear-gradient(30deg,  var(--iso-line) 0 1px, transparent 1px 74px),
+    repeating-linear-gradient(150deg, var(--iso-line) 0 1px, transparent 1px 74px),
+    repeating-linear-gradient(90deg,  var(--iso-line) 0 1px, transparent 1px 74px);
+  -webkit-mask-image: radial-gradient(120% 85% at 18% 22%, #000 6%, transparent 72%);
+  mask-image: radial-gradient(120% 85% at 18% 22%, #000 6%, transparent 72%);
+}
+.hero-in { position: relative; z-index: 1; }
+
+/* --- the signature: a bounding box closing on its contents ------------- */
+/* Selecting an object in any 3D tool draws corner brackets around it and an
+   axis gizmo beside it. On load the brackets converge from outside the title
+   onto its true extents — the fit itself is the idea: this library turns a
+   flat image into something that has bounds. */
+.bbox { position: relative; display: inline-block; margin: 1.8rem 0 0;
+  padding: clamp(1.4rem, 2.4vw, 2.2rem) clamp(1.6rem, 2.8vw, 2.6rem); }
+.bbox h1 {
+  font-family: var(--display); font-weight: 700;
+  font-size: clamp(2.3rem, 1rem + 6.6vw, 5.1rem);
+  line-height: .96; letter-spacing: -.02em;
+  /* fit-content, with the break written into the markup: a max-width in ch
+     leaves the box wider than the words, and a bounding box that does not
+     bound anything is just a frame. */
+  margin: 0; width: fit-content;
+}
+.corner {
+  position: absolute; width: clamp(26px, 3.2vw, 40px); height: clamp(26px, 3.2vw, 40px);
+  border: 2px solid var(--accent);
+  animation: fit 1.1s .2s var(--ease) 1 both;
+}
+.c-tl { top: 0; left: 0; border-right: 0; border-bottom: 0; --dx: -22px; --dy: -22px; }
+.c-tr { top: 0; right: 0; border-left: 0; border-bottom: 0; --dx: 22px; --dy: -22px; }
+.c-bl { bottom: 0; left: 0; border-right: 0; border-top: 0; --dx: -22px; --dy: 22px; }
+.c-br { bottom: 0; right: 0; border-left: 0; border-top: 0; --dx: 22px; --dy: 22px; }
+@keyframes fit {
+  from { transform: translate(var(--dx), var(--dy)); opacity: 0; }
+  to   { transform: translate(0, 0); opacity: 1; }
+}
+
+/* the axis gizmo: three labelled legs, in the convention's own colours */
+.gizmo {
+  display: flex; align-items: center; gap: 1.1rem;
+  margin: 1.6rem 0 0;
+  font: 500 .66rem/1 var(--mono); letter-spacing: .18em; text-transform: uppercase;
+  color: var(--muted);
+}
+.leg { display: flex; align-items: center; gap: .4rem; }
+.leg i { width: 26px; height: 2px; display: block; }
+.leg-x i { background: var(--x); }
+.leg-y i { background: var(--y); }
+.leg-z i { background: var(--z); }
+
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; margin-top: 2.1rem; }
+.btn {
+  display: inline-flex; align-items: center; gap: .5rem;
+  font: 500 .78rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  text-decoration: none; padding: .95rem 1.3rem;
+  border: 1px solid var(--ink); color: var(--bg); background: var(--ink);
+  transition: transform .2s var(--ease);
+}
+.btn:hover { transform: translateY(-2px); }
+.btn-ghost { background: transparent; color: var(--ink); }
+.tag {
+  font: 400 .68rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid var(--accent);
+  padding: .6rem .8rem; margin-left: .5rem;
+}
+
+/* ---------------------------------------------------------------- cards */
+.grid-3 { display: grid; gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr));
+  background: var(--line-soft); border: 1px solid var(--line-soft); margin-top: 3rem; }
+.card { background: var(--bg); padding: 1.9rem 1.6rem 2rem; }
+.card h3 { margin: 1.1rem 0 .5rem; }
+.card p { margin: 0; color: var(--muted); font-size: .95rem; }
+
+/* ---------------------------------------------------------------- pipes */
+/* Every row is a mapping, because the mapping is the product: these
+   pipelines deliberately do not share an output type, and pretending
+   otherwise would be the one dishonest thing this page could do. */
+.pipes { margin-top: 2.6rem; border-top: 1px solid var(--line-soft); }
+.pipe {
+  display: grid; align-items: center; gap: 1.1rem;
+  grid-template-columns: 2.6rem minmax(0, 13rem) minmax(0, 1fr) auto;
+  padding: 1.5rem .25rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pipe h3 { letter-spacing: -.005em; }
+.io { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap;
+  font: 400 .8rem/1.5 var(--mono); color: var(--muted); }
+.io b { font-weight: 400; color: var(--ink); }
+.io .arrow { color: var(--accent); flex: none; }
+.fmt {
+  font: 500 .68rem/1 var(--mono); letter-spacing: .07em;
+  color: var(--accent); border: 1px solid var(--accent);
+  padding: .45rem .6rem; white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- steps */
+.steps { display: grid; gap: 1px; grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--line-soft); border: 1px solid var(--line-soft); margin-top: 3rem; }
+.step { background: var(--bg); padding: 1.6rem 1.3rem 1.8rem; }
+.step b { display: block; font: 500 .66rem/1 var(--mono);
+  letter-spacing: .16em; color: var(--accent); margin: 1rem 0 .8rem; }
+.step p { margin: 0; font-size: .94rem; color: var(--muted); }
+
+/* ---------------------------------------------------------------- code */
+.code {
+  margin: 0; padding: 1.4rem 1.5rem;
+  background: var(--raise); border: 1px solid var(--line-soft);
+  overflow-x: auto; font: 400 .82rem/1.75 var(--mono); tab-size: 2;
+}
+.code .k { color: var(--accent); }
+.code .s { color: var(--muted); }
+/* Italic, not dimmed: an opacity that reads as "fainter" drops the comment
+   under the 4.5:1 contrast floor, and `#` already marks it. */
+.code .c { color: var(--muted); font-style: italic; }
+.two { display: grid; gap: 1.5rem; margin-top: 3rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); align-items: start; }
+.note { margin: 1.6rem 0 0; font-size: .9rem; color: var(--muted); }
+.note a { color: var(--accent); text-underline-offset: 3px; }
+
+/* ---------------------------------------------------------------- limits */
+.limits { display: grid; gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr));
+  background: var(--line-soft); border: 1px solid var(--line-soft); margin-top: 3rem; }
+.limit { background: var(--bg); padding: 1.6rem 1.4rem 1.8rem; }
+.limit h3 { margin: 0 0 .5rem; }
+.limit p { margin: 0; color: var(--muted); font-size: .94rem; }
+
+/* ---------------------------------------------------------------- foot */
+.foot { padding: 3rem 0 4rem; border-top: 1px solid var(--line-soft); }
+.foot p { color: var(--muted); font-size: .92rem; max-width: 52ch; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 1.6rem; margin-top: 1.6rem;
+  font: 400 .78rem/1 var(--mono); letter-spacing: .05em; }
+.foot-links a { color: var(--muted); text-decoration: none; }
+.foot-links a:hover { color: var(--ink); }
+
+/* ---------------------------------------------------------------- icons */
+/* Hand-drawn for this page, no icon library. `pathLength="100"` normalises
+   every stroke so one dash rule traces all of them. The rules select `.d`
+   rather than `[pathLength]`: Blink does not invalidate a camelCase
+   attribute selector on an SVG child when a class lands on an ancestor, so
+   selecting the attribute leaves every icon undrawn. */
+.ico { width: 30px; height: 30px; color: var(--accent); }
+.js .ico .d {
+  stroke-dasharray: 100; stroke-dashoffset: 100;
+  transition: stroke-dashoffset 1s var(--ease);
+}
+.js .drawn .ico .d { stroke-dashoffset: 0; }
+.js .ico > :nth-child(2) { transition-delay: .09s; }
+.js .ico > :nth-child(3) { transition-delay: .18s; }
+/* `--fill-o` carries each fill's resting opacity: a CSS opacity outranks the
+   SVG presentation attribute, so a flat `1` would turn a translucent solid
+   into an opaque blob. */
+.js .ico .fill { transition: opacity .5s .45s var(--ease); opacity: 0; }
+.js .drawn .ico .fill { opacity: var(--fill-o, 1); }
+
+/* ---------------------------------------------------------------- reveal */
+.js .rise { opacity: 0; transform: translateY(14px); }
+.js .rise.shown { opacity: 1; transform: none;
+  transition: opacity .7s var(--ease), transform .7s var(--ease); }
+
+/* ---------------------------------------------------------------- narrow */
+@media (max-width: 1040px) {
+  .pipe { grid-template-columns: 2.6rem minmax(0, 11rem) minmax(0, 1fr); }
+  .pipe .fmt { grid-column: 3; justify-self: start; }
+}
+@media (max-width: 940px) {
+  .grid-3, .steps, .limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .two { grid-template-columns: minmax(0, 1fr); }
+  .pipe { grid-template-columns: 2.6rem minmax(0, 1fr); row-gap: .6rem; }
+  .pipe .io, .pipe .fmt { grid-column: 2; }
+}
+@media (max-width: 720px) {
+  .menu-btn { display: grid; }
+  .nav {
+    position: fixed; inset: 3.9rem 0 auto; z-index: 39;
+    flex-direction: column; align-items: flex-start; gap: 0;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+    padding: .5rem var(--pad) 1.5rem; display: none;
+  }
+  .nav.open { display: flex; }
+  .nav a { padding: .9rem 0; font-size: .95rem; width: 100%;
+    border-bottom: 1px solid var(--line-soft); }
+  .grid-3, .steps, .limits { grid-template-columns: minmax(0, 1fr); }
+  .pipe { grid-template-columns: 2.2rem minmax(0, 1fr); padding: 1.4rem .25rem; }
+  /* Stack the mapping and turn the arrow down: wrapped horizontally it
+     stranded the arrow at the end of the input line, which reads as a
+     dangling character rather than a direction. */
+  .pipe .io { flex-direction: column; align-items: flex-start; gap: .3rem; }
+  .pipe .io .arrow { transform: rotate(90deg); }
+  .tag { margin-left: 0; }
+  .gizmo { flex-wrap: wrap; gap: .8rem 1.1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: .001ms !important;
+  }
+  .corner { transform: none; opacity: 1; }
+  .js .rise { opacity: 1; transform: none; }
+  .js .ico .d { stroke-dashoffset: 0; }
+  .js .ico .fill { opacity: var(--fill-o, 1); }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="head">
+  <div class="head-in">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M12 2.6 20.5 7v10L12 21.4 3.5 17V7z" stroke="var(--z)"/>
+        <path d="M12 2.6V12l8.5-5M12 12 3.5 7M12 12v9.4" stroke="var(--muted)" stroke-width="1.1"/>
+      </svg>
+      mlx-spatial
+    </a>
+    <nav class="nav" id="nav">
+      <a href="#pipelines">Pipelines</a>
+      <a href="#mesh">Mesh</a>
+      <a href="#start">Start</a>
+      <a href="https://github.com/appautomaton/mlx-spatial">GitHub</a>
+    </nav>
+    <button class="icon-btn menu-btn" id="menu" aria-label="Toggle menu" aria-expanded="false" aria-controls="nav">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M4 8h16M4 16h16"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="theme" aria-label="Switch colour theme">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.6M12 19.4V22M2 12h2.6M19.4 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/>
+      </svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M20 14.2A8.4 8.4 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2z"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ------------------------------------------------------------ hero -->
+  <section class="hero" id="top">
+    <div class="iso" aria-hidden="true"></div>
+    <div class="wrap hero-in">
+      <p class="eyebrow">MLX · Apple silicon · inference only</p>
+
+      <div class="bbox">
+        <span class="corner c-tl" aria-hidden="true"></span>
+        <span class="corner c-tr" aria-hidden="true"></span>
+        <span class="corner c-bl" aria-hidden="true"></span>
+        <span class="corner c-br" aria-hidden="true"></span>
+        <h1>Pixels in.<br>Geometry out.</h1>
+      </div>
+
+      <p class="gizmo">
+        <span class="leg leg-x"><i></i>image</span>
+        <span class="leg leg-y"><i></i>mesh</span>
+        <span class="leg leg-z"><i></i>scene</span>
+      </p>
+
+      <p class="lede">
+        An open-source library for 3D and spatial inference in MLX. Object
+        reconstruction, image-to-mesh, scene geometry, Gaussian splats, and
+        multi-view bundles — running on the Apple GPU, with a native Metal
+        mesh pipeline behind them.
+      </p>
+
+      <p class="cta">
+        <a class="btn" href="https://github.com/appautomaton/mlx-spatial">Read the source ↗</a>
+        <a class="btn btn-ghost" href="#start">Start</a>
+        <span class="tag">Weights not bundled</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ what -->
+  <section class="band rule">
+    <div class="wrap">
+      <p class="eyebrow">What it is</p>
+      <h2 class="display">The run ends in a file, not a preview.</h2>
+
+      <div class="grid-3">
+        <article class="card rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4z"/>
+            <path class="d" pathLength="100" d="M12 2.8v9.3l8-4.7M12 12.1 4 7.4M12 12.1v9.1"/>
+          </svg>
+          <h3>Pure MLX on the Apple GPU</h3>
+          <p>Diffusion, transformer, and reconstruction stacks run in MLX. A native C++/Metal extension carries the mesh work that does not belong in Python.</p>
+        </article>
+
+        <article class="card rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M6 3h8l5 5v13H6z"/>
+            <path class="d" pathLength="100" d="M14 3v5h5"/>
+            <path class="d" pathLength="100" d="M9.5 16.5 12 13l2.5 3.5z"/>
+          </svg>
+          <h3>Real files, not renders</h3>
+          <p>Every pipeline writes something a tool can open — a GLB, a PLY, an NPZ bundle. Drop it into Blender or a viewer and keep working.</p>
+        </article>
+
+        <article class="card rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z" opacity=".45"/>
+            <path class="d" pathLength="100" d="M8.6 12.2h6.8M12 8.8v6.8"/>
+          </svg>
+          <h3>Weights stay outside</h3>
+          <p>Checkpoints are downloaded separately and validated before use. Nothing is vendored into the wheel, and every upstream licence stays with its weights.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- pipelines -->
+  <section class="band band-y rule" id="pipelines">
+    <div class="wrap">
+      <p class="eyebrow">Pipelines</p>
+      <h2 class="display">Different questions want different files.</h2>
+      <p class="lede lede-wide">
+        These pipelines deliberately do not share one output type. A splat is
+        not a mesh, and a scene bundle is neither. The mapping is the product.
+      </p>
+
+      <div class="pipes">
+        <article class="pipe rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M3.5 9.5c3-4.5 14-4.5 17 0-3 4.5-14 4.5-17 0z"/>
+            <circle class="d" pathLength="100" cx="12" cy="9.5" r="2.6"/>
+            <path class="d" pathLength="100" d="M6 15.5c2.6 3 9.4 3 12 0"/>
+          </svg>
+          <h3>Object reconstruction</h3>
+          <p class="io"><b>image + mask</b><span class="arrow">→</span>Gaussian PLY, optional GLB</p>
+          <span class="fmt">SAM 3D Objects</span>
+        </article>
+
+        <article class="pipe rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M12 3.2 19.8 7.6v8.8L12 20.8 4.2 16.4V7.6z"/>
+            <path class="d" pathLength="100" d="M4.2 7.6 12 12l7.8-4.4M12 12v8.8"/>
+            <path class="d" pathLength="100" d="M8.1 9.8v4.4L12 16.4"/>
+          </svg>
+          <h3>Image to textured mesh</h3>
+          <p class="io"><b>object-centric RGB/RGBA</b><span class="arrow">→</span>shape OBJ or textured GLB</p>
+          <span class="fmt">TRELLIS.2</span>
+        </article>
+
+        <article class="pipe rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M2.5 16.5c3.5-5 6-7.5 9.5-7.5s6 2.5 9.5 7.5"/>
+            <path class="d" pathLength="100" d="M7 20V13.4M12 20V9M17 20v-6.6"/>
+          </svg>
+          <h3>Scene reconstruction</h3>
+          <p class="io"><b>scene image or frames</b><span class="arrow">→</span>camera, depth, normals, point cloud</p>
+          <span class="fmt">HY-WorldMirror 2.0</span>
+        </article>
+
+        <article class="pipe rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M5.5 12.5a6.5 6.5 0 1 1 13 0 6.5 6.5 0 0 1-13 0z" opacity=".4"/>
+            <circle class="fill" cx="10" cy="11" r="1.5" fill="currentColor" stroke="none" style="--fill-o:.75"/>
+            <circle class="fill" cx="14.5" cy="13" r="2.1" fill="currentColor" stroke="none" style="--fill-o:.5"/>
+            <circle class="fill" cx="11.5" cy="15" r="1.1" fill="currentColor" stroke="none"/>
+          </svg>
+          <h3>Image to Gaussian splat</h3>
+          <p class="io"><b>object-centric RGB/RGBA</b><span class="arrow">→</span>3DGS PLY</p>
+          <span class="fmt">LiTo</span>
+        </article>
+
+        <article class="pipe rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z"/>
+            <path class="d" pathLength="100" d="M9 4v13.5M15 6.5V20"/>
+          </svg>
+          <h3>Multi-view scene bundle</h3>
+          <p class="io"><b>related scene views</b><span class="arrow">→</span>NPZ of depth, cameras, world points</p>
+          <span class="fmt">MapAnything</span>
+        </article>
+      </div>
+
+      <p class="note">
+        Every pipeline ships a command-line entry point, and each one names its
+        own output rather than hiding behind a shared wrapper. More pipelines
+        are in development; the
+        <a href="https://github.com/appautomaton/mlx-spatial#capabilities">repository</a>
+        tracks which paths are release-ready.
+      </p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ mesh -->
+  <section class="band band-x rule" id="mesh">
+    <div class="wrap">
+      <p class="eyebrow">SpatialKit</p>
+      <h2 class="display">Inference is only half of an asset.</h2>
+      <p class="lede lede-wide">
+        A model's raw output is rarely something you can ship. SpatialKit is
+        the mesh half — simplification, unwrapping, and baking, written
+        against Metal rather than handed to a CPU library.
+      </p>
+
+      <div class="steps">
+        <article class="step rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M4 19 12 4l8 15z"/>
+            <path class="d" pathLength="100" d="M8.2 19 12 11.5 15.8 19"/>
+          </svg>
+          <b>Simplify</b>
+          <p>Quadric error edge collapse, running in MLX, down to a face budget you choose.</p>
+        </article>
+
+        <article class="step rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M3.5 4.5h7v7h-7z"/>
+            <path class="d" pathLength="100" d="M13.5 4.5h7v5h-7zM13.5 12.5h7v7h-7zM3.5 14.5h7v5h-7z"/>
+          </svg>
+          <b>Unwrap</b>
+          <p>Clustered xatlas charts, so the texture space follows the surface instead of fighting it.</p>
+        </article>
+
+        <article class="step rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M4 15.5 12 4l8 11.5"/>
+            <path class="d" pathLength="100" d="M4 15.5c2.6 2.4 13.4 2.4 16 0"/>
+            <path class="d" pathLength="100" d="M9.4 10.6c1.8 1.3 3.4 1.3 5.2 0"/>
+          </svg>
+          <b>Bake</b>
+          <p>Physically based texture baking on Metal, not a kdtree scatter on the CPU.</p>
+        </article>
+
+        <article class="step rise">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="d" pathLength="100" d="M12 3.5v11"/>
+            <path class="d" pathLength="100" d="M8.2 10.8 12 14.6l3.8-3.8"/>
+            <path class="d" pathLength="100" d="M4.5 17.5v3h15v-3"/>
+          </svg>
+          <b>Export</b>
+          <p>A GLB with its materials attached, plus the artifacts that show what happened on the way.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- start -->
+  <section class="band band-z rule" id="start">
+    <div class="wrap">
+      <p class="eyebrow">Start</p>
+      <h2 class="display">One command per pipeline.</h2>
+
+      <div class="two">
+        <div>
+          <pre class="code"><span class="c"># Python 3.13, Apple silicon</span>
+uv add mlx-spatial</pre>
+          <p class="note">
+            The package is on
+            <a href="https://pypi.org/project/mlx-spatial/">PyPI</a>. Releases
+            can lag <code>main</code>, so a checkout keeps you on the code the
+            repository documents.
+          </p>
+        </div>
+        <div>
+          <pre class="code">uv run mlx-spatial-sam3d <span class="s">--help</span>
+uv run mlx-spatial-trellis2 <span class="s">--help</span>
+uv run mlx-spatial-hyworld2 <span class="s">--help</span>
+uv run mlx-spatial-lito <span class="s">--help</span>
+uv run mlx-spatial-mapanything <span class="s">--help</span></pre>
+          <p class="note">
+            Weights download separately into <code>weights/</code> and are
+            validated before a run. Converted checkpoints live on
+            <a href="https://huggingface.co/appautomaton">Hugging Face</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- scope -->
+  <section class="band rule">
+    <div class="wrap">
+      <p class="eyebrow">Scope</p>
+      <h2 class="display">What this is not.</h2>
+
+      <div class="limits">
+        <article class="limit rise">
+          <h3>Not a training framework</h3>
+          <p>Inference only. There is no optimiser, no dataset loader, and no fine-tuning path.</p>
+        </article>
+        <article class="limit rise">
+          <h3>Apple silicon</h3>
+          <p>MLX targets the Apple GPU, and the mesh extension is built against Metal. There is no CUDA path.</p>
+        </article>
+        <article class="limit rise">
+          <h3>Quality still moving</h3>
+          <p>Texture and mesh quality are actively improving, and some paths are still in development. The repository says which.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ foot -->
+  <footer class="foot">
+    <div class="wrap">
+      <a class="brand" href="#top" style="font-size:1.25rem;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M12 2.6 20.5 7v10L12 21.4 3.5 17V7z" stroke="var(--z)"/>
+          <path d="M12 2.6V12l8.5-5M12 12 3.5 7M12 12v9.4" stroke="var(--muted)" stroke-width="1.1"/>
+        </svg>
+        mlx-spatial
+      </a>
+      <p style="margin-top:1.1rem;">
+        Library code is MIT licensed. Model weights are external artifacts and
+        keep their upstream licences. An
+        <a href="https://appautomaton.renocrypt.com/">App Automaton</a> project,
+        built on <a href="https://github.com/ml-explore/mlx">MLX</a>.
+      </p>
+      <p class="foot-links">
+        <a href="https://github.com/appautomaton/mlx-spatial">Repository</a>
+        <a href="https://pypi.org/project/mlx-spatial/">PyPI</a>
+        <a href="https://huggingface.co/appautomaton">Weights</a>
+        <a href="https://github.com/appautomaton/mlx-spatial/blob/main/docs/architecture.md">Architecture</a>
+        <a href="https://github.com/appautomaton/mlx-spatial/blob/main/LICENSE">Licence</a>
+      </p>
+    </div>
+  </footer>
+
+</main>
+
+<script type="module">
+  const root = document.documentElement;
+  root.classList.add('js');
+
+  const revealAll = () =>
+    document.querySelectorAll('.rise').forEach((el) => el.classList.add('shown', 'drawn'));
+
+  // Theme and menu are wired before anything is imported: a CDN that fails
+  // must not take the controls down with it.
+  const stored = localStorage.getItem('theme');
+  const param = new URLSearchParams(location.search).get('theme');
+  const start = param || stored ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  root.dataset.theme = start;
+  document.getElementById('theme').addEventListener('click', () => {
+    const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = next;
+    localStorage.setItem('theme', next);
+  });
+
+  const menu = document.getElementById('menu');
+  const nav = document.getElementById('nav');
+  menu.addEventListener('click', () => {
+    const open = nav.classList.toggle('open');
+    menu.setAttribute('aria-expanded', String(open));
+  });
+  nav.addEventListener('click', (e) => {
+    if (e.target.tagName === 'A') {
+      nav.classList.remove('open');
+      menu.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    revealAll();
+  } else {
+    try {
+      const { animate, inView } = await import('https://cdn.jsdelivr.net/npm/motion@13.0.0/+esm');
+      document.querySelectorAll('.grid-3, .pipes, .steps, .limits').forEach((group) => {
+        const items = [...group.querySelectorAll('.rise')];
+        inView(group, () => {
+          items.forEach((el, i) => {
+            animate(el, { opacity: [0, 1], y: [14, 0] },
+                    { duration: .7, delay: i * .07, ease: [.2, .7, .2, 1] });
+            setTimeout(() => el.classList.add('drawn'), i * 70);
+          });
+        }, { amount: .2 });
+      });
+    } catch (e) {
+      revealAll();
+    }
+  }
+</script>
+</body>
+</html>

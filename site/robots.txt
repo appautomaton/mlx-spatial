@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://appautomaton.renocrypt.com/mlx-spatial/sitemap.xml

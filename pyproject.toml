@@ -8,11 +8,23 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "mlx-spatial"
 version = "0.0.3"
-description = "MLX-first primitives for 3D and spatial model inference."
+description = "MLX-native 3D and spatial inference for Apple silicon: object reconstruction, image-to-mesh, scene geometry, Gaussian splats, and multi-view bundles."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "AppAutomaton" }]
-urls = { Repository = "https://github.com/appautomaton/mlx-spatial" }
+keywords = [
+    "mlx",
+    "apple-silicon",
+    "3d-reconstruction",
+    "image-to-3d",
+    "gaussian-splatting",
+    "mesh-generation",
+    "photogrammetry",
+    "point-cloud",
+    "glb",
+    "on-device-ai",
+]
+urls = { Homepage = "https://appautomaton.renocrypt.com/mlx-spatial/", Repository = "https://github.com/appautomaton/mlx-spatial", Documentation = "https://github.com/appautomaton/mlx-spatial/blob/main/docs/architecture.md", Issues = "https://github.com/appautomaton/mlx-spatial/issues" }
 requires-python = ">=3.13,<3.14"
 classifiers = [
     "License :: OSI Approved :: MIT License",
