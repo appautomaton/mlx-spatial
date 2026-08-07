@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export cached Pixal3D NPZ artifacts under an RSS/swap watchdog."""
+"""Export cached decoded O-Voxel artifacts under an RSS/swap watchdog."""
 
 from __future__ import annotations
 
@@ -36,8 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--xatlas-parallel-chunks",
         type=int,
-        default=4,
-        help="spatial xatlas chunk count; used only by xatlas-parallel-spatial",
+        help="spatial xatlas chunk count; required only by xatlas-parallel-spatial",
     )
     parser.add_argument("--remesh", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--remesh-resolution", type=int)
@@ -78,14 +77,21 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("max_swap_growth_gib must be non-negative")
     if args.terminate_grace_sec <= 0:
         raise ValueError("terminate_grace_sec must be positive")
-    if args.xatlas_parallel_chunks <= 0:
-        raise ValueError("xatlas_parallel_chunks must be positive")
+    if args.uv_backend == "xatlas-parallel-spatial":
+        if args.xatlas_parallel_chunks is None or args.xatlas_parallel_chunks <= 1:
+            raise ValueError(
+                "xatlas-parallel-spatial requires --xatlas-parallel-chunks greater than one"
+            )
+    elif args.xatlas_parallel_chunks is not None:
+        raise ValueError(
+            "--xatlas-parallel-chunks only applies to --uv-backend xatlas-parallel-spatial"
+        )
 
 
 def _run_worker(args: argparse.Namespace) -> int:
-    from mlx_spatial.spatialkit import export_pixal3d_glb
+    from mlx_spatial.spatialkit import export_decoded_ovoxel_glb
 
-    result = export_pixal3d_glb(
+    result = export_decoded_ovoxel_glb(
         args.decoded_dir,
         args.output,
         texture_size=args.texture_size,

@@ -21,7 +21,6 @@ from .pixal3d_assets import (
 from .pixal3d_inference import (
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
-    PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
     PIXAL3D_DEFAULT_MOGE_ROOT,
@@ -31,15 +30,12 @@ from .pixal3d_inference import (
     PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
-    PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
-    PIXAL3D_GLB_EXPORT_BACKENDS,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
     Pixal3DInferencePipeline,
 )
 from .sam3d_moge import SAM3D_MOGE_MEMORY_PROFILES
-from .trellis2_export import TRELLIS2_TEXTURE_BAKE_BACKENDS
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -87,7 +83,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="manual horizontal FOV in radians; overrides MoGe auto-camera",
     )
     generate_parser.add_argument("--seed", type=int, default=PIXAL3D_DEFAULT_SEED)
-    generate_parser.add_argument("--max-num-tokens", type=int, default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS)
+    generate_parser.add_argument(
+        "--max-num-tokens",
+        type=int,
+        default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
+        help="upstream-compatible cap on unique HR SLat coordinates after grid quantization; not a decoder or memory limit",
+    )
     generate_parser.add_argument(
         "--shape-upsample-token-limit",
         type=int,
@@ -119,33 +120,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="mesh postprocess face target before GLB export; default: %(default)s",
     )
     generate_parser.add_argument(
-        "--xatlas-face-guard",
-        type=_parse_xatlas_face_guard,
-        default="auto",
-        help="maximum faces allowed into xatlas unwrap, or 'auto'; default: %(default)s",
-    )
-    generate_parser.add_argument(
-        "--xatlas-parallel-chunks",
-        type=int,
-        default=0,
-        help="split xatlas unwrap into chunks; default: %(default)s",
-    )
-    generate_parser.add_argument(
-        "--texture-bake-backend",
-        choices=TRELLIS2_TEXTURE_BAKE_BACKENDS,
-        default=PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
-        help="texture voxel sampling backend for GLB export; default: %(default)s",
-    )
-    generate_parser.add_argument(
-        "--glb-export-backend",
-        choices=PIXAL3D_GLB_EXPORT_BACKENDS,
-        default=PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
-        help="GLB export implementation; internal is the default and spatialkit is optional",
-    )
-    generate_parser.add_argument(
         "--glb-diagnostics-path",
         type=Path,
-        help="diagnostics JSON path for --glb-export-backend spatialkit; default: next to output",
+        help="SpatialKit diagnostics JSON path; default: next to output",
     )
     generate_parser.add_argument(
         "--dino-root",
@@ -248,10 +225,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             dino_root=args.dino_root,
             texture_size=args.texture_size,
             glb_target_faces=args.glb_target_faces,
-            xatlas_face_guard=args.xatlas_face_guard,
-            xatlas_parallel_chunks=args.xatlas_parallel_chunks,
-            texture_bake_backend=args.texture_bake_backend,
-            glb_export_backend=args.glb_export_backend,
             glb_diagnostics_path=args.glb_diagnostics_path,
             naf_root=args.naf_root,
             naf_coordinate_chunk_size=args.naf_coordinate_chunk_size,
@@ -278,16 +251,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _root_arg(args: argparse.Namespace, *, fallback: str | Path) -> str | Path:
     return getattr(args, "command_root", None) or getattr(args, "root_path", None) or fallback
-
-
-def _parse_xatlas_face_guard(value: str) -> int | str:
-    normalized = value.strip().lower()
-    if normalized == "auto":
-        return "auto"
-    parsed = int(normalized)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("--xatlas-face-guard must be 'auto' or a positive integer")
-    return parsed
 
 
 def _print_payload(payload: dict[str, Any], *, as_json: bool) -> None:

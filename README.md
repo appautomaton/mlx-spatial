@@ -158,7 +158,7 @@ uv run python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.j
 
 Output: `model.glb`, `trace.json`.
 
-Defaults are quality-oriented for Apple Silicon: 512 pipeline, model-config sampler steps, 1024 texture, 200k GLB face target, global xatlas unwrap, and kdtree texture baking. Low-step runs are useful for smoke tests but are not representative of output quality.
+Defaults are quality-oriented for Apple Silicon: 512 pipeline, model-config sampler steps, 1024 texture, 200k GLB face target, MLX QEM, clustered xatlas, and Metal PBR texture baking. Low-step runs are useful for smoke tests but are not representative of output quality.
 
 ### HY-WorldMirror — scene reconstruction
 

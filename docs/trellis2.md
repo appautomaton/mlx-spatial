@@ -68,15 +68,17 @@ uv run python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg 
 ```
 
 The script defaults are quality-oriented for Apple Silicon: 512 pipeline,
-model-config SLat sampler steps, 1024 texture for GLB, 200k GLB face target,
-global xatlas unwrap, and kdtree texture baking. Do not pass `--slat-steps` for
-quality runs. Low step counts are only for explicit smoke tests.
+model-config SLat sampler steps, 1024 texture, 200k GLB face target, clustered
+xatlas, MLX QEM simplification, and Metal PBR texture baking. Do not pass
+`--slat-steps` for quality runs. Low step counts are only for explicit smoke
+tests.
 
-The shared MLX geometry layer includes a narrow-band dual-contour remesh
-primitive, but TRELLIS.2 export does not yet select it as an integrated
-postprocess stage. Current GLB output uses the documented cleanup,
-simplification, xatlas, and texture-bake path; do not interpret the shared
-primitive alone as remeshing parity with upstream cuMesh.
+The textured pipeline writes decoded O-Voxel shape/PBR NPZ artifacts, releases
+inference tensors, and calls the same integrated SpatialKit exporter as
+Pixal3D. The current production policy uses the narrow-band remesh, MLX QEM,
+clustered xatlas, Telea postprocessing, and Metal texture stages. The remesh is
+an Apple-native behavior approximation, not a claim of numerical parity with
+upstream cuMesh.
 
 ## Outputs
 
@@ -85,7 +87,12 @@ Textured runs write:
 ```text
 outputs/trellis2/<run>/
   model.glb
+  diagnostics.json
+  artifact-manifest.json
   trace.json
+  decoded/
+    shape_decoder_fields.npz
+    texture_decoder_pbr.npz
 ```
 
 Shape-only runs write:
@@ -96,16 +103,24 @@ outputs/trellis2/<run>/
   trace.json
 ```
 
-Keep generated assets under `outputs/`; the export helpers reject arbitrary
-output paths outside the ignored output tree.
+User-facing scripts default to ignored `outputs/` paths. The library accepts an
+explicit `.glb` destination, which lets tests and embedding applications use a
+task-specific system temporary directory.
 
 ## Trace
 
 `trace.json` records the selected route, completed stages, outputs, and any
 blocker stage, operation, reference, and reason. The script also prints the
 effective settings before generation, including pipeline type, sampler steps,
-token limits, texture size, face target, unwrap mode, and texture bake backend.
+token limits, texture size, face target, and xatlas chunk count. Stage timings
+are independent durations rather than cumulative timestamps.
 
 ## Export Caveat
 
-Current GLB export is Mac-native and does not use the official CUDA `cumesh` remeshing path. Good object-centric inputs work, but export quality still depends on mesh target, xatlas unwrap, and texture bake behavior.
+Current GLB export is Apple-native and never executes CUDA code. The upstream
+CUDA implementation remains a static algorithm reference for watertightness
+and stage semantics; measured performance claims apply only to MLX, Metal, and
+native CPU code on Apple Silicon. A valid TRELLIS.2 GLB reports
+`artifact_ready`; production-equivalence fields remain false with
+`model_reference_profile_unavailable` until a TRELLIS.2-specific reference
+profile exists.

@@ -7,7 +7,7 @@ Input:
 
 Production defaults:
     pipeline type 512, model-config SLat sampler steps, 1024 texture,
-    200k GLB face target, global xatlas unwrap, and kdtree texture baking.
+    200k GLB face target, and SpatialKit high-quality export.
 
     Do not pass --slat-steps for quality runs. Use --slat-steps 1 only for
     smoke tests where broken-looking geometry is acceptable.
@@ -32,11 +32,14 @@ SRC = ROOT / "src"
 if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
+from mlx_spatial.trellis2 import (
+    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
+    TRELLIS2_TEXTURE_DEFAULT_SIZE,
+)
+
 PRODUCTION_PIPELINE_TYPE = "512"
-PRODUCTION_TEXTURE_SIZE = 1024
-PRODUCTION_GLB_TARGET_FACES = 200_000
-PRODUCTION_XATLAS_PARALLEL_CHUNKS = 1
-PRODUCTION_TEXTURE_BAKE_BACKEND = "kdtree"
+PRODUCTION_TEXTURE_SIZE = TRELLIS2_TEXTURE_DEFAULT_SIZE
+PRODUCTION_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,8 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="directory for model.glb and trace.json; default: outputs/trellis2/<image-stem>",
     )
-    parser.add_argument("--output", type=Path, help="explicit textured GLB path under outputs/")
-    parser.add_argument("--trace-output", type=Path, help="explicit trace JSON path under outputs/")
+    parser.add_argument("--output", type=Path, help="explicit textured GLB path")
+    parser.add_argument("--trace-output", type=Path, help="explicit trace JSON path")
+    parser.add_argument("--glb-diagnostics-path", type=Path, help="SpatialKit diagnostics JSON path")
     parser.add_argument(
         "--pipeline-type",
         choices=("512", "1024", "1024_cascade", "1536_cascade"),
@@ -76,7 +80,10 @@ def main(argv: list[str] | None = None) -> int:
         "--max-num-tokens",
         type=int,
         default=49_152,
-        help="sparse sampling token budget; default: %(default)s",
+        help=(
+            "upstream-compatible cap on unique HR SLat coordinates after grid quantization; "
+            "not a decoder or memory limit; default: %(default)s"
+        ),
     )
     parser.add_argument(
         "--decoder-token-limit",
@@ -96,24 +103,6 @@ def main(argv: list[str] | None = None) -> int:
         default=PRODUCTION_GLB_TARGET_FACES,
         help="postprocess target before GLB export; 200000 is recommended for quality runs",
     )
-    parser.add_argument(
-        "--xatlas-face-guard",
-        type=_parse_xatlas_face_guard,
-        default="auto",
-        help="maximum faces allowed into xatlas unwrap, or 'auto'; default: %(default)s",
-    )
-    parser.add_argument(
-        "--xatlas-parallel-chunks",
-        type=int,
-        default=PRODUCTION_XATLAS_PARALLEL_CHUNKS,
-        help="split xatlas unwrap into chunks; 1 keeps a global unwrap for quality",
-    )
-    parser.add_argument(
-        "--texture-bake-backend",
-        choices=("kdtree", "trilinear"),
-        default=PRODUCTION_TEXTURE_BAKE_BACKEND,
-        help="texture voxel sampling backend; kdtree is the recommended visual default, trilinear is parity-oriented",
-    )
     args = parser.parse_args(argv)
 
     from mlx_spatial.trellis2_inference import Trellis2InferencePipeline
@@ -131,15 +120,14 @@ def main(argv: list[str] | None = None) -> int:
         decoder_token_limit=args.decoder_token_limit,
         texture_size=args.texture_size,
         glb_target_faces=args.glb_target_faces,
-        xatlas_face_guard=args.xatlas_face_guard,
-        xatlas_parallel_chunks=args.xatlas_parallel_chunks,
-        texture_bake_backend=args.texture_bake_backend,
+        glb_diagnostics_path=args.glb_diagnostics_path,
         retain_trace_payloads=False,
     )
     _write_trace(trace_output, result.trace)
 
     print(f"completed={result.trace.completed_stages}")
     print(f"outputs={tuple(output.name for output in result.trace.outputs)}")
+    print(f"timings_sec={result.trace.timings_sec}")
     print(f"trace={trace_output}")
     if result.artifact is not None:
         print(f"artifact={result.artifact.path}")
@@ -158,8 +146,6 @@ def _print_effective_settings(args: argparse.Namespace, output: Path, trace_outp
         and args.slat_steps is None
         and args.texture_size == PRODUCTION_TEXTURE_SIZE
         and args.glb_target_faces == PRODUCTION_GLB_TARGET_FACES
-        and args.xatlas_parallel_chunks == PRODUCTION_XATLAS_PARALLEL_CHUNKS
-        and args.texture_bake_backend == PRODUCTION_TEXTURE_BAKE_BACKEND
     )
     print(f"profile={'production-like' if is_production_like else 'custom'}", flush=True)
     print(
@@ -167,9 +153,7 @@ def _print_effective_settings(args: argparse.Namespace, output: Path, trace_outp
         f"pipeline_type={args.pipeline_type} "
         f"slat_steps={slat_steps} "
         f"texture_size={args.texture_size} "
-        f"glb_target_faces={args.glb_target_faces} "
-        f"xatlas_parallel_chunks={args.xatlas_parallel_chunks} "
-        f"texture_bake_backend={args.texture_bake_backend}",
+        f"glb_target_faces={args.glb_target_faces}",
         flush=True,
     )
     print(f"output={output}", flush=True)
@@ -191,16 +175,6 @@ def _resolve_outputs(
     if trace_output is None:
         trace_output = output.with_name("trace.json")
     return output, trace_output
-
-
-def _parse_xatlas_face_guard(value: str) -> int | str:
-    normalized = value.strip().lower()
-    if normalized == "auto":
-        return "auto"
-    parsed = int(normalized)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("xatlas-face-guard must be 'auto' or a positive integer")
-    return parsed
 
 
 def _write_trace(path: Path, trace: Any) -> None:

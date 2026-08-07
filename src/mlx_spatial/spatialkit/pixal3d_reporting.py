@@ -564,7 +564,7 @@ def _reference_comparison(diagnostics: dict[str, Any], reference: dict[str, Any]
     return comparison
 
 
-def _build_pixal3d_run_manifest(
+def _build_ovoxel_run_manifest(
     *,
     decoded_dir: Path,
     shape_path: Path,
@@ -575,6 +575,10 @@ def _build_pixal3d_run_manifest(
     fixture_manifest: dict[str, Any] | None,
     reference: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    model_family = str(
+        _nested_get(diagnostics, ("model", "family"))
+        or ("pixal3d" if fixture_manifest is not None else "ovoxel")
+    )
     lineage_id = (
         str(fixture_manifest.get("lineage_id"))
         if fixture_manifest is not None
@@ -625,10 +629,11 @@ def _build_pixal3d_run_manifest(
             "trace_path": reference.get("trace_path"),
         }
     if roles.get("C", {}).get("lineage_id") not in (None, lineage_id):
-        raise ValueError("Pixal3D run manifest C lineage does not match decoded lineage")
+        raise ValueError("O-Voxel run manifest C lineage does not match decoded lineage")
     return {
         "manifest_version": 1,
-        "kind": "pixal3d_glb_export_run",
+        "kind": f"{model_family}_glb_export_run",
+        "model_family": model_family,
         "lineage_id": lineage_id,
         "case_id": fixture_manifest.get("case_id") if fixture_manifest is not None else None,
         "fixture_manifest_path": fixture_manifest.get("manifest_path") if fixture_manifest is not None else None,
@@ -636,6 +641,10 @@ def _build_pixal3d_run_manifest(
         "roles": roles,
         "readiness": diagnostics.get("result", {}),
     }
+
+
+# Compatibility for existing Pixal3D quality-evidence consumers.
+_build_pixal3d_run_manifest = _build_ovoxel_run_manifest
 
 
 def decoded_metadata_value(diagnostics: dict[str, Any], key: str) -> Any:

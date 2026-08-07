@@ -219,7 +219,7 @@ def _run_watchdog(args: argparse.Namespace) -> int:
     if args.max_swap_growth_gib < 0:
         raise ValueError("--max-swap-growth-gib must be non-negative")
 
-    from export_cached_pixal3d import (
+    from export_cached_ovoxel import (
         _apple_gpu_usage,
         _cpu_and_process_usage,
         _summarize_values,

@@ -169,7 +169,7 @@ def pixal3d_select_hr_resolution(
     max_num_tokens: int,
     lr_resolution: int = PIXAL3D_CASCADE_LR_RESOLUTION,
 ) -> tuple[int, int]:
-    """Apply Pixal3D's HR-token guard by reducing HR resolution in 128px steps."""
+    """Reduce cascade resolution until unique grid-quantized HR SLat coordinates fit the upstream cap."""
 
     if max_num_tokens <= 0:
         raise ValueError("max_num_tokens must be positive")
@@ -191,7 +191,7 @@ def pixal3d_select_hr_coordinates(
     max_num_tokens: int,
     lr_resolution: int = PIXAL3D_CASCADE_LR_RESOLUTION,
 ) -> Pixal3DHRCoordinateSelection:
-    """Quantize, deduplicate, and guard Pixal3D HR cascade coordinates."""
+    """Grid-quantize and deduplicate cascade coordinates under the upstream HR SLat cap."""
 
     if max_num_tokens <= 0:
         raise ValueError("max_num_tokens must be positive")

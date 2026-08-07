@@ -7,24 +7,28 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any
 
 import numpy as np
 
 from ..coordinate_systems import (
     GLTF_Y_UP,
     SUPPORTED_SOURCE_COORDINATE_SYSTEMS,
-    TRELLIS_Z_UP,
     vertices_to_gltf_y_up,
 )
-from ._native import (
-    backend_info,
-    make_face_atlas_uvs as _make_face_atlas_uvs,
-    make_native_chart_uvs as _make_native_chart_uvs,
-    textured_glb_payload as _textured_glb_payload,
-    validate_pixal3d_shape_fields,
-    validate_pixal3d_texture_attributes,
+from ..ovoxel_export import (
+    OVOXEL_DEFAULT_TARGET_FACES,
+    OVOXEL_PREVIEW_TARGET_FACES,
 )
+from ._native import backend_info
+from .contracts import (
+    DecodedOVoxelInputs,
+    load_decoded_ovoxel_npz,
+    resolve_model_identity,
+    resolve_source_coordinate_system,
+    validate_decoded_ovoxel,
+)
+from .glb import NativeGlbArtifact, textured_glb_payload, write_textured_glb
 from .glb_compare import compare_textured_glbs, inspect_glb
 from .mesh import (
     NativeMesh,
@@ -45,12 +49,13 @@ from .monitoring import (
     _timed_stage,
 )
 from .pixal3d_quality import (
-    _export_quality_summary,
+    _export_quality_summary as _export_quality_summary,
     _native_chart_uv_candidate_status,
-    _normalize_quality_preset,
+    _normalize_quality_preset as _normalize_ovoxel_quality_preset,
     _pixal3d_reference_stage_contract as _pixal3d_reference_stage_contract,
     _resolve_chart_angle_degrees,
-    _resolve_pixal3d_uv_backend,
+    _resolve_pixal3d_uv_backend as _resolve_pixal3d_uv_backend,
+    _resolve_pixal3d_uv_backend as _resolve_ovoxel_uv_backend,
     _resolve_simplify_backend,
     _resolve_tile_padding,
     _simplifier_backend_for_quality_preset,
@@ -58,6 +63,7 @@ from .pixal3d_quality import (
     _xatlas_chart_parity_summary,
 )
 from .pixal3d_reporting import (
+    _build_ovoxel_run_manifest,
     _build_pixal3d_run_manifest as _build_pixal3d_run_manifest,
     _fixture_manifest_summary,
     _glb_viewer_compatibility_summary as _glb_viewer_compatibility_summary,
@@ -70,456 +76,32 @@ from .pixal3d_reporting import (
     _visual_comparison_summary,
     decoded_metadata_value,
 )
+from .quality import summarize_ovoxel_export_quality, unavailable_production_equivalence
+from .uv import (
+    NativeUvMesh,
+    make_face_atlas_uvs,
+    make_native_chart_uvs,
+    make_reference_uvs,
+    make_xatlas_uvs,
+)
 
-_T = TypeVar("_T")
-
-PIXAL3D_PREVIEW_TARGET_FACES = 50_000
 PIXAL3D_REFERENCE_TARGET_FACES = 212_542
-PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES = 8
-PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER = 0.03
+OVOXEL_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES = 8
+OVOXEL_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER = 0.03
 
 
 @dataclass(frozen=True)
-class Pixal3DDecodedInputs:
-    """Decoded Pixal3D model-stage arrays validated at the native boundary."""
-
-    shape_coordinates: np.ndarray
-    shape_fields: np.ndarray
-    texture_coordinates: np.ndarray
-    texture_attributes: np.ndarray
-    contracts: dict[str, Any]
-    shape_metadata: dict[str, Any]
-    texture_metadata: dict[str, Any]
-    texture_spatial_shape: tuple[int, int, int] | None
-    texture_batch_size: int | None
-    texture_decode_resolution: int | None
-    texture_voxel_size: float | None
-
-
-@dataclass(frozen=True)
-class NativeUvMesh:
-    """UV-ready triangle mesh prepared by the native backend."""
-
-    vertices: np.ndarray
-    faces: np.ndarray
-    uvs: np.ndarray
-    stats: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class NativeGlbArtifact:
-    """Written native GLB artifact metadata."""
-
-    path: Path
-    format: str
-    bytes_written: int
-    metadata: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class Pixal3DGlbExportResult:
-    """End-to-end native Pixal3D GLB export result."""
+class OVoxelGlbExportResult:
+    """End-to-end native O-Voxel GLB export result."""
 
     glb: NativeGlbArtifact
     diagnostics_path: Path
     diagnostics: dict[str, Any]
-    # Populated only when export_pixal3d_glb(..., expose_raw_postprocess_inputs=True):
+    # Populated only when export_decoded_ovoxel_glb(..., expose_raw_postprocess_inputs=True):
     # the raw pre-postprocess bake channels + coverage status (Slice-2 oracle contract).
     raw_texture_inputs: dict[str, np.ndarray] | None = None
 
-
-def validate_pixal3d_decoded(
-    shape_coordinates: np.ndarray,
-    shape_fields: np.ndarray,
-    texture_coordinates: np.ndarray,
-    texture_attributes: np.ndarray,
-) -> dict[str, Any]:
-    """Validate Pixal3D decoded arrays through native contract checks."""
-
-    shape_contract = validate_pixal3d_shape_fields(shape_coordinates, shape_fields)
-    texture_contract = validate_pixal3d_texture_attributes(texture_coordinates, texture_attributes)
-    return {"shape": shape_contract, "texture": texture_contract}
-
-
-def make_face_atlas_uvs(vertices: np.ndarray, faces: np.ndarray, *, tile_padding: float = 0.08) -> NativeUvMesh:
-    """Create a deterministic native face-atlas UV mesh."""
-
-    result = _make_face_atlas_uvs(vertices, faces, float(tile_padding))
-    return NativeUvMesh(
-        vertices=np.asarray(result["vertices"]),
-        faces=np.asarray(result["faces"]),
-        uvs=np.asarray(result["uvs"]),
-        stats=dict(result["stats"]),
-    )
-
-
-def make_native_chart_uvs(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    chart_angle_degrees: float = 45.0,
-    tile_padding: float = 0.04,
-) -> NativeUvMesh:
-    """Create a deterministic native chart UV mesh."""
-
-    result = _make_native_chart_uvs(vertices, faces, float(chart_angle_degrees), float(tile_padding))
-    return NativeUvMesh(
-        vertices=np.asarray(result["vertices"]),
-        faces=np.asarray(result["faces"]),
-        uvs=np.asarray(result["uvs"]),
-        stats=dict(result["stats"]),
-    )
-
-
-def make_reference_uvs(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    texture_resolution: int = 1024,
-    pack_padding_texels: float = 0.0,
-) -> NativeUvMesh:
-    """Reference-parity UV unwrap (CuMesh cone clustering + xatlas-equivalent
-    chart growth, LSCM parameterization, and texel-gap shelf packing).
-
-    Pipeline knobs are pinned to the production reference values
-    (o_voxel.postprocess.to_glb -> CuMesh.uv_unwrap with xatlas defaults);
-    the atlas is packed at `texture_resolution` with xatlas PackOptions
-    semantics (padding + bilinear gutter).
-    """
-
-    from ._native import (  # noqa: PLC0415  (lazy: keeps module import light)
-        compute_uv_charts,
-        grow_uv_charts,
-        pack_uv_charts,
-        parameterize_uv_charts,
-        uv_quality_metrics,
-    )
-
-    source_vertices = np.ascontiguousarray(vertices, dtype=np.float32)
-    source_faces = np.ascontiguousarray(faces, dtype=np.int64)
-
-    substage_timings: dict[str, float] = {}
-    stage_a = _observed_substage(
-        "uv.compute_charts",
-        lambda: compute_uv_charts(
-            source_vertices,
-            source_faces,
-            threshold_cone_half_angle_rad=math.radians(90.0),
-            refine_iterations=0,
-            global_iterations=1,
-            smooth_strength=1.0,
-            area_penalty_weight=0.1,
-            perimeter_area_ratio_weight=0.0001,
-        ),
-        substage_timings,
-    )
-    grown = _observed_substage(
-        "uv.grow_charts",
-        lambda: grow_uv_charts(
-            source_vertices,
-            source_faces,
-            cluster_ids=np.ascontiguousarray(np.asarray(stage_a["chart_ids"]), dtype=np.int64),
-        ),
-        substage_timings,
-    )
-    parameterized = _observed_substage(
-        "uv.parameterize",
-        lambda: parameterize_uv_charts(
-            source_vertices,
-            source_faces,
-            np.ascontiguousarray(np.asarray(grown["chart_ids"]), dtype=np.int64),
-        ),
-        substage_timings,
-    )
-    chart_ids = np.ascontiguousarray(np.asarray(parameterized["chart_ids"]), dtype=np.int64)
-    packed = _observed_substage(
-        "uv.pack",
-        lambda: pack_uv_charts(
-            source_faces,
-            chart_ids,
-            np.ascontiguousarray(np.asarray(parameterized["corner_uvs"]), dtype=np.float64),
-            resolution=int(texture_resolution),
-            padding=float(pack_padding_texels),
-        ),
-        substage_timings,
-    )
-    packed_corner_uvs = np.asarray(packed["corner_uvs"])
-
-    # Assemble the duplicated-vertex UV mesh: one output vertex per unique
-    # (chart, source vertex) pair, deterministic via sorted unique keys.
-    def assemble_uv_mesh() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        corner_chart = np.repeat(chart_ids, 3)
-        corner_source = source_faces.reshape(-1)
-        keys = corner_chart * np.int64(source_vertices.shape[0]) + corner_source
-        unique_keys, first_index, inverse = np.unique(keys, return_index=True, return_inverse=True)
-        vmap = (unique_keys % np.int64(source_vertices.shape[0])).astype(np.int64)
-        return (
-            source_vertices[vmap],
-            np.ascontiguousarray(inverse.reshape(-1, 3), dtype=np.int64),
-            np.ascontiguousarray(packed_corner_uvs[first_index], dtype=np.float32),
-        )
-
-    out_vertices, out_faces, out_uvs = _observed_substage(
-        "uv.assemble",
-        assemble_uv_mesh,
-        substage_timings,
-    )
-
-    final_metrics = _observed_substage(
-        "uv.metrics",
-        lambda: uv_quality_metrics(
-            np.ascontiguousarray(out_vertices, dtype=np.float32),
-            out_faces,
-            out_uvs,
-            chart_ids=chart_ids,
-        ),
-        substage_timings,
-    )
-
-    stats: dict[str, Any] = {
-        "backend": "xatlas-equivalent-native",
-        "packing": "texel-shelf-pca-rotate",
-        "source_vertices": int(source_vertices.shape[0]),
-        "source_faces": int(source_faces.shape[0]),
-        "output_vertices": int(out_vertices.shape[0]),
-        "output_faces": int(out_faces.shape[0]),
-        "duplicated_vertex_ratio": float(out_vertices.shape[0] / max(source_vertices.shape[0], 1)),
-        "stage_a_cluster_count": int(stage_a["chart_count"]),
-        "growth_chart_count": int(grown["chart_count"]),
-        "chart_count": int(parameterized["chart_count"]),
-        "projected_chart_count": int(parameterized["projected_chart_count"]),
-        "projection_fallback_chart_count": int(parameterized["projection_fallback_chart_count"]),
-        "lscm_chart_count": int(parameterized["lscm_chart_count"]),
-        "shattered_face_chart_count": int(parameterized["shattered_face_chart_count"]),
-        "split_event_count": int(parameterized["split_event_count"]),
-        "lscm_unconverged_count": int(parameterized["lscm_unconverged_count"]),
-        "atlas_resolution": int(packed["atlas_resolution"]),
-        "texels_per_unit": float(packed["texels_per_unit"]),
-        "packed_height_texels": float(packed["packed_height_texels"]),
-        "shelf_count": int(packed["shelf_count"]),
-        "gap_texels": float(packed["gap_texels"]),
-        "uv_overlap_count": int(final_metrics["uv_overlap_count"]),
-        "uv_flipped_count": int(final_metrics["uv_flipped_count"]),
-        "uv_degenerate_count": int(final_metrics["uv_degenerate_count"]),
-        "uv_stretch_l2": float(final_metrics["uv_stretch_l2"]),
-        "uv_stretch_linf": float(final_metrics["uv_stretch_linf"]),
-        "uv_bbox_utilization": float(final_metrics["uv_bbox_utilization"]),
-        "uv_total_area": float(final_metrics["uv_total_area"]),
-        "timings_sec": substage_timings,
-    }
-    return NativeUvMesh(
-        vertices=np.asarray(out_vertices),
-        faces=np.asarray(out_faces),
-        uvs=np.asarray(out_uvs),
-        stats=stats,
-    )
-
-
-def make_xatlas_uvs(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    clustered: bool = False,
-    parallel_chunks: int = 1,
-    spatial_tile_padding: float = 0.02,
-) -> NativeUvMesh:
-    """Create a measured Apple Silicon xatlas candidate UV mesh."""
-
-    from ._native import compute_uv_charts, uv_quality_metrics  # noqa: PLC0415
-    from .xatlas import unwrap_xatlas, unwrap_xatlas_spatial  # noqa: PLC0415
-
-    source_vertices = np.ascontiguousarray(vertices, dtype=np.float32)
-    source_faces = np.ascontiguousarray(faces, dtype=np.int64)
-    if parallel_chunks <= 0:
-        raise ValueError(f"parallel_chunks must be positive, got {parallel_chunks}")
-    if clustered and parallel_chunks != 1:
-        raise ValueError("clustered and parallel spatial xatlas modes are mutually exclusive")
-    if (
-        not math.isfinite(spatial_tile_padding)
-        or spatial_tile_padding < 0.0
-        or spatial_tile_padding >= 0.5
-    ):
-        raise ValueError("spatial_tile_padding must be finite and in [0, 0.5)")
-    substage_timings: dict[str, float] = {}
-
-    def observe(name: str, fn: Callable[[], _T]) -> _T:
-        return _observed_substage(name, fn, substage_timings)
-
-    clusters = None
-    cluster_ids = None
-    if clustered:
-        clusters = observe(
-            "uv.xatlas-clustered.compute_charts",
-            lambda: compute_uv_charts(
-                source_vertices,
-                source_faces,
-                threshold_cone_half_angle_rad=math.radians(90.0),
-                refine_iterations=0,
-                global_iterations=1,
-                smooth_strength=1.0,
-                area_penalty_weight=0.1,
-                perimeter_area_ratio_weight=0.0001,
-            ),
-        )
-        cluster_ids = np.ascontiguousarray(np.asarray(clusters["chart_ids"]), dtype=np.int64)
-
-    if parallel_chunks > 1:
-        result = unwrap_xatlas_spatial(
-            source_vertices,
-            source_faces,
-            chunks=parallel_chunks,
-            tile_padding=spatial_tile_padding,
-            observe=observe,
-        )
-    else:
-        result = unwrap_xatlas(
-            source_vertices,
-            source_faces,
-            cluster_ids=cluster_ids,
-            observe=observe,
-        )
-    metrics = observe(
-        f"uv.{result.stats['backend']}.metrics",
-        lambda: uv_quality_metrics(
-            result.vertices,
-            result.faces,
-            result.uvs,
-            chart_ids=result.chart_ids if np.all(result.chart_ids >= 0) else None,
-        ),
-    )
-    source_triangles = source_vertices[source_faces].astype(np.float64, copy=False)
-    source_face_areas = 0.5 * np.linalg.norm(
-        np.cross(
-            source_triangles[:, 1] - source_triangles[:, 0],
-            source_triangles[:, 2] - source_triangles[:, 0],
-        ),
-        axis=1,
-    )
-    if not np.array_equal(
-        np.sort(result.source_face_ids),
-        np.arange(source_faces.shape[0], dtype=np.int64),
-    ):
-        raise ValueError("xatlas source_face_ids must be a permutation of all source faces")
-    ordered_source_face_areas = source_face_areas[result.source_face_ids]
-    total_surface_area = float(source_face_areas.sum())
-    unassigned_mask = result.chart_ids < 0
-    output_triangle_uvs = result.uvs[result.faces].astype(np.float64, copy=False)
-    output_uv_double_area = np.abs(
-        (output_triangle_uvs[:, 1, 0] - output_triangle_uvs[:, 0, 0])
-        * (output_triangle_uvs[:, 2, 1] - output_triangle_uvs[:, 0, 1])
-        - (output_triangle_uvs[:, 2, 0] - output_triangle_uvs[:, 0, 0])
-        * (output_triangle_uvs[:, 1, 1] - output_triangle_uvs[:, 0, 1])
-    )
-    uv_degenerate_mask = output_uv_double_area <= 2.0e-14
-    unassigned_surface_area = float(ordered_source_face_areas[unassigned_mask].sum())
-    uv_degenerate_surface_area = float(ordered_source_face_areas[uv_degenerate_mask].sum())
-    stats = {
-        **result.stats,
-        "stage_a_cluster_count": (
-            int(clusters["chart_count"]) if clusters is not None else None
-        ),
-        "uv_overlap_count": int(metrics["uv_overlap_count"]),
-        "uv_flipped_count": int(metrics["uv_flipped_count"]),
-        "uv_degenerate_count": int(metrics["uv_degenerate_count"]),
-        "uv_stretch_l2": float(metrics["uv_stretch_l2"]),
-        "uv_stretch_linf": float(metrics["uv_stretch_linf"]),
-        "uv_bbox_utilization": float(metrics["uv_bbox_utilization"]),
-        "uv_total_area": float(metrics["uv_total_area"]),
-        "source_surface_area": total_surface_area,
-        "unassigned_surface_area": unassigned_surface_area,
-        "unassigned_surface_area_ratio": (
-            unassigned_surface_area / total_surface_area if total_surface_area > 0.0 else 0.0
-        ),
-        "uv_degenerate_surface_area": uv_degenerate_surface_area,
-        "uv_degenerate_surface_area_ratio": (
-            uv_degenerate_surface_area / total_surface_area if total_surface_area > 0.0 else 0.0
-        ),
-        "uv_flipped_face_ratio": float(metrics["uv_flipped_count"]) / max(source_faces.shape[0], 1),
-        "timings_sec": substage_timings,
-    }
-    return NativeUvMesh(
-        vertices=result.vertices,
-        faces=result.faces,
-        uvs=result.uvs,
-        stats=stats,
-    )
-
-
-def textured_glb_payload(
-    mesh: NativeUvMesh,
-    *,
-    base_color_rgba: np.ndarray,
-    metallic_roughness: np.ndarray,
-    generator: str = "mlx-spatial SpatialKit",
-    mesh_name: str = "TexturedMesh",
-    material_name: str = "PBRMaterial",
-) -> bytes:
-    """Build a native self-contained GLB 2.0 payload."""
-
-    return bytes(
-        _textured_glb_payload(
-            mesh.vertices,
-            mesh.faces,
-            mesh.uvs,
-            base_color_rgba,
-            metallic_roughness,
-            str(generator),
-            str(mesh_name),
-            str(material_name),
-        )
-    )
-
-
-def write_textured_glb(
-    path: str | Path,
-    mesh: NativeUvMesh,
-    *,
-    base_color_rgba: np.ndarray,
-    metallic_roughness: np.ndarray,
-    generator: str = "mlx-spatial SpatialKit",
-    mesh_name: str = "TexturedMesh",
-    material_name: str = "PBRMaterial",
-    metadata: dict[str, Any] | None = None,
-) -> NativeGlbArtifact:
-    """Write a native GLB payload to disk."""
-
-    output = Path(path)
-    if output.suffix.lower() != ".glb":
-        raise ValueError("native textured exports require a .glb output path")
-    payload = textured_glb_payload(
-        mesh,
-        base_color_rgba=base_color_rgba,
-        metallic_roughness=metallic_roughness,
-        generator=generator,
-        mesh_name=mesh_name,
-        material_name=material_name,
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output.with_name(f".{output.name}.tmp")
-    try:
-        tmp_path.write_bytes(payload)
-        tmp_path.replace(output)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-    payload_metadata = {
-        "stage": "textured_glb",
-        "format": "glb",
-        "bytes_written": int(output.stat().st_size),
-        "generator": str(generator),
-        "mesh_name": str(mesh_name),
-        "material_name": str(material_name),
-        **(metadata or {}),
-    }
-    return NativeGlbArtifact(
-        path=output,
-        format="glb",
-        bytes_written=int(output.stat().st_size),
-        metadata=payload_metadata,
-    )
-
-
-def export_pixal3d_glb(
+def export_decoded_ovoxel_glb(
     decoded_dir: str | Path,
     output: str | Path,
     *,
@@ -529,11 +111,11 @@ def export_pixal3d_glb(
     grid_size: int | None = None,
     min_component_faces: int = 32,
     uv_backend: str = "face-atlas",
-    xatlas_parallel_chunks: int = 4,
+    xatlas_parallel_chunks: int | None = None,
     chart_angle_degrees: float = 45.0,
     tile_padding: float | None = None,
-    small_boundary_loop_fill_max_edges: int = PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES,
-    small_boundary_loop_fill_max_perimeter: float = PIXAL3D_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER,
+    small_boundary_loop_fill_max_edges: int = OVOXEL_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES,
+    small_boundary_loop_fill_max_perimeter: float = OVOXEL_SMALL_BOUNDARY_LOOP_FILL_MAX_PERIMETER,
     max_texture_pixels: int | None = None,
     source_projection: bool = True,
     source_projection_fallback_mode: str = "knn",
@@ -550,14 +132,14 @@ def export_pixal3d_glb(
     texture_postprocess: str = "legacy-dilation",
     expose_raw_postprocess_inputs: bool = False,
     source_coordinate_system: str = "auto",
-) -> Pixal3DGlbExportResult:
-    """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
+) -> OVoxelGlbExportResult:
+    """Convert decoded O-Voxel NPZ artifacts into a textured GLB through native hot paths."""
 
     from .texture import bake_pbr_texture
 
     source_dir = Path(decoded_dir)
     if not source_dir.is_dir():
-        raise ValueError(f"decoded Pixal3D directory does not exist: {source_dir}")
+        raise ValueError(f"decoded O-Voxel directory does not exist: {source_dir}")
     if texture_size <= 0:
         raise ValueError("texture_size must be positive")
     if grid_size is not None and grid_size <= 0:
@@ -606,16 +188,21 @@ def export_pixal3d_glb(
             f"simplify_backend={resolved_simplify_backend!r} requires remesh=False because it preserves "
             "the original FlexiDualGrid single-layer surface"
         )
-    resolved_uv_backend = _resolve_pixal3d_uv_backend(uv_backend)
-    if xatlas_parallel_chunks <= 0:
-        raise ValueError("xatlas_parallel_chunks must be positive")
-    if resolved_uv_backend == "xatlas-parallel-spatial" and xatlas_parallel_chunks <= 1:
+    resolved_uv_backend = _resolve_ovoxel_uv_backend(uv_backend)
+    resolved_xatlas_parallel_chunks: int | None = None
+    if resolved_uv_backend == "xatlas-parallel-spatial":
+        if xatlas_parallel_chunks is None or xatlas_parallel_chunks <= 1:
+            raise ValueError(
+                "uv_backend='xatlas-parallel-spatial' requires xatlas_parallel_chunks > 1"
+            )
+        resolved_xatlas_parallel_chunks = int(xatlas_parallel_chunks)
+    elif xatlas_parallel_chunks is not None:
         raise ValueError(
-            "uv_backend='xatlas-parallel-spatial' requires xatlas_parallel_chunks > 1"
+            "xatlas_parallel_chunks only applies to uv_backend='xatlas-parallel-spatial'"
         )
     resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
     resolved_tile_padding, tile_padding_source = _resolve_tile_padding(tile_padding, resolved_uv_backend)
-    glb_path, resolved_diagnostics_path = _resolve_pixal3d_export_paths(output, diagnostics_path)
+    glb_path, resolved_diagnostics_path = _resolve_ovoxel_export_paths(output, diagnostics_path)
     shape_path = source_dir / "shape_decoder_fields.npz"
     texture_path = source_dir / "texture_decoder_pbr.npz"
     if not shape_path.exists():
@@ -623,43 +210,29 @@ def export_pixal3d_glb(
     if not texture_path.exists():
         raise ValueError(f"missing decoded texture artifact: {texture_path}")
 
-    fixture_manifest = _load_pixal3d_fixture_manifest(source_dir)
-    export_settings = _resolve_pixal3d_export_settings(
-        source_dir,
-        quality_preset,
-        target_faces,
-        fixture_manifest=fixture_manifest,
-    )
-    reference = export_settings["reference"]
-    resolved_quality_preset = str(export_settings["quality_preset"])
-    resolved_target_faces = int(export_settings["target_faces"])
+    resolved_quality_preset = _normalize_ovoxel_quality_preset(quality_preset)
+    if target_faces is not None and int(target_faces) <= 0:
+        raise ValueError("target_faces must be positive")
     requested_simplifier_backend = _simplifier_backend_for_quality_preset(resolved_quality_preset)
     if resolved_simplify_backend is not None:
         requested_simplifier_backend = resolved_simplify_backend
     diagnostics: dict[str, Any] = {
-        "stage": "pixal3d_glb_export",
+        "stage": "ovoxel_glb_export",
         "source_dir": str(source_dir),
         "output_path": str(glb_path),
         "diagnostics_path": str(resolved_diagnostics_path),
         "settings": {
             "quality_preset": resolved_quality_preset,
             "texture_size": int(texture_size),
-            "target_faces": resolved_target_faces,
             "requested_simplifier_backend": requested_simplifier_backend,
             "requested_target_faces": int(target_faces) if target_faces is not None else None,
-            "target_faces_source": export_settings["target_faces_source"],
-            "reference_available": reference is not None,
-            "reference_trace_path": str(reference["trace_path"]) if reference is not None else None,
-            "reference_target_faces": reference.get("final_faces") if reference is not None else None,
-            "reference_texture_size": reference.get("texture_size") if reference is not None else None,
-            "reference_xatlas_face_guard": reference.get("xatlas_face_guard") if reference is not None else None,
             "grid_size": int(grid_size) if grid_size is not None else None,
             "min_component_faces": int(min_component_faces),
             "small_boundary_loop_fill_max_edges": resolved_small_boundary_loop_fill_max_edges,
             "small_boundary_loop_fill_max_perimeter": resolved_small_boundary_loop_fill_max_perimeter,
             "requested_uv_backend": str(uv_backend),
             "uv_backend": resolved_uv_backend,
-            "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
+            "xatlas_parallel_chunks": resolved_xatlas_parallel_chunks,
             "chart_angle_degrees": resolved_chart_angle_degrees,
             "tile_padding": resolved_tile_padding,
             "tile_padding_source": tile_padding_source,
@@ -681,8 +254,6 @@ def export_pixal3d_glb(
         "timings_sec": {},
         "memory_samples": {},
     }
-    if fixture_manifest is not None:
-        diagnostics["fixture_manifest"] = _fixture_manifest_summary(fixture_manifest)
 
     memory_monitor = _ProcessMemoryMonitor()
 
@@ -694,9 +265,46 @@ def export_pixal3d_glb(
     decoded = _timed_stage(
         diagnostics,
         "load_npz",
-        lambda: load_pixal3d_decoded_npz(shape_path, texture_path),
+        lambda: load_decoded_ovoxel_npz(shape_path, texture_path),
         memory_monitor=memory_monitor,
     )
+    model_identity = resolve_model_identity(decoded.shape_metadata, decoded.texture_metadata)
+    fixture_manifest = None
+    model_identity_source = "decoded-artifact-metadata"
+    if model_identity["family"] in {"pixal3d", "ovoxel"}:
+        fixture_manifest = _load_pixal3d_fixture_manifest(source_dir)
+        if model_identity["family"] == "ovoxel" and fixture_manifest is not None:
+            model_identity = {
+                "family": "pixal3d",
+                "label": "Pixal3D",
+                "asset_prefix": "Pixal3D",
+            }
+            model_identity_source = "pixal3d-fixture-manifest"
+    diagnostics["model"] = model_identity
+    diagnostics["model_identity_source"] = model_identity_source
+    export_settings = _resolve_ovoxel_export_settings(
+        source_dir,
+        model_identity["family"],
+        resolved_quality_preset,
+        target_faces,
+        fixture_manifest=fixture_manifest,
+    )
+    reference = export_settings["reference"]
+    resolved_target_faces = int(export_settings["target_faces"])
+    diagnostics["settings"].update(
+        {
+            "target_faces": resolved_target_faces,
+            "target_faces_source": export_settings["target_faces_source"],
+            "reference_available": reference is not None,
+            "reference_profile": export_settings["reference_profile"],
+            "reference_trace_path": str(reference["trace_path"]) if reference is not None else None,
+            "reference_target_faces": reference.get("final_faces") if reference is not None else None,
+            "reference_texture_size": reference.get("texture_size") if reference is not None else None,
+            "reference_xatlas_face_guard": reference.get("xatlas_face_guard") if reference is not None else None,
+        }
+    )
+    if fixture_manifest is not None:
+        diagnostics["fixture_manifest"] = _fixture_manifest_summary(fixture_manifest)
     diagnostics["contracts"] = decoded.contracts
     diagnostics["source"] = {
         "shape_decoder": {
@@ -712,7 +320,7 @@ def export_pixal3d_glb(
             "voxel_size": decoded.texture_voxel_size,
         },
     }
-    resolved_source_coordinate_system = _resolve_source_coordinate_system(
+    resolved_source_coordinate_system = resolve_source_coordinate_system(
         source_coordinate_system,
         decoded.shape_metadata,
         decoded.texture_metadata,
@@ -1269,7 +877,7 @@ def export_pixal3d_glb(
             return make_xatlas_uvs(
                 simplified.vertices,
                 simplified.faces,
-                parallel_chunks=xatlas_parallel_chunks,
+                parallel_chunks=resolved_xatlas_parallel_chunks or 1,
                 spatial_tile_padding=resolved_tile_padding,
             )
         if resolved_uv_backend == "xatlas-equivalent-native":
@@ -1332,7 +940,8 @@ def export_pixal3d_glb(
         diagnostics["reference"] = reference
         diagnostics["reference_comparison"] = _reference_comparison(diagnostics, reference)
 
-    quality = _export_quality_summary(
+    quality = summarize_ovoxel_export_quality(
+        model_identity["family"],
         simplify_stats,
         post_metrics,
         baked.stats,
@@ -1340,28 +949,36 @@ def export_pixal3d_glb(
         quality_preset=resolved_quality_preset,
         uv_stats=uv_mesh.stats,
     )
-    chart_uv_candidate = _native_chart_uv_candidate_status(
-        uv_mesh.stats,
-        baked.stats,
-        resolved_uv_backend,
-    )
-    quality["native_chart_uv_candidate"] = chart_uv_candidate
-    quality["xatlas_chart_parity"] = _xatlas_chart_parity_summary(
-        reference,
-        uv_mesh.stats,
-        baked.stats,
-        resolved_uv_backend,
-    )
-    if chart_uv_candidate.get("status") == "quality_blocked":
-        quality["warnings"] = tuple([*quality["warnings"], "native_chart_uv_candidate_quality_blocked"])
-    quality["upstream_export_settings"] = _upstream_export_settings_summary(
-        resolved_target_faces,
-        texture_size,
-        simplify_stats,
-        baked.stats,
-        quality,
-    )
-    quality["production_equivalence"] = _production_equivalence_summary(quality, None)
+    if model_identity["family"] == "pixal3d":
+        chart_uv_candidate = _native_chart_uv_candidate_status(
+            uv_mesh.stats,
+            baked.stats,
+            resolved_uv_backend,
+        )
+        quality["native_chart_uv_candidate"] = chart_uv_candidate
+        quality["xatlas_chart_parity"] = _xatlas_chart_parity_summary(
+            reference,
+            uv_mesh.stats,
+            baked.stats,
+            resolved_uv_backend,
+        )
+        if chart_uv_candidate.get("status") == "quality_blocked":
+            quality["warnings"] = tuple(
+                [*quality["warnings"], "native_chart_uv_candidate_quality_blocked"]
+            )
+        quality["upstream_export_settings"] = _upstream_export_settings_summary(
+            resolved_target_faces,
+            texture_size,
+            simplify_stats,
+            baked.stats,
+            quality,
+        )
+        quality["production_equivalence"] = _production_equivalence_summary(quality, None)
+    else:
+        quality["production_equivalence"] = unavailable_production_equivalence(
+            model_identity["family"],
+            artifact_ready=bool(quality["artifact_ready"]),
+        )
     diagnostics["quality"] = quality
 
     gltf_uv_mesh = NativeUvMesh(
@@ -1381,9 +998,9 @@ def export_pixal3d_glb(
             gltf_uv_mesh,
             base_color_rgba=baked.base_color_rgba,
             metallic_roughness=baked.metallic_roughness,
-            generator="mlx-spatial SpatialKit Pixal3D",
-            mesh_name="Pixal3D_TexturedMesh",
-            material_name="Pixal3D_PBR",
+            generator=f"mlx-spatial SpatialKit {model_identity['label']}",
+            mesh_name=f"{model_identity['asset_prefix']}_TexturedMesh",
+            material_name=f"{model_identity['asset_prefix']}_PBR",
             metadata={
                 "pipeline_type": decoded_metadata_value(diagnostics, "pipeline_type"),
                 "shape_decoder_artifact": str(shape_path),
@@ -1393,7 +1010,7 @@ def export_pixal3d_glb(
                 "quality_preset": resolved_quality_preset,
                 "uv_backend": resolved_uv_backend,
                 "uv_stats_backend": str(uv_mesh.stats.get("backend")),
-                "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
+                "xatlas_parallel_chunks": resolved_xatlas_parallel_chunks,
                 "chart_angle_degrees": resolved_chart_angle_degrees,
                 "bake_backend": str(baked.stats.get("backend")),
                 "coverage_ratio": float(baked.stats.get("coverage_ratio", 0.0)),
@@ -1455,7 +1072,7 @@ def export_pixal3d_glb(
         "bytes_written": int(glb.bytes_written),
     }
     manifest_path = glb.path.parent / "artifact-manifest.json"
-    run_manifest = _build_pixal3d_run_manifest(
+    run_manifest = _build_ovoxel_run_manifest(
         decoded_dir=source_dir,
         shape_path=shape_path,
         texture_path=texture_path,
@@ -1474,132 +1091,11 @@ def export_pixal3d_glb(
     memory_monitor.stop()
     diagnostics["memory"] = memory_monitor.summary()
     _write_json_atomic(resolved_diagnostics_path, diagnostics)
-    return Pixal3DGlbExportResult(
+    return OVoxelGlbExportResult(
         glb=glb,
         diagnostics_path=resolved_diagnostics_path,
         diagnostics=diagnostics,
         raw_texture_inputs=raw_texture_inputs,
-    )
-
-
-def _load_npz_array(payload: np.lib.npyio.NpzFile, key: str, path: Path) -> np.ndarray:
-    if key not in payload.files:
-        raise ValueError(f"{path} is missing required array {key!r}")
-    return np.asarray(payload[key])
-
-
-def _load_npz_metadata(payload: np.lib.npyio.NpzFile, path: Path) -> dict[str, Any]:
-    if "metadata_json" not in payload.files:
-        return {}
-    raw = payload["metadata_json"]
-    try:
-        text = str(raw.item() if raw.shape == () else raw.tolist())
-        value = json.loads(text)
-    except (TypeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError(f"{path} contains invalid metadata_json") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} metadata_json must decode to an object")
-    return value
-
-
-def _load_optional_scalar(payload: np.lib.npyio.NpzFile, key: str, path: Path) -> Any:
-    if key not in payload.files:
-        return None
-    value = payload[key]
-    if value.shape != ():
-        raise ValueError(f"{path} optional scalar {key!r} must be rank 0")
-    return value.item()
-
-
-def _resolve_source_coordinate_system(
-    requested: str,
-    shape_metadata: dict[str, Any],
-    texture_metadata: dict[str, Any],
-) -> str:
-    if requested != "auto":
-        return requested
-
-    explicit_values = {
-        str(metadata["source_coordinate_system"]).strip().lower()
-        for metadata in (shape_metadata, texture_metadata)
-        if metadata.get("source_coordinate_system")
-    }
-    if len(explicit_values) > 1:
-        raise ValueError(
-            "decoded shape and texture artifacts disagree on source_coordinate_system: "
-            f"{tuple(sorted(explicit_values))}"
-        )
-    if explicit_values:
-        resolved = next(iter(explicit_values))
-        if resolved not in SUPPORTED_SOURCE_COORDINATE_SYSTEMS:
-            raise ValueError(f"decoded artifacts declare unsupported source_coordinate_system {resolved!r}")
-        return resolved
-
-    source_models = {
-        str(metadata["source_model"]).strip().lower()
-        for metadata in (shape_metadata, texture_metadata)
-        if metadata.get("source_model")
-    }
-    if len(source_models) > 1:
-        raise ValueError(
-            "decoded shape and texture artifacts disagree on source_model: "
-            f"{tuple(sorted(source_models))}"
-        )
-    if source_models and next(iter(source_models)).startswith("trellis"):
-        return TRELLIS_Z_UP
-    return GLTF_Y_UP
-
-
-def load_pixal3d_decoded_npz(
-    shape_decoder_path: str | Path,
-    texture_decoder_path: str | Path,
-) -> Pixal3DDecodedInputs:
-    """Load Pixal3D decoded NPZ files and validate their native contracts."""
-
-    shape_path = Path(shape_decoder_path)
-    texture_path = Path(texture_decoder_path)
-    with np.load(shape_path) as shape_payload:
-        shape_coordinates = _load_npz_array(shape_payload, "coordinates", shape_path)
-        shape_fields = _load_npz_array(shape_payload, "fields", shape_path)
-        shape_metadata = _load_npz_metadata(shape_payload, shape_path)
-    with np.load(texture_path) as texture_payload:
-        texture_coordinates = _load_npz_array(texture_payload, "coordinates", texture_path)
-        texture_attributes = _load_npz_array(texture_payload, "attributes", texture_path)
-        texture_metadata = _load_npz_metadata(texture_payload, texture_path)
-        texture_spatial_shape = (
-            tuple(int(dim) for dim in _load_npz_array(texture_payload, "spatial_shape", texture_path))
-            if "spatial_shape" in texture_payload.files
-            else None
-        )
-        texture_batch_size = _load_optional_scalar(texture_payload, "batch_size", texture_path)
-        texture_decode_resolution = _load_optional_scalar(texture_payload, "decode_resolution", texture_path)
-        texture_voxel_size = _load_optional_scalar(texture_payload, "voxel_size", texture_path)
-    contracts = validate_pixal3d_decoded(
-        shape_coordinates,
-        shape_fields,
-        texture_coordinates,
-        texture_attributes,
-    )
-    return Pixal3DDecodedInputs(
-        shape_coordinates=shape_coordinates,
-        shape_fields=shape_fields,
-        texture_coordinates=texture_coordinates,
-        texture_attributes=texture_attributes,
-        contracts=contracts,
-        shape_metadata=shape_metadata,
-        texture_metadata=texture_metadata,
-        texture_spatial_shape=texture_spatial_shape,
-        texture_batch_size=int(texture_batch_size) if texture_batch_size is not None else None,
-        texture_decode_resolution=(
-            None
-            if texture_decode_resolution is None or int(texture_decode_resolution) < 0
-            else int(texture_decode_resolution)
-        ),
-        texture_voxel_size=(
-            None
-            if texture_voxel_size is None or not np.isfinite(float(texture_voxel_size))
-            else float(texture_voxel_size)
-        ),
     )
 
 
@@ -1628,7 +1124,7 @@ def _texture_shape(baked: Any) -> dict[str, Any]:
     }
 
 
-def _resolve_pixal3d_export_paths(output: str | Path, diagnostics_path: str | Path | None) -> tuple[Path, Path]:
+def _resolve_ovoxel_export_paths(output: str | Path, diagnostics_path: str | Path | None) -> tuple[Path, Path]:
     output_path = Path(output)
     glb_path = output_path if output_path.suffix.lower() == ".glb" else output_path / "model.glb"
     if diagnostics_path is None:
@@ -1636,7 +1132,7 @@ def _resolve_pixal3d_export_paths(output: str | Path, diagnostics_path: str | Pa
     else:
         diag_path = Path(diagnostics_path)
     if diag_path.suffix.lower() != ".json":
-        raise ValueError("Pixal3D export diagnostics path must end with .json")
+        raise ValueError("O-Voxel export diagnostics path must end with .json")
     return glb_path, diag_path
 
 
@@ -1651,26 +1147,35 @@ def _resolve_positive_int(*values: Any, default: int, name: str) -> int:
     return int(default)
 
 
-def _resolve_pixal3d_export_settings(
+def _resolve_ovoxel_export_settings(
     decoded_dir: Path,
+    model_family: str,
     quality_preset: str,
     target_faces: int | None,
     *,
     fixture_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    preset = _normalize_quality_preset(quality_preset)
-    reference = _load_pixal3d_reference_trace(decoded_dir, fixture_manifest=fixture_manifest)
+    preset = _normalize_ovoxel_quality_preset(quality_preset)
+    has_pixal3d_profile = model_family == "pixal3d"
+    reference = (
+        _load_pixal3d_reference_trace(decoded_dir, fixture_manifest=fixture_manifest)
+        if has_pixal3d_profile
+        else None
+    )
     if target_faces is not None:
         resolved_target_faces = int(target_faces)
         target_source = "explicit"
     elif preset == "reference-target" and reference is not None and reference.get("final_faces") is not None:
         resolved_target_faces = int(reference["final_faces"])
         target_source = "reference_final_faces"
-    elif preset == "reference-target":
+    elif preset == "reference-target" and has_pixal3d_profile:
         resolved_target_faces = PIXAL3D_REFERENCE_TARGET_FACES
         target_source = "reference_default"
+    elif preset == "reference-target":
+        resolved_target_faces = OVOXEL_DEFAULT_TARGET_FACES
+        target_source = "ovoxel_production_default"
     else:
-        resolved_target_faces = PIXAL3D_PREVIEW_TARGET_FACES
+        resolved_target_faces = OVOXEL_PREVIEW_TARGET_FACES
         target_source = "preview_default"
     if resolved_target_faces <= 0:
         raise ValueError("target_faces must be positive")
@@ -1679,8 +1184,26 @@ def _resolve_pixal3d_export_settings(
         "target_faces": resolved_target_faces,
         "target_faces_source": target_source,
         "reference": reference,
+        "reference_profile": "pixal3d-upstream" if has_pixal3d_profile else None,
     }
 
+
+def _resolve_pixal3d_export_settings(
+    decoded_dir: Path,
+    quality_preset: str,
+    target_faces: int | None,
+    *,
+    fixture_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compatibility wrapper for Pixal3D quality-evidence tests."""
+
+    return _resolve_ovoxel_export_settings(
+        decoded_dir,
+        "pixal3d",
+        quality_preset,
+        target_faces,
+        fixture_manifest=fixture_manifest,
+    )
 
 
 def _nested_get(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
@@ -1734,19 +1257,34 @@ def _jsonable(value: Any) -> Any:
         return value.tolist()
     return value
 
+
+# Compatibility aliases for callers written before the decoded contract became
+# model-neutral. New code should use the O-Voxel names above.
+Pixal3DDecodedInputs = DecodedOVoxelInputs
+Pixal3DGlbExportResult = OVoxelGlbExportResult
+export_pixal3d_glb = export_decoded_ovoxel_glb
+load_pixal3d_decoded_npz = load_decoded_ovoxel_npz
+validate_pixal3d_decoded = validate_decoded_ovoxel
+
+
 __all__ = [
+    "DecodedOVoxelInputs",
     "NativeGlbArtifact",
     "NativeUvMesh",
+    "OVoxelGlbExportResult",
     "Pixal3DGlbExportResult",
     "Pixal3DDecodedInputs",
     "backend_info",
+    "export_decoded_ovoxel_glb",
     "export_pixal3d_glb",
+    "load_decoded_ovoxel_npz",
     "load_pixal3d_decoded_npz",
     "make_face_atlas_uvs",
     "make_native_chart_uvs",
     "make_reference_uvs",
     "make_xatlas_uvs",
     "textured_glb_payload",
+    "validate_decoded_ovoxel",
     "validate_pixal3d_decoded",
     "write_textured_glb",
 ]

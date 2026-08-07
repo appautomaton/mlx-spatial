@@ -2,8 +2,8 @@
 
 Pixal3D is TencentARC's projection-conditioned image-to-3D pipeline. The
 `mlx-spatial` implementation is checkpoint-backed and can run through staged
-MLX inference to a textured GLB, but its API, native export defaults, and
-production-equivalence gate are still under development.
+MLX inference to a textured GLB. Its public API and production-equivalence gate
+are still under development.
 
 ## Current Status
 
@@ -15,20 +15,19 @@ Implemented:
 - converted NAF loading and coordinate-sampled projection
 - sparse-structure, 512/1024 shape SLat, texture SLat, shape decoder, and
   texture decoder stages
-- intermediate NPZ artifacts, trace output, and an internal textured GLB path
-- an explicit native `mlx_spatial.spatialkit` export path
+- model-neutral decoded O-Voxel NPZ artifacts and trace output
+- one native `mlx_spatial.spatialkit` path from decoded artifacts to GLB
 
-The integrated SpatialKit module already contains opt-in native and MLX/Metal
+The integrated SpatialKit module contains native and MLX/Metal
 QEM edge-collapse paths, a narrow-band UDF double-cover behavior control,
 single-layer nonmanifold repair, real global/clustered xatlas, a separate
 `xatlas-equivalent-native` UV implementation, trilinear source projection,
 native Telea postprocessing, PBR texture baking, and strict-viewer GLB checks.
-These components are not yet the default Pixal3D export contract.
+Pixal3D now uses this path exclusively and fails clearly if SpatialKit cannot
+load; it does not silently run an obsolete exporter.
 
 The remaining release boundary is integration and evidence:
 
-- the default `reference-target` preset still selects the topology-aware
-  preview simplifier rather than either experimental single-layer QEM path
 - full reference-scale `1M faces / 4096 texture` readiness is not established
 - `production_equivalence_ready` remains the authoritative strict gate
 - fine structures such as the violin-bow fixture need an explicit preservation
@@ -107,8 +106,9 @@ shape_slat_lr.npz
 shape_slat_hr_coordinates.npz
 shape_slat_hr.npz
 texture_slat.npz
-shape_decoder_fields.npz
-texture_decoder_pbr.npz
+decoded/
+  shape_decoder_fields.npz
+  texture_decoder_pbr.npz
 model.glb
 ```
 
@@ -125,9 +125,8 @@ override is intended.
 - shape decoder token limit: `1100000`
 - texture decoder token limit: `1100000`
 - texture size: `1024`
-- GLB face target: `50000`
-- texture bake backend: `kdtree`
-- GLB export backend: `internal`
+- GLB face target: `200000`
+- GLB exporter: integrated SpatialKit
 - MoGe memory profile: `balanced`
 - NAF coordinate chunk size: `8192`
 
@@ -135,10 +134,10 @@ Use `uv run python scripts/pixal3d/generate.py --help` for the complete current
 surface. The in-development API may change before Pixal3D is promoted to a
 stable pipeline.
 
-## Native SpatialKit Export
+## SpatialKit Export Boundary
 
-SpatialKit ships in the root distribution. Request it explicitly while the
-quality/performance comparison remains in progress:
+SpatialKit ships in the root distribution and is the only textured GLB export
+path used by Pixal3D:
 
 ```bash
 uv run python scripts/pixal3d/generate.py \
@@ -147,19 +146,16 @@ uv run python scripts/pixal3d/generate.py \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
   --moge-root weights/sam-3d-objects-mlx/moge \
   --naf-root weights/naf \
-  --output-dir outputs/pixal3d/spatialkit-sample \
-  --pipeline-type 1024_cascade \
-  --glb-export-backend spatialkit
+  --output-dir outputs/pixal3d/sample \
+  --pipeline-type 1024_cascade
 ```
 
-The explicit backend consumes `shape_decoder_fields.npz` and
-`texture_decoder_pbr.npz`, then writes `model.glb` and `diagnostics.json`. If
-`mlx_spatial.spatialkit` is not importable, the main pipeline records the reason and
-falls back to the internal writer.
-
-The default remains `internal` until cached-artifact comparisons demonstrate
-that SpatialKit is better on output quality, runtime, and memory behavior. This
-evaluation does not rerun model inference.
+The pipeline writes `decoded/shape_decoder_fields.npz` and
+`decoded/texture_decoder_pbr.npz`, releases inference tensors and the MLX
+cache, then passes those files to SpatialKit. SpatialKit writes `model.glb` and
+`diagnostics.json`. If its native
+extension cannot load, the pipeline records a structured blocker before model
+inference rather than falling back after expensive work.
 
 Current cached comparisons already reject one tempting optimization:
 `xatlas-parallel-spatial` preserves rendered appearance but is slower than
@@ -168,7 +164,8 @@ introducing explicit spatial partition cuts. It remains available for
 Trellis2/SAM3D compatibility and controlled experiments, not as a Pixal3D
 default candidate.
 
-For direct decoded-NPZ experiments, `export_pixal3d_glb` exposes these opt-ins:
+For direct decoded-NPZ experiments, `export_decoded_ovoxel_glb` exposes these
+lower-level controls:
 
 - `simplify_backend="single-layer-qem"` with `remesh=False`
 - `simplify_backend="single-layer-mlx-qem"` with `remesh=False`

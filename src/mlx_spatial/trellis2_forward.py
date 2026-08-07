@@ -125,6 +125,7 @@ class Trellis2ForwardTraceResult:
     completed_stages: tuple[str, ...]
     outputs: tuple[Trellis2StageOutput, ...] = ()
     blocker: Trellis2ForwardBlocker | None = None
+    timings_sec: dict[str, float] = field(default_factory=dict)
 
     @property
     def completed(self) -> bool:

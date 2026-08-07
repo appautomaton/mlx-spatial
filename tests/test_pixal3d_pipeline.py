@@ -7,7 +7,6 @@ import numpy as np
 from PIL import Image
 
 import mlx_spatial.pixal3d_inference as pixal3d_inference
-from mlx_spatial.ovoxel import FlexibleDualGridMesh
 from mlx_spatial.pixal3d_camera import pixal3d_stage_plan
 from mlx_spatial.pixal3d_inference import (
     PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
@@ -18,7 +17,6 @@ from mlx_spatial.pixal3d_inference import (
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
 from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
 from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
-from mlx_spatial.trellis2_export import Trellis2TextureBakeResult
 from pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_decode_root,
@@ -51,7 +49,7 @@ def _pixal3d_hidden_states(*, patch_grid: int, channels: int) -> mx.array:
 
 def test_pixal3d_stage_timer_records_independent_durations_and_total():
     values = iter((0.0, 10.0, 13.0, 20.0, 27.0, 30.0))
-    timer = pixal3d_inference._StageTimer(lambda: next(values))
+    timer = pixal3d_inference.StageTimer(lambda: next(values))
 
     first_started = timer.begin()
     timer.end("first", first_started)
@@ -264,25 +262,6 @@ def test_pixal3d_pipeline_validates_decoder_token_limits(tmp_path):
     assert texture_result.trace.blocker.stage == "input-validation"
     assert texture_result.trace.blocker.operation == "validate Pixal3D texture decoder token limit"
     assert texture_result.trace.blocker.metadata["texture_decoder_token_limit"] == 0
-
-
-def test_pixal3d_pipeline_validates_glb_export_backend(tmp_path):
-    root = write_fake_pixal3d_root(tmp_path / "weights")
-    image = tmp_path / "image.png"
-    _write_pixal3d_test_rgba(image)
-
-    result = Pixal3DInferencePipeline(root).generate(
-        image,
-        manual_fov=0.2,
-        glb_export_backend="bad",
-    )
-
-    assert not result.ready
-    assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "input-validation"
-    assert result.trace.blocker.operation == "validate Pixal3D export options"
-    assert result.trace.blocker.metadata["glb_export_backend"] == "bad"
-    assert result.trace.blocker.metadata["supported_glb_export_backends"] == ("internal", "spatialkit")
 
 
 def test_pixal3d_pipeline_reaches_sparse_projection_boundary_with_fake_dinov3_root(tmp_path):
@@ -743,6 +722,7 @@ def test_pixal3d_pipeline_writes_texture_slat_and_shape_decoder_then_blocks_with
         "texture_slat.npz",
         "shape_decoder_fields.npz",
     ]
+    assert result.artifacts[-1].parent == tmp_path / "out" / "decoded"
     payload = np.load(result.artifacts[5])
     assert payload["coordinates"].shape == (4096, 4)
     assert payload["features"].shape == (4096, 32)
@@ -830,6 +810,8 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
         "shape_decoder_fields.npz",
         "texture_decoder_pbr.npz",
     ]
+    assert result.artifacts[-2].parent == tmp_path / "out" / "decoded"
+    assert result.artifacts[-1].parent == tmp_path / "out" / "decoded"
     shape_payload = np.load(result.artifacts[6])
     assert shape_payload["coordinates"].shape == (4096, 4)
     assert shape_payload["fields"].shape == (4096, 7)
@@ -868,9 +850,6 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
         texture_naf_feature_map=naf,
         texture_size=16,
         glb_target_faces=123,
-        xatlas_face_guard=456,
-        xatlas_parallel_chunks=1,
-        texture_bake_backend="kdtree",
     )
 
     assert result.ready
@@ -882,19 +861,17 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
         "artifact:textured_glb",
     )
     assert result.trace.output_path == tmp_path / "out" / "pixal3d.glb"
-    assert result.artifacts[-1] == tmp_path / "out" / "pixal3d.glb"
-    assert result.artifacts[-1].read_bytes() == b"glb"
+    assert result.artifacts[-2] == tmp_path / "out" / "pixal3d.glb"
+    assert result.artifacts[-2].read_bytes() == b"glb"
     assert result.trace.metadata["mesh_export"]["source_mesh_vertices"] == 4
     assert result.trace.metadata["mesh_export"]["source_mesh_faces"] == 2
     assert result.trace.metadata["mesh_export"]["texture_size"] == 16
-    assert result.trace.metadata["mesh_export"]["bake_backend"] == "xatlas-kdtree"
+    assert result.trace.metadata["mesh_export"]["bake_backend"] == "metal-face-atlas-nearest"
     assert result.trace.metadata["textured_glb_artifact"].bytes_written == 3
-    assert calls["mesh_grid_size"] == 1024
-    assert calls["postprocess_target_faces"] == 123
-    assert calls["bake_texture_size"] == 16
-    assert calls["bake_xatlas_face_guard"] == 456
-    assert calls["bake_xatlas_parallel_chunks"] == 1
-    assert calls["bake_texture_bake_backend"] == "kdtree"
+    assert calls["grid_size"] == 1024
+    assert calls["target_faces"] == 123
+    assert calls["texture_size"] == 16
+    assert calls["quality_preset"] == "reference-target"
     checkpoints = result.trace.metadata["memory_checkpoints"]
     assert tuple(checkpoints) == (
         "after_sparse_structure",
@@ -904,13 +881,14 @@ def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, m
         "after_texture_slat",
         "after_shape_decoder",
         "after_texture_decoder",
+        "before_spatialkit_glb_export",
         "after_glb_export",
     )
     for checkpoint in checkpoints.values():
         assert set(checkpoint) == {"active_bytes", "peak_bytes"}
 
 
-def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monkeypatch):
+def test_pixal3d_pipeline_uses_required_spatialkit_export_backend(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
     _write_pixal3d_test_rgba(image)
@@ -923,22 +901,16 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
     def fake_spatialkit_exporter(
         decoded_dir,
         output_path,
-        *,
-        texture_size,
-        target_faces,
-        grid_size,
-        diagnostics_path,
+        **kwargs,
     ):
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"glb")
-        diagnostics = Path(diagnostics_path)
+        diagnostics = Path(kwargs["diagnostics_path"])
         diagnostics.write_text("{}", encoding="utf-8")
         calls["decoded_dir"] = Path(decoded_dir)
         calls["output_path"] = output
-        calls["texture_size"] = texture_size
-        calls["target_faces"] = target_faces
-        calls["grid_size"] = grid_size
+        calls.update(kwargs)
         calls["diagnostics_path"] = diagnostics
         return SimpleNamespace(
             glb=SimpleNamespace(
@@ -961,7 +933,7 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
                     "texture_bake": {
                         "stats": {
                             "backend": "metal-face-atlas-nearest",
-                            "texture_size": 16,
+                            "texture_size": kwargs["texture_size"],
                             "voxel_count": 4096,
                             "coverage_ratio": 0.5,
                             "raw_coverage_ratio": 0.5,
@@ -974,7 +946,7 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
             },
         )
 
-    monkeypatch.setattr(pixal3d_inference, "_load_spatialkit_exporter", lambda: (fake_spatialkit_exporter, None))
+    monkeypatch.setattr(pixal3d_inference, "load_spatialkit_exporter", lambda: (fake_spatialkit_exporter, None))
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -987,7 +959,6 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
         texture_naf_feature_map=naf,
         texture_size=16,
         glb_target_faces=123,
-        glb_export_backend="spatialkit",
         glb_diagnostics_path=tmp_path / "out" / "spatialkit-diagnostics.json",
     )
 
@@ -995,24 +966,26 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
     assert result.trace.blocker is None
     assert result.trace.completed_stages[-2:] == ("mesh-export", "artifact:textured_glb")
     assert result.artifacts[-2:] == (tmp_path / "out" / "pixal3d.glb", tmp_path / "out" / "spatialkit-diagnostics.json")
-    assert calls["decoded_dir"] == tmp_path / "out"
+    assert calls["decoded_dir"] == tmp_path / "out" / "decoded"
     assert calls["output_path"] == tmp_path / "out" / "pixal3d.glb"
     assert calls["diagnostics_path"] == tmp_path / "out" / "spatialkit-diagnostics.json"
     assert calls["texture_size"] == 16
     assert calls["target_faces"] == 123
     assert calls["grid_size"] == 1024
-    assert result.trace.metadata["export_options"]["glb_export_backend_requested"] == "spatialkit"
-    assert result.trace.metadata["export_options"]["glb_export_backend_used"] == "spatialkit"
+    assert result.trace.metadata["export_options"]["exporter"] == "spatialkit"
     assert result.trace.metadata["mesh_export"]["export_backend"] == "spatialkit"
     assert result.trace.metadata["mesh_export"]["spatialkit_diagnostics_path"] == str(calls["diagnostics_path"])
     assert result.trace.metadata["mesh_export"]["source_mesh_faces"] == 2
     assert result.trace.metadata["mesh_export"]["bake_backend"] == "metal-face-atlas-nearest"
-    assert result.trace.metadata["mesh_export"]["unwrap_chunks"] == 0
-    assert result.trace.metadata["mesh_export"]["unwrap_chart_count"] == 0
-    assert result.trace.metadata["mesh_export"]["unwrap_utilization"] == 0.0
-    assert result.trace.metadata["mesh_export"]["xatlas_face_guard"] is None
-    assert result.trace.metadata["mesh_export"]["xatlas_face_guard_mode"] == "not_used"
-    assert result.trace.metadata["mesh_export"]["source_projection_used"] is False
+    assert result.trace.metadata["mesh_export"]["uv_backend"] == "face-atlas"
+    assert set(result.trace.metadata["timings_sec"]) >= {
+        "shape-decoder",
+        "shape-artifact-write",
+        "texture-decoder",
+        "texture-artifact-write",
+        "mesh-export",
+        "total",
+    }
     assert result.trace.metadata["artifact_paths"][-1] == tmp_path / "out" / "spatialkit-diagnostics.json"
 
 
@@ -1023,7 +996,7 @@ def test_pixal3d_pipeline_fails_before_inference_when_integrated_spatialkit_impo
     calls = _patch_pixal3d_export_fixtures(monkeypatch)
     monkeypatch.setattr(
         pixal3d_inference,
-        "_load_spatialkit_exporter",
+        "load_spatialkit_exporter",
         lambda: (None, "mlx_spatial.spatialkit import failed"),
     )
 
@@ -1031,25 +1004,22 @@ def test_pixal3d_pipeline_fails_before_inference_when_integrated_spatialkit_impo
         image,
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
-        glb_export_backend="spatialkit",
     )
 
     assert not result.ready
     assert result.trace.blocker is not None
     assert result.trace.blocker.stage == "export-backend-validation"
-    assert result.trace.blocker.operation == "load integrated mlx_spatial.spatialkit export backend"
+    assert result.trace.blocker.operation == "load integrated mlx_spatial.spatialkit exporter"
     assert result.trace.blocker.reason == "mlx_spatial.spatialkit import failed"
     assert result.trace.completed_stages == ("input-image",)
     assert result.artifacts == ()
-    assert result.trace.metadata["export_options"]["glb_export_backend_requested"] == "spatialkit"
-    assert result.trace.metadata["export_options"]["glb_export_backend_used"] is None
-    assert result.trace.metadata["export_options"]["glb_export_backend_error"] == "mlx_spatial.spatialkit import failed"
+    assert result.trace.metadata["export_options"]["exporter"] == "spatialkit"
     assert set(result.trace.metadata["timings_sec"]) == {"total"}
     assert calls == {}
     assert not (tmp_path / "out" / "pixal3d.glb").exists()
 
 
-def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):
+def test_pixal3d_pipeline_spatialkit_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
     _write_pixal3d_test_rgba(image)
@@ -1057,7 +1027,7 @@ def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_pat
     token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
     hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
     naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
-    _patch_pixal3d_export_fixtures(monkeypatch, writer_failure=OSError("fixture writer failure"))
+    _patch_pixal3d_export_fixtures(monkeypatch, export_failure=RuntimeError("fixture export failure"))
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
@@ -1072,10 +1042,11 @@ def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_pat
 
     assert not result.ready
     assert result.trace.blocker is not None
-    assert result.trace.blocker.stage == "glb-export"
-    assert "fixture writer failure" in result.trace.blocker.reason
+    assert result.trace.blocker.stage == "mesh-export"
+    assert "fixture export failure" in result.trace.blocker.reason
     assert [path.name for path in result.artifacts][-2:] == ["shape_decoder_fields.npz", "texture_decoder_pbr.npz"]
-    assert result.trace.completed_stages[-3:] == ("texture-decoder", "artifact:texture_decoder_pbr", "mesh-export")
+    assert all(path.parent == tmp_path / "out" / "decoded" for path in result.artifacts[-2:])
+    assert result.trace.completed_stages[-2:] == ("texture-decoder", "artifact:texture_decoder_pbr")
 
 
 def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():
@@ -1088,100 +1059,51 @@ def test_pixal3d_stage_plan_uses_upstream_hr_token_guard():
     assert plan.hr_token_count is not None
 
 
-def _patch_pixal3d_export_fixtures(monkeypatch, *, writer_failure: Exception | None = None):
+def _patch_pixal3d_export_fixtures(monkeypatch, *, export_failure: Exception | None = None):
     calls = {}
-    mesh = FlexibleDualGridMesh(
-        vertices=np.array(
-            [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0], [0.5, 0.5, 0.0]],
-            dtype=np.float32,
-        ),
-        faces=np.array([[0, 1, 2], [2, 1, 3]], dtype=np.int64),
-    )
-
-    def fake_mesh_from_fields(coordinates, fields, *, grid_size):
-        calls["mesh_coordinates_shape"] = tuple(int(dim) for dim in coordinates.shape)
-        calls["mesh_fields_shape"] = tuple(int(dim) for dim in fields.shape)
-        calls["mesh_grid_size"] = grid_size
-        return mesh
-
-    def fake_postprocess(source_mesh, *, target_faces):
-        calls["postprocess_mesh"] = source_mesh
-        calls["postprocess_target_faces"] = target_faces
-        return SimpleNamespace(
-            mesh=source_mesh,
-            source_mesh=source_mesh,
-            stats=SimpleNamespace(
-                original_vertices=4,
-                original_faces=2,
-                final_vertices=4,
-                final_faces=2,
-            ),
-        )
-
-    def fake_bake(
-        bake_mesh,
-        texture_coordinates,
-        texture_attributes,
-        *,
-        decode_resolution,
-        texture_size,
-        xatlas_face_guard,
-        xatlas_parallel_chunks,
-        texture_bake_backend,
-        projection_source_mesh,
-    ):
-        calls["bake_mesh"] = bake_mesh
-        calls["bake_texture_coordinates_shape"] = tuple(int(dim) for dim in texture_coordinates.shape)
-        calls["bake_texture_attributes_shape"] = tuple(int(dim) for dim in texture_attributes.shape)
-        calls["bake_decode_resolution"] = decode_resolution
-        calls["bake_texture_size"] = texture_size
-        calls["bake_xatlas_face_guard"] = xatlas_face_guard
-        calls["bake_xatlas_parallel_chunks"] = xatlas_parallel_chunks
-        calls["bake_texture_bake_backend"] = texture_bake_backend
-        calls["bake_projection_source_mesh"] = projection_source_mesh
-        return Trellis2TextureBakeResult(
-            vertices=mesh.vertices,
-            faces=mesh.faces,
-            uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32),
-            base_color_rgba=np.zeros((texture_size, texture_size, 4), dtype=np.uint8),
-            metallic_roughness=np.zeros((texture_size, texture_size, 3), dtype=np.uint8),
-            coverage_mask=np.ones((texture_size, texture_size), dtype=bool),
-            texture_size=texture_size,
-            voxel_count=int(texture_coordinates.shape[0]),
-            k_neighbors=4,
-            origin=(-0.5, -0.5, -0.5),
-            voxel_size=1.0 / float(decode_resolution),
-            backend=f"xatlas-{texture_bake_backend}",
-            raw_coverage_ratio=0.75,
-            unwrap_backend="xatlas-global",
-            unwrap_seconds=0.01,
-            unwrap_chunks=xatlas_parallel_chunks,
-            unwrap_chart_count=2,
-            unwrap_utilization=0.5,
-            xatlas_face_guard=int(xatlas_face_guard) if isinstance(xatlas_face_guard, int) else 999,
-            xatlas_face_guard_mode="manual",
-            sampled_texel_count=texture_size * texture_size,
-            missing_texel_count=0,
-            out_of_grid_texel_count=0,
-            source_projection_used=False,
-            source_projection_detail="source mesh matches export mesh; projection not needed",
-        )
-
-    def fake_write_glb(baked_texture, output_path, *, metadata=None):
-        if writer_failure is not None:
-            raise writer_failure
+    def fake_spatialkit_exporter(decoded_dir, output_path, **kwargs):
+        if export_failure is not None:
+            raise export_failure
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"glb")
+        diagnostics_path = (
+            Path(kwargs["diagnostics_path"])
+            if kwargs.get("diagnostics_path") is not None
+            else path.with_name("diagnostics.json")
+        )
+        diagnostics_path.write_text("{}", encoding="utf-8")
+        calls["decoded_dir"] = Path(decoded_dir)
+        calls["output_path"] = path
+        calls.update(kwargs)
         return SimpleNamespace(
-            path=path,
-            format="glb",
-            bytes_written=3,
-            metadata={"stage": "textured_glb", **(metadata or {})},
+            glb=SimpleNamespace(
+                path=path,
+                format="glb",
+                bytes_written=3,
+                metadata={"stage": "textured_glb", "mesh_name": "Pixal3D_TexturedMesh"},
+            ),
+            diagnostics_path=diagnostics_path,
+            diagnostics={
+                "stages": {
+                    "extract_mesh": {"source_vertices": 4, "source_faces": 2},
+                    "simplify_mesh": {"stats": {"final_faces": 2}},
+                    "uv": {"stats": {"backend": "xatlas-clustered"}},
+                    "texture_bake": {
+                        "stats": {
+                            "backend": "metal-face-atlas-nearest",
+                            "texture_size": kwargs["texture_size"],
+                            "voxel_count": 4096,
+                            "coverage_ratio": 0.5,
+                            "raw_coverage_ratio": 0.5,
+                            "sampled_texel_count": 128,
+                            "missing_texel_count": 0,
+                            "out_of_grid_texel_count": 0,
+                        }
+                    },
+                }
+            },
         )
 
-    monkeypatch.setattr(pixal3d_inference, "flexi_dual_grid_fields_to_mesh", fake_mesh_from_fields)
-    monkeypatch.setattr(pixal3d_inference, "postprocess_trellis2_mesh_for_glb", fake_postprocess)
-    monkeypatch.setattr(pixal3d_inference, "bake_trellis2_texture_fields_mac_native", fake_bake)
-    monkeypatch.setattr(pixal3d_inference, "write_pixal3d_textured_glb", fake_write_glb)
+    monkeypatch.setattr(pixal3d_inference, "load_spatialkit_exporter", lambda: (fake_spatialkit_exporter, None))
     return calls

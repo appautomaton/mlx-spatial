@@ -4,8 +4,8 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "spatialkit" / "export_cached_pixal3d.py"
-SPEC = importlib.util.spec_from_file_location("export_cached_pixal3d", SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "spatialkit" / "export_cached_ovoxel.py"
+SPEC = importlib.util.spec_from_file_location("export_cached_ovoxel", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 WATCHDOG = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WATCHDOG)

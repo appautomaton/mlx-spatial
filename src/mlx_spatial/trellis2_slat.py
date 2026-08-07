@@ -51,7 +51,9 @@ SLAT_BLOCK0_INSPECTION_NAMES = (
 
 SLAT_DENSE_SELF_ATTN_THRESHOLD = 4096
 SLAT_WINDOWED_SELF_ATTN_THRESHOLD = SLAT_DENSE_SELF_ATTN_THRESHOLD
-SLAT_FULL_SELF_ATTN_TOKEN_LIMIT = 49152
+# MLX execution guard for exact full SLat attention. It currently matches the
+# upstream cascade reference cap, but does not represent a pipeline memory budget.
+SLAT_FULL_SELF_ATTN_TOKEN_LIMIT = 49_152
 SLAT_FULL_SELF_ATTN_QUERY_CHUNK_SIZE = 512
 SLAT_WINDOW_SIZE = 8
 

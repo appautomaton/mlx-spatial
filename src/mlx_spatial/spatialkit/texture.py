@@ -119,7 +119,8 @@ def bake_pbr_texture(
       the raw inverse-coverage mask (status in {0,2,3}) with native Telea
       (base_color RGB radius 3; metallic/roughness/alpha radius 1 each), matching
       ``o_voxel.postprocess.to_glb``. ``postprocess_mode`` reports
-      ``"native-telea-inpaint"`` and the legacy fill counters are zero.
+      ``"native-telea-inpaint"`` and the legacy fill counters are zero. The
+      diagnostic label is also accepted as an input alias for interoperability.
 
     When ``expose_raw_postprocess_inputs`` is True the result additionally carries
     the raw pre-postprocess channels and coverage status (``raw_base_color_rgba``,
@@ -127,6 +128,8 @@ def bake_pbr_texture(
     reference Telea inpaint operates on, before dilation/surface-fill/gutter.
     """
 
+    if postprocess == "native-telea-inpaint":
+        postprocess = "telea"
     if postprocess not in {"legacy-dilation", "telea"}:
         raise ValueError("postprocess must be 'legacy-dilation' or 'telea'")
     apply_legacy_postprocess = postprocess == "legacy-dilation"

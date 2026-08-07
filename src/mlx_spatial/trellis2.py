@@ -12,6 +12,7 @@ import mlx.core as mx
 
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
 from .model_assets import DINOv3_VITL16_ASSETS, RMBG2_ASSETS, TRELLIS2_ASSETS, ModelAssetValidation, validate_model_assets
+from .ovoxel_export import OVOXEL_DEFAULT_TARGET_FACES
 from .trellis2_dinov3 import DINOv3_ACCESS_NOTE, DINOv3_VITL16_REPO_ID, dinov3_download_command
 
 
@@ -51,13 +52,12 @@ RMBG2_LICENSE_NOTE = (
     "authenticate and review the license before downloading."
 )
 TRELLIS2_SHAPE_DEFAULT_SEED = 42
+# Upstream TRELLIS.2 cascade default for unique HR SLat coordinates after grid
+# quantization; it is not a decoder-output limit or a memory budget.
 TRELLIS2_SHAPE_DEFAULT_MAX_NUM_TOKENS = 49_152
 TRELLIS2_SHAPE_DEFAULT_DECODER_TOKEN_LIMIT = 1_000_000
 TRELLIS2_TEXTURE_DEFAULT_SIZE = 1024
-TRELLIS2_GLB_DEFAULT_FACE_TARGET = 50_000
-TRELLIS2_XATLAS_DEFAULT_FACE_GUARD = "auto"
-TRELLIS2_XATLAS_DEFAULT_PARALLEL_CHUNKS = 0
-TRELLIS2_TEXTURE_BAKE_BACKENDS = ("trilinear", "kdtree")
+TRELLIS2_GLB_DEFAULT_FACE_TARGET = OVOXEL_DEFAULT_TARGET_FACES
 
 TRELLIS2_PROBE_GROUPS = (
     Trellis2ProbeGroup(
@@ -202,19 +202,6 @@ def rmbg2_download_command(root: str | Path = RMBG2_ASSETS.root_hint) -> tuple[s
     )
 
 
-def _parse_xatlas_face_guard(value: str) -> int | str:
-    normalized = value.strip().lower()
-    if normalized == "auto":
-        return "auto"
-    try:
-        parsed = int(normalized)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("must be 'auto' or a positive integer") from error
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be 'auto' or a positive integer")
-    return parsed
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect local TRELLIS.2 assets and checkpoints")
     parser.add_argument("--root", default=TRELLIS2_ASSETS.root_hint)
@@ -273,7 +260,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate_shape_parser.add_argument("--slat-steps", type=int)
     generate_shape_parser.add_argument("--pipeline-type", choices=("512", "1024", "1024_cascade", "1536_cascade"))
     generate_shape_parser.add_argument("--seed", type=int, default=TRELLIS2_SHAPE_DEFAULT_SEED)
-    generate_shape_parser.add_argument("--max-num-tokens", type=int, default=TRELLIS2_SHAPE_DEFAULT_MAX_NUM_TOKENS)
+    generate_shape_parser.add_argument(
+        "--max-num-tokens",
+        type=int,
+        default=TRELLIS2_SHAPE_DEFAULT_MAX_NUM_TOKENS,
+        help="upstream-compatible cap on unique HR SLat coordinates after grid quantization; not a decoder or memory limit",
+    )
     generate_shape_parser.add_argument("--decoder-token-limit", type=int, default=TRELLIS2_SHAPE_DEFAULT_DECODER_TOKEN_LIMIT)
 
     generate_textured_parser = subparsers.add_parser("generate-textured", help="run TRELLIS.2 textured GLB generation")
@@ -285,23 +277,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate_textured_parser.add_argument("--slat-steps", type=int)
     generate_textured_parser.add_argument("--pipeline-type", choices=("512", "1024", "1024_cascade", "1536_cascade"))
     generate_textured_parser.add_argument("--seed", type=int, default=TRELLIS2_SHAPE_DEFAULT_SEED)
-    generate_textured_parser.add_argument("--max-num-tokens", type=int, default=TRELLIS2_SHAPE_DEFAULT_MAX_NUM_TOKENS)
+    generate_textured_parser.add_argument(
+        "--max-num-tokens",
+        type=int,
+        default=TRELLIS2_SHAPE_DEFAULT_MAX_NUM_TOKENS,
+        help="upstream-compatible cap on unique HR SLat coordinates after grid quantization; not a decoder or memory limit",
+    )
     generate_textured_parser.add_argument("--decoder-token-limit", type=int, default=TRELLIS2_SHAPE_DEFAULT_DECODER_TOKEN_LIMIT)
     generate_textured_parser.add_argument("--texture-size", type=int, default=TRELLIS2_TEXTURE_DEFAULT_SIZE)
     generate_textured_parser.add_argument("--glb-target-faces", type=int, default=TRELLIS2_GLB_DEFAULT_FACE_TARGET)
-    generate_textured_parser.add_argument(
-        "--xatlas-face-guard",
-        type=_parse_xatlas_face_guard,
-        default=TRELLIS2_XATLAS_DEFAULT_FACE_GUARD,
-        help="maximum faces allowed into xatlas unwrap; use 'auto' for adaptive headroom",
-    )
-    generate_textured_parser.add_argument("--texture-bake-backend", choices=TRELLIS2_TEXTURE_BAKE_BACKENDS, default="kdtree")
-    generate_textured_parser.add_argument(
-        "--xatlas-parallel-chunks",
-        type=int,
-        default=TRELLIS2_XATLAS_DEFAULT_PARALLEL_CHUNKS,
-        help="split large xatlas unwraps into this many spatial chunks; 0 auto-selects by face count",
-    )
+    generate_textured_parser.add_argument("--glb-diagnostics-path")
 
     args = parser.parse_args(argv)
     root = getattr(args, "command_root", None) or getattr(args, "root_path", None) or args.root
@@ -421,14 +406,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             decoder_token_limit=args.decoder_token_limit,
             texture_size=args.texture_size,
             glb_target_faces=args.glb_target_faces,
-            xatlas_face_guard=args.xatlas_face_guard,
-            xatlas_parallel_chunks=args.xatlas_parallel_chunks,
-            texture_bake_backend=args.texture_bake_backend,
+            glb_diagnostics_path=args.glb_diagnostics_path,
             retain_trace_payloads=False,
         )
         report = result.trace
         print(f"completed={report.completed_stages}")
         print(f"outputs={tuple(output.name for output in report.outputs)}")
+        print(f"timings_sec={report.timings_sec}")
         if result.artifact is not None:
             print(f"artifact={result.artifact.path}")
             print(f"bytes={result.artifact.bytes_written}")

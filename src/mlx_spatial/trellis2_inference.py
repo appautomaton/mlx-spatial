@@ -4,14 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import mlx.core as mx
 import numpy as np
 
+if TYPE_CHECKING:
+    from .spatialkit import NativeGlbArtifact
+
+from .inference_timing import StageTimer
 from .mlx_memory import clear_mlx_cache
 from .ovoxel import fill_flexible_dual_grid_mesh_holes, flexi_dual_grid_fields_to_mesh
+from .ovoxel_artifacts import write_decoded_ovoxel_shape_npz, write_decoded_ovoxel_texture_npz
+from .ovoxel_export import (
+    export_ovoxel_glb,
+    load_spatialkit_exporter,
+)
 from .trellis2 import (
+    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
     TRELLIS2_PROBE_GROUPS,
     inspect_trellis2_probe,
     load_trellis2_probe,
@@ -24,17 +34,9 @@ from .trellis2_decode import (
     run_shape_decoder_upsample_coordinates,
 )
 from .trellis2_export import (
-    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
-    TRELLIS2_TEXTURE_BAKE_BACKENDS,
-    TRELLIS2_XATLAS_AUTO_FACE_GUARD,
     Trellis2ExportArtifact,
-    bake_trellis2_texture_fields_mac_native,
-    missing_trellis2_mac_export_dependencies,
-    postprocess_trellis2_mesh_for_glb,
-    resolve_trellis2_xatlas_face_guard,
     validate_trellis2_export_path,
     write_flexible_dual_grid_obj,
-    write_trellis2_textured_glb,
 )
 from .trellis2_forward import (
     Trellis2ForwardBlocker,
@@ -64,6 +66,8 @@ from .trellis2_slat import (
 )
 
 TRELLIS2_SHAPE_DECODER_TOKEN_LIMIT = 1_000_000
+# Upstream TRELLIS.2 cascade default for unique HR SLat coordinates after grid
+# quantization; it is not a decoder-output limit or a memory budget.
 TRELLIS2_SHAPE_MAX_NUM_TOKENS = 49_152
 TRELLIS2_SHAPE_SEED = 42
 TRELLIS2_TEXTURE_SIZE = 1024
@@ -81,6 +85,7 @@ TRELLIS2_INFERENCE_STAGES = (
     "texture-slat-sampling",
     "shape-decoder",
     "texture-decoder",
+    "decoded-artifact-write",
     "mesh-export",
 )
 
@@ -135,7 +140,7 @@ class Trellis2ShapeGenerationResult:
 @dataclass(frozen=True)
 class Trellis2TexturedGenerationResult:
     trace: Trellis2ForwardTraceResult
-    artifact: Trellis2ExportArtifact | None = None
+    artifact: NativeGlbArtifact | None = None
 
     @property
     def ready(self) -> bool:
@@ -836,11 +841,10 @@ class Trellis2InferencePipeline:
         decoder_token_limit: int | None = TRELLIS2_SHAPE_DECODER_TOKEN_LIMIT,
         texture_size: int = TRELLIS2_TEXTURE_SIZE,
         glb_target_faces: int = TRELLIS2_GLB_DEFAULT_FACE_TARGET,
-        xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
-        xatlas_parallel_chunks: int = 0,
-        texture_bake_backend: str = "kdtree",
-        retain_trace_payloads: bool = True,
+        glb_diagnostics_path: str | Path | None = None,
+        retain_trace_payloads: bool = False,
     ) -> Trellis2TexturedGenerationResult:
+        timer = StageTimer()
         image = Path(image_path)
         output = Path(output_path)
         if output.suffix.lower() != ".glb":
@@ -854,24 +858,7 @@ class Trellis2InferencePipeline:
                         operation="textured GLB output format validation",
                         reference=str(output_path),
                         reason=f"generate-textured only writes .glb outputs, got {output.suffix or '<none>'}",
-                        next_slice="choose a .glb output path under outputs/ for textured generation",
-                    ),
-                )
-            )
-        try:
-            validate_trellis2_export_path(output_path, suffixes=(".glb",))
-        except (OSError, ValueError) as error:
-            return Trellis2TexturedGenerationResult(
-                trace=Trellis2ForwardTraceResult(
-                    root=self.root,
-                    image_path=image,
-                    completed_stages=(),
-                    blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="TRELLIS.2 textured GLB export path validation",
-                        reference=str(output_path),
-                        reason=str(error),
-                        next_slice="choose a .glb output path under outputs/ for textured generation",
+                        next_slice="choose a .glb output path for textured generation",
                     ),
                 )
             )
@@ -950,9 +937,8 @@ class Trellis2InferencePipeline:
                     ),
                 )
             )
-        try:
-            resolve_trellis2_xatlas_face_guard(1, xatlas_face_guard)
-        except ValueError as error:
+        spatialkit_exporter, spatialkit_import_error = load_spatialkit_exporter()
+        if spatialkit_exporter is None:
             return Trellis2TexturedGenerationResult(
                 trace=Trellis2ForwardTraceResult(
                     root=self.root,
@@ -960,63 +946,12 @@ class Trellis2InferencePipeline:
                     completed_stages=(),
                     blocker=Trellis2ForwardBlocker(
                         stage="mesh-export",
-                        operation="xatlas face guard validation",
-                        reference="--xatlas-face-guard",
-                        reason=str(error),
-                        next_slice="use 'auto' or a positive xatlas face guard",
+                        operation="load integrated mlx_spatial.spatialkit exporter",
+                        reference="mlx_spatial.spatialkit.export_decoded_ovoxel_glb",
+                        reason=spatialkit_import_error or "mlx_spatial.spatialkit exporter is unavailable",
+                        next_slice="build or install mlx-spatial with its integrated SpatialKit extension",
                     ),
-                )
-            )
-        if xatlas_parallel_chunks < 0:
-            return Trellis2TexturedGenerationResult(
-                trace=Trellis2ForwardTraceResult(
-                    root=self.root,
-                    image_path=image,
-                    completed_stages=(),
-                    blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="xatlas parallel chunk validation",
-                        reference="--xatlas-parallel-chunks",
-                        reason=f"xatlas-parallel-chunks must be non-negative, got {xatlas_parallel_chunks}",
-                        next_slice="use 0 for automatic xatlas chunking or a positive chunk count",
-                    ),
-                )
-            )
-        if texture_bake_backend not in TRELLIS2_TEXTURE_BAKE_BACKENDS:
-            return Trellis2TexturedGenerationResult(
-                trace=Trellis2ForwardTraceResult(
-                    root=self.root,
-                    image_path=image,
-                    completed_stages=(),
-                    blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="texture bake backend validation",
-                        reference="--texture-bake-backend",
-                        reason=(
-                            f"texture-bake-backend must be one of {TRELLIS2_TEXTURE_BAKE_BACKENDS}, "
-                            f"got {texture_bake_backend}"
-                        ),
-                        next_slice="use trilinear for parity mode or kdtree for debug comparison",
-                    ),
-                )
-            )
-        missing_export_dependencies = missing_trellis2_mac_export_dependencies()
-        if missing_export_dependencies:
-            return Trellis2TexturedGenerationResult(
-                trace=Trellis2ForwardTraceResult(
-                    root=self.root,
-                    image_path=image,
-                    completed_stages=(),
-                    blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="Mac-native GLB export dependency validation",
-                        reference="xatlas, scipy, fast_simplification",
-                        reason=(
-                            "generate-textured requires Mac-native GLB export dependencies; "
-                            f"missing {', '.join(missing_export_dependencies)}"
-                        ),
-                        next_slice="install xatlas, scipy, and fast-simplification before textured GLB export",
-                    ),
+                    timings_sec=timer.snapshot(),
                 )
             )
 
@@ -1075,9 +1010,7 @@ class Trellis2InferencePipeline:
                                 f"pipeline_type={selected_pipeline_type}; texture_model={route.model_key}; "
                                 f"seed={seed}; slat_steps={slat_steps}; max_num_tokens={max_num_tokens}; "
                                 f"decoder_token_limit={decoder_token_limit}; texture_size={texture_size}; "
-                                f"glb_target_faces={glb_target_faces}; xatlas_face_guard={xatlas_face_guard}; "
-                                f"xatlas_parallel_chunks={xatlas_parallel_chunks}; "
-                                f"texture_bake_backend={texture_bake_backend}; dino_root={dino_root}"
+                                f"glb_target_faces={glb_target_faces}; dino_root={dino_root}"
                             ),
                         ),
                     ),
@@ -1102,9 +1035,7 @@ class Trellis2InferencePipeline:
                                 f"pipeline_type={selected_pipeline_type}; texture_model={route.model_key}; "
                                 f"seed={seed}; slat_steps={slat_steps}; max_num_tokens={max_num_tokens}; "
                                 f"decoder_token_limit={decoder_token_limit}; texture_size={texture_size}; "
-                                f"glb_target_faces={glb_target_faces}; xatlas_face_guard={xatlas_face_guard}; "
-                                f"xatlas_parallel_chunks={xatlas_parallel_chunks}; "
-                                f"texture_bake_backend={texture_bake_backend}; dino_root={dino_root}"
+                                f"glb_target_faces={glb_target_faces}; dino_root={dino_root}"
                             ),
                         ),
                     ),
@@ -1130,13 +1061,12 @@ class Trellis2InferencePipeline:
                     f"conditioning_resolution={route.output_resolution}; final_decode_resolution={_decode_resolution(selected_pipeline_type)}; "
                     f"seed={seed}; slat_steps={config.texture_slat_sampler.steps}; max_num_tokens={max_num_tokens}; "
                     f"decoder_token_limit={decoder_token_limit}; texture_size={texture_size}; "
-                    f"glb_target_faces={glb_target_faces}; xatlas_face_guard={xatlas_face_guard}; "
-                    f"xatlas_parallel_chunks={xatlas_parallel_chunks}; texture_bake_backend={texture_bake_backend}; "
-                    f"dino_root={dino_root}; output={output}"
+                    f"glb_target_faces={glb_target_faces}; dino_root={dino_root}; output={output}"
                 ),
             )
         ]
 
+        preprocess_started = timer.begin()
         preprocessed = preprocess_trellis2_image(image, rmbg_root=self.rmbg_root)
         if not preprocessed.ready or preprocessed.image is None:
             return Trellis2TexturedGenerationResult(
@@ -1148,8 +1078,10 @@ class Trellis2InferencePipeline:
                     blocker=_forward_blocker(_preprocess_blocker(preprocessed.blocker)),
                 )
             )
+        timer.end("image-preprocessing-background", preprocess_started)
         completed.extend(["input-image", "image-preprocessing-background"])
 
+        conditioning_started = timer.begin()
         cond_outputs: dict[int, Trellis2StageOutput] = {}
         for resolution in _conditioning_resolutions(selected_pipeline_type):
             cond_config = replace(config, conditioning_resolution=resolution)
@@ -1182,6 +1114,7 @@ class Trellis2InferencePipeline:
             outputs.append(cond_output if retain_trace_payloads else _without_stage_payload(cond_output))
         cond_512 = cond_outputs[512]
         cond_1024 = cond_outputs.get(1024)
+        timer.end("image-conditioning", conditioning_started)
         completed.append("image-conditioning")
 
         if cond_512.payload is None:
@@ -1201,6 +1134,7 @@ class Trellis2InferencePipeline:
                 )
             )
 
+        sparse_sampling_started = timer.begin()
         try:
             sparse_config = read_sparse_structure_flow_config(self.root, config.sparse_flow_config_path)
             metadata = fake_sparse_structure_sampling_metadata(
@@ -1265,8 +1199,10 @@ class Trellis2InferencePipeline:
                 retain_payload=retain_trace_payloads,
             )
         )
+        timer.end("sparse-structure-sampling", sparse_sampling_started)
         completed.append("sparse-structure-sampling")
 
+        sparse_decoding_started = timer.begin()
         try:
             sparse_decoder_config = read_sparse_structure_decoder_config(self.root, config.sparse_decoder_config_path)
             sparse_decoder_probe = probe_sparse_structure_decoder_boundary(
@@ -1307,7 +1243,9 @@ class Trellis2InferencePipeline:
                     ),
                 )
             )
+        timer.end("sparse-structure-decoding", sparse_decoding_started)
 
+        shape_slat_started = timer.begin()
         try:
             shape_coordinates, shape_features, shape_detail, final_resolution = _sample_shape_slat_for_pipeline(
                 self.root,
@@ -1343,6 +1281,7 @@ class Trellis2InferencePipeline:
                     ),
                 )
             )
+        timer.end("shape-slat-sampling", shape_slat_started)
         completed.append("shape-slat-sampling")
 
         texture_conditioning = cond_512.payload if route.output_resolution == 512 else (cond_1024.payload if cond_1024 is not None else None)
@@ -1362,6 +1301,7 @@ class Trellis2InferencePipeline:
                     ),
                 )
             )
+        texture_slat_started = timer.begin()
         try:
             texture_coordinates, texture_features, texture_detail = _sample_texture_slat_model(
                 self.root,
@@ -1401,8 +1341,10 @@ class Trellis2InferencePipeline:
                 retain_payload=retain_trace_payloads,
             )
         )
+        timer.end("texture-slat-sampling", texture_slat_started)
         completed.append("texture-slat-sampling")
 
+        shape_decoder_started = timer.begin()
         try:
             shape_decoder_config = read_structured_latent_decoder_config(self.root, config.shape_decoder_config_path)
             shape_result = run_shape_decoder_to_fields(
@@ -1442,8 +1384,10 @@ class Trellis2InferencePipeline:
                 retain_payload=retain_trace_payloads,
             )
         )
+        timer.end("shape-decoder", shape_decoder_started)
         completed.append("shape-decoder")
 
+        texture_decoder_started = timer.begin()
         try:
             texture_decoder_config = read_structured_latent_decoder_config(self.root, config.texture_decoder_config_path)
             texture_result = run_texture_decoder_to_representation(
@@ -1504,138 +1448,45 @@ class Trellis2InferencePipeline:
                 retain_payload=retain_trace_payloads,
             )
         )
+        timer.end("texture-decoder", texture_decoder_started)
         completed.append("texture-decoder")
-        if not retain_trace_payloads:
-            clear_mlx_cache()
-
+        decoded_dir = output.parent / "decoded"
+        decoded_write_started = timer.begin()
         try:
-            mesh = flexi_dual_grid_fields_to_mesh(shape_result.coordinates, shape_result.fields, grid_size=final_resolution)
-            postprocess_result = postprocess_trellis2_mesh_for_glb(mesh, target_faces=glb_target_faces)
-            baked_texture = bake_trellis2_texture_fields_mac_native(
-                postprocess_result.mesh,
+            shape_artifact = write_decoded_ovoxel_shape_npz(
+                decoded_dir / "shape_decoder_fields.npz",
+                shape_result.coordinates,
+                shape_result.fields,
+                subdivisions=shape_result.subdivisions,
+                metadata={
+                    "model_family": "trellis2",
+                    "source_coordinate_system": "trellis-z-up",
+                    "pipeline_type": selected_pipeline_type,
+                    "seed": int(seed),
+                    "actual_hr_resolution": int(final_resolution),
+                    "decoder_token_limit": decoder_token_limit,
+                    "shape_decoder_checkpoint_path": config.shape_decoder_checkpoint_path,
+                },
+            )
+            texture_artifact = write_decoded_ovoxel_texture_npz(
+                decoded_dir / "texture_decoder_pbr.npz",
                 texture_result.coordinates,
                 texture_result.attributes,
-                decode_resolution=final_resolution,
-                texture_size=texture_size,
-                xatlas_face_guard=xatlas_face_guard,
-                xatlas_parallel_chunks=xatlas_parallel_chunks,
-                texture_bake_backend=texture_bake_backend,
-                projection_source_mesh=getattr(postprocess_result, "source_mesh", None),
+                spatial_shape=texture_result.spatial_shape,
+                batch_size=texture_result.batch_size,
+                decode_resolution=texture_result.decode_resolution,
+                voxel_size=texture_result.voxel_size,
+                metadata={
+                    "model_family": "trellis2",
+                    "source_coordinate_system": "trellis-z-up",
+                    "pipeline_type": selected_pipeline_type,
+                    "seed": int(seed),
+                    "actual_hr_resolution": int(final_resolution),
+                    "decoder_token_limit": decoder_token_limit,
+                    "shape_decoder_artifact": str(shape_artifact.path),
+                    "texture_decoder_checkpoint_path": config.texture_decoder_checkpoint_path,
+                },
             )
-        except (ImportError, ValueError) as error:
-            return Trellis2TexturedGenerationResult(
-                trace=Trellis2ForwardTraceResult(
-                    root=self.root,
-                    image_path=image,
-                    completed_stages=tuple(completed),
-                    outputs=tuple(outputs),
-                    blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="mesh/voxel texture baking",
-                        reference="vendors/TRELLIS.2/o-voxel/o_voxel/postprocess.py:232-323",
-                        reason=str(error),
-                        next_slice="Slice 5: Mesh/Voxel Coupling And Baking Fixtures",
-                    ),
-                )
-            )
-        outputs.append(
-            _stage_output(
-                "mesh-export",
-                "texture_mesh_postprocess",
-                mx.array(
-                    [
-                        postprocess_result.stats.original_vertices,
-                        postprocess_result.stats.original_faces,
-                        postprocess_result.stats.cleaned_vertices,
-                        postprocess_result.stats.cleaned_faces,
-                        postprocess_result.stats.final_vertices,
-                        postprocess_result.stats.final_faces,
-                        postprocess_result.stats.duplicate_faces_removed,
-                        postprocess_result.stats.degenerate_faces_removed,
-                        postprocess_result.stats.unreferenced_vertices_removed,
-                        postprocess_result.stats.components_removed,
-                        postprocess_result.stats.component_faces_removed,
-                        postprocess_result.stats.hole_fill.filled_loops,
-                        postprocess_result.stats.hole_fill.faces_added,
-                        int(postprocess_result.stats.simplified),
-                        postprocess_result.stats.simplification_target_faces,
-                        postprocess_result.stats.boundary_edges,
-                        postprocess_result.stats.nonmanifold_edges,
-                    ],
-                    dtype=mx.int32,
-                ),
-                (
-                    "Mac-native GLB mesh cleanup before texture baking; "
-                    f"faces {postprocess_result.stats.original_faces}->{postprocess_result.stats.final_faces}; "
-                    f"vertices {postprocess_result.stats.original_vertices}->{postprocess_result.stats.final_vertices}; "
-                    f"simplified={postprocess_result.stats.simplified}; "
-                    f"duplicate_faces_removed={postprocess_result.stats.duplicate_faces_removed}; "
-                    f"degenerate_faces_removed={postprocess_result.stats.degenerate_faces_removed}; "
-                    f"components_removed={postprocess_result.stats.components_removed}; "
-                    f"hole_filled_loops={postprocess_result.stats.hole_fill.filled_loops}; "
-                    f"cleaned_source_faces={getattr(getattr(postprocess_result, 'source_mesh', None), 'faces', ()).shape[0] if getattr(postprocess_result, 'source_mesh', None) is not None else postprocess_result.stats.cleaned_faces}; "
-                    f"boundary_edges={postprocess_result.stats.boundary_edges}; "
-                    f"nonmanifold_edges={postprocess_result.stats.nonmanifold_edges}"
-                ),
-                retain_payload=retain_trace_payloads,
-            )
-        )
-        outputs.append(
-            _stage_output(
-                "mesh-export",
-                "texture_bake_uvs",
-                mx.array(baked_texture.uvs),
-                (
-                    f"{baked_texture.backend} produced {baked_texture.uvs.shape[0]} UVs for "
-                    f"{baked_texture.faces.shape[0]} faces; coverage={baked_texture.coverage_ratio:.4f}; "
-                    f"raw_coverage={baked_texture.raw_coverage_ratio:.4f}; "
-                    f"texture_size={baked_texture.texture_size}; voxel_count={baked_texture.voxel_count}; "
-                    f"k_neighbors={baked_texture.k_neighbors}; unwrap_backend={baked_texture.unwrap_backend}; "
-                    f"unwrap_chunks={baked_texture.unwrap_chunks}; "
-                    f"xatlas_face_guard={getattr(baked_texture, 'xatlas_face_guard', xatlas_face_guard)}; "
-                    f"xatlas_face_guard_mode={getattr(baked_texture, 'xatlas_face_guard_mode', 'manual')}; "
-                    f"unwrap_seconds={baked_texture.unwrap_seconds:.3f}; "
-                    f"unwrap_chart_count={baked_texture.unwrap_chart_count}; "
-                    f"unwrap_utilization={baked_texture.unwrap_utilization}; "
-                    f"sampled_texels={getattr(baked_texture, 'sampled_texel_count', 0)}; "
-                    f"missing_texels={getattr(baked_texture, 'missing_texel_count', 0)}; "
-                    f"out_of_grid_texels={getattr(baked_texture, 'out_of_grid_texel_count', 0)}; "
-                    f"source_projection_used={getattr(baked_texture, 'source_projection_used', False)}; "
-                    f"source_projection_detail={getattr(baked_texture, 'source_projection_detail', 'unknown')}"
-                ),
-                retain_payload=retain_trace_payloads,
-            )
-        )
-        outputs.append(
-            _stage_output(
-                "mesh-export",
-                "texture_bake_base_color_rgba",
-                mx.array(baked_texture.base_color_rgba),
-                (
-                    "baked baseColorTexture payload from 6-channel texture voxels; "
-                    f"shape={baked_texture.base_color_rgba.shape}; coverage={baked_texture.coverage_ratio:.4f}"
-                ),
-                retain_payload=retain_trace_payloads,
-            )
-        )
-        outputs.append(
-            _stage_output(
-                "mesh-export",
-                "texture_bake_metallic_roughness",
-                mx.array(baked_texture.metallic_roughness),
-                (
-                    "baked metallicRoughnessTexture payload with G=roughness and B=metallic; "
-                    f"shape={baked_texture.metallic_roughness.shape}"
-                ),
-                retain_payload=retain_trace_payloads,
-            )
-        )
-
-        try:
-            artifact = write_trellis2_textured_glb(baked_texture, output_path)
-            if not retain_trace_payloads:
-                del baked_texture, postprocess_result, mesh, shape_result, texture_result
-                clear_mlx_cache()
         except (OSError, ValueError) as error:
             return Trellis2TexturedGenerationResult(
                 trace=Trellis2ForwardTraceResult(
@@ -1644,14 +1495,80 @@ class Trellis2InferencePipeline:
                     completed_stages=tuple(completed),
                     outputs=tuple(outputs),
                     blocker=Trellis2ForwardBlocker(
-                        stage="mesh-export",
-                        operation="textured GLB writer",
-                        reference="src/mlx_spatial/trellis2_export.py:write_trellis2_textured_glb",
+                        stage="decoded-artifact-write",
+                        operation="persist decoded O-Voxel boundary artifacts",
+                        reference=str(decoded_dir),
                         reason=str(error),
-                        next_slice="complete GLB artifact writing for textured generation",
+                        next_slice="make the decoded artifact directory writable before SpatialKit export",
                     ),
+                    timings_sec=timer.snapshot(),
                 )
             )
+        timer.end("decoded-artifact-write", decoded_write_started)
+        outputs.append(
+            Trellis2StageOutput(
+                stage="decoded-artifact-write",
+                name="decoded_ovoxel_artifacts",
+                shape=(),
+                dtype="metadata",
+                detail=(
+                    f"shape={shape_artifact.path}; texture={texture_artifact.path}; "
+                    f"decode_resolution={final_resolution}"
+                ),
+            )
+        )
+        completed.append("decoded-artifact-write")
+
+        if not retain_trace_payloads:
+            del (
+                preprocessed,
+                image_tensor,
+                cond_output,
+                cond_outputs,
+                cond_512,
+                cond_1024,
+                texture_conditioning,
+                sparse_probe,
+                sparse_decoder_probe,
+                shape_coordinates,
+                shape_features,
+                texture_coordinates,
+                texture_features,
+                shape_result,
+                texture_result,
+            )
+            clear_mlx_cache()
+
+        spatialkit_export_started = timer.begin()
+        try:
+            spatialkit_result = export_ovoxel_glb(
+                decoded_dir,
+                output,
+                texture_size=texture_size,
+                target_faces=glb_target_faces,
+                grid_size=final_resolution,
+                diagnostics_path=glb_diagnostics_path,
+                exporter=spatialkit_exporter,
+            )
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            return Trellis2TexturedGenerationResult(
+                trace=Trellis2ForwardTraceResult(
+                    root=self.root,
+                    image_path=image,
+                    completed_stages=tuple(completed),
+                    outputs=tuple(outputs),
+                    blocker=Trellis2ForwardBlocker(
+                        stage="mesh-export",
+                        operation="export decoded TRELLIS.2 O-Voxel artifacts through SpatialKit",
+                        reference="mlx_spatial.ovoxel_export.export_ovoxel_glb",
+                        reason=str(error),
+                        next_slice="inspect SpatialKit diagnostics and decoded artifacts before retrying export",
+                    ),
+                    timings_sec=timer.snapshot(),
+                )
+            )
+        timer.end("mesh-export", spatialkit_export_started)
+        artifact = spatialkit_result.glb
         outputs.append(
             Trellis2StageOutput(
                 stage="mesh-export",
@@ -1660,7 +1577,7 @@ class Trellis2InferencePipeline:
                 dtype="metadata",
                 detail=(
                     f"wrote textured GLB artifact {artifact.path}; bytes={artifact.bytes_written}; "
-                    f"format={artifact.format}"
+                    f"format={artifact.format}; diagnostics={spatialkit_result.diagnostics_path}"
                 ),
             )
         )
@@ -1671,6 +1588,7 @@ class Trellis2InferencePipeline:
                 image_path=image,
                 completed_stages=tuple(completed),
                 outputs=tuple(outputs),
+                timings_sec=timer.snapshot(),
             ),
             artifact=artifact,
         )
@@ -1913,6 +1831,8 @@ def _quantize_cascade_coordinates(
     target_resolution: int,
     max_num_tokens: int,
 ) -> tuple[mx.array, int]:
+    """Lower cascade resolution until unique grid-quantized HR SLat coordinates fit the upstream cap."""
+
     if max_num_tokens <= 0:
         raise ValueError("max_num_tokens must be positive")
     if lr_resolution <= 0 or target_resolution <= 0:

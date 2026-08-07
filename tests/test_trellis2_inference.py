@@ -207,6 +207,7 @@ def test_pipeline_exposes_deterministic_stage_order():
         "texture-slat-sampling",
         "shape-decoder",
         "texture-decoder",
+        "decoded-artifact-write",
         "mesh-export",
     )
     assert Trellis2InferencePipeline().stages == TRELLIS2_INFERENCE_STAGES
@@ -491,7 +492,7 @@ def test_generate_textured_glb_rejects_obj_format(tmp_path):
     assert "only writes .glb" in result.trace.blocker.reason
 
 
-def test_generate_textured_glb_rejects_output_outside_outputs(tmp_path, monkeypatch):
+def test_generate_textured_glb_allows_output_outside_repository_outputs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_textured_trellis2_root(tmp_path / "trellis")
 
@@ -502,8 +503,8 @@ def test_generate_textured_glb_rejects_output_outside_outputs(tmp_path, monkeypa
 
     assert not result.ready
     assert result.trace.blocker is not None
-    assert result.trace.blocker.operation == "TRELLIS.2 textured GLB export path validation"
-    assert "must stay under outputs" in result.trace.blocker.reason
+    assert result.trace.blocker.operation != "TRELLIS.2 textured GLB export path validation"
+    assert result.trace.blocker.stage == "input-image"
 
 
 def test_generate_textured_glb_reports_missing_image_after_texture_metadata(tmp_path, monkeypatch):
@@ -543,10 +544,6 @@ def test_generate_textured_glb_validates_shared_scalar_guards(tmp_path, monkeypa
         ({"decoder_token_limit": 0}, "texture-decoder", "texture decoder token limit validation", "decoder-token-limit"),
         ({"texture_size": 0}, "mesh-export", "texture size validation", "texture-size"),
         ({"glb_target_faces": 0}, "mesh-export", "GLB simplification target validation", "glb-target-faces"),
-        ({"xatlas_face_guard": 0}, "mesh-export", "xatlas face guard validation", "xatlas-face-guard"),
-        ({"xatlas_face_guard": "bad"}, "mesh-export", "xatlas face guard validation", "xatlas-face-guard"),
-        ({"xatlas_parallel_chunks": -1}, "mesh-export", "xatlas parallel chunk validation", "xatlas-parallel-chunks"),
-        ({"texture_bake_backend": "bad"}, "mesh-export", "texture bake backend validation", "texture-bake-backend"),
     )
     for kwargs, stage, operation, reason in cases:
         result = Trellis2InferencePipeline(tmp_path / "trellis").generate_textured_glb(
@@ -562,10 +559,14 @@ def test_generate_textured_glb_validates_shared_scalar_guards(tmp_path, monkeypa
         assert reason in result.trace.blocker.reason
 
 
-def test_generate_textured_glb_blocks_when_mac_export_dependencies_are_missing(tmp_path, monkeypatch):
+def test_generate_textured_glb_blocks_when_spatialkit_is_unavailable(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_textured_trellis2_root(tmp_path / "trellis")
-    monkeypatch.setattr(trellis2_inference, "missing_trellis2_mac_export_dependencies", lambda: ("xatlas",))
+    monkeypatch.setattr(
+        trellis2_inference,
+        "load_spatialkit_exporter",
+        lambda: (None, "SpatialKit native extension is unavailable"),
+    )
 
     result = Trellis2InferencePipeline(tmp_path / "trellis").generate_textured_glb(
         tmp_path / "missing.png",
@@ -575,8 +576,8 @@ def test_generate_textured_glb_blocks_when_mac_export_dependencies_are_missing(t
     assert result.trace.completed_stages == ()
     assert result.trace.blocker is not None
     assert result.trace.blocker.stage == "mesh-export"
-    assert result.trace.blocker.operation == "Mac-native GLB export dependency validation"
-    assert "missing xatlas" in result.trace.blocker.reason
+    assert result.trace.blocker.operation == "load integrated mlx_spatial.spatialkit exporter"
+    assert "native extension is unavailable" in result.trace.blocker.reason
 
 
 def test_generate_textured_glb_reports_missing_texture_route_before_image_compute(tmp_path, monkeypatch):
@@ -620,7 +621,6 @@ def _patch_textured_glb_exact_slat_fixtures(
     *,
     expected_pipeline_type,
     expected_texture_model,
-    patch_writer=True,
 ):
     sparse_coordinates = mx.array([[0, 0, 0, 0], [0, 1, 1, 1]], dtype=mx.int32)
     shape_coordinates = mx.array([[0, 2, 2, 2], [0, 3, 3, 3]], dtype=mx.int32)
@@ -744,121 +744,33 @@ def _patch_textured_glb_exact_slat_fixtures(
             guide_subdivision_shapes=((2, 8),),
             spatial_shape=(3, 3, 3),
             batch_size=1,
+            decode_resolution=expected_final_resolution,
             voxel_size=1 / expected_final_resolution,
             shape_decoder_coordinate_shape=tuple(shape_decoder_coordinates.shape),
         )
 
-    def fake_mesh_from_fields(coordinates, fields, *, grid_size):
-        calls["mesh_coordinates_input"] = coordinates
-        calls["mesh_fields_input"] = fields
-        calls["mesh_grid_size"] = grid_size
-        assert coordinates is shape_decoder_coordinates
-        assert fields is shape_fields
-        return SimpleNamespace(vertices=mx.zeros((4, 3), dtype=mx.float32), faces=mx.zeros((2, 3), dtype=mx.int32))
-
-    def fake_postprocess(mesh, *, target_faces=200000):
-        calls["postprocess_mesh"] = mesh
-        calls["postprocess_target_faces"] = target_faces
-        return SimpleNamespace(
-            mesh=mesh,
-            stats=SimpleNamespace(
-                original_vertices=4,
-                original_faces=2,
-                cleaned_vertices=4,
-                cleaned_faces=2,
-                final_vertices=4,
-                final_faces=2,
-                duplicate_faces_removed=0,
-                degenerate_faces_removed=0,
-                unreferenced_vertices_removed=0,
-                components_removed=0,
-                component_faces_removed=0,
-                hole_fill=SimpleNamespace(filled_loops=1, faces_added=3),
-                simplified=False,
-                simplification_target_faces=target_faces,
-                boundary_edges=0,
-                nonmanifold_edges=0,
-            ),
-            source_mesh=mesh,
+    def fake_spatialkit_exporter(decoded_dir, output_path, **kwargs):
+        output = Path(output_path).resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"glTF fixture")
+        diagnostics_path = (
+            Path(kwargs["diagnostics_path"])
+            if kwargs.get("diagnostics_path") is not None
+            else output.with_name("diagnostics.json")
         )
-
-    def fake_bake(
-        mesh,
-        coordinates,
-        attributes,
-        *,
-        decode_resolution,
-        texture_size,
-        xatlas_face_guard="auto",
-        xatlas_parallel_chunks=0,
-        texture_bake_backend="kdtree",
-        projection_source_mesh=None,
-    ):
-        calls["bake_mesh"] = mesh
-        calls["bake_coordinates_input"] = coordinates
-        calls["bake_attributes_input"] = attributes
-        calls["bake_decode_resolution"] = decode_resolution
-        calls["bake_texture_size"] = texture_size
-        calls["bake_xatlas_face_guard"] = xatlas_face_guard
-        calls["bake_xatlas_parallel_chunks"] = xatlas_parallel_chunks
-        calls["bake_texture_bake_backend"] = texture_bake_backend
-        calls["bake_projection_source_mesh"] = projection_source_mesh
-        assert coordinates is texture_coordinates
-        assert attributes is texture_attributes
+        diagnostics_path.write_text("{}", encoding="utf-8")
+        calls["decoded_dir"] = Path(decoded_dir)
+        calls["glb_output_path"] = Path(output_path)
+        calls.update(kwargs)
         return SimpleNamespace(
-            vertices=np.array(
-                [
-                    [-0.25, -0.25, 0.0],
-                    [0.25, -0.25, 0.0],
-                    [-0.25, 0.25, 0.0],
-                    [-0.25, 0.25, 0.0],
-                    [0.25, -0.25, 0.0],
-                    [0.25, 0.25, 0.0],
-                ],
-                dtype=np.float32,
+            glb=SimpleNamespace(
+                path=output,
+                format="glb",
+                bytes_written=output.stat().st_size,
+                metadata={"stage": "textured_glb", "mesh_name": "TRELLIS2_TexturedMesh"},
             ),
-            faces=np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int64),
-            uvs=np.array(
-                [
-                    [0.05, 0.05],
-                    [0.45, 0.05],
-                    [0.05, 0.95],
-                    [0.55, 0.05],
-                    [0.95, 0.05],
-                    [0.55, 0.95],
-                ],
-                dtype=np.float32,
-            ),
-            base_color_rgba=np.full((4, 4, 4), 255, dtype=np.uint8),
-            metallic_roughness=np.full((4, 4, 3), 128, dtype=np.uint8),
-            coverage_ratio=0.5,
-            raw_coverage_ratio=0.25,
-            backend=f"xatlas-{texture_bake_backend}",
-            unwrap_backend="xatlas-global",
-            unwrap_seconds=0.123,
-            unwrap_chunks=1,
-            unwrap_chart_count=2,
-            unwrap_utilization=0.5,
-            xatlas_face_guard=125000,
-            xatlas_face_guard_mode="auto",
-            texture_size=texture_size,
-            voxel_count=int(texture_coordinates.shape[0]),
-            k_neighbors=3,
-            sampled_texel_count=9,
-            missing_texel_count=1,
-            out_of_grid_texel_count=2,
-            source_projection_used=False,
-            source_projection_detail="source mesh matches export mesh; projection not needed",
-        )
-
-    def fake_write_glb(baked_texture, output_path):
-        calls["glb_baked_texture"] = baked_texture
-        calls["glb_output_path"] = output_path
-        return SimpleNamespace(
-            path=(Path.cwd() / output_path).resolve(),
-            format="glb",
-            bytes_written=1234,
-            detail="wrote fake textured GLB",
+            diagnostics_path=diagnostics_path,
+            diagnostics={"stages": {}},
         )
 
     monkeypatch.setattr(trellis2_inference, "assess_dinov3_conditioning", fake_conditioning)
@@ -870,11 +782,7 @@ def _patch_textured_glb_exact_slat_fixtures(
     monkeypatch.setattr(trellis2_inference, "read_structured_latent_decoder_config", fake_read_decoder_config)
     monkeypatch.setattr(trellis2_inference, "run_shape_decoder_to_fields", fake_shape_decoder)
     monkeypatch.setattr(trellis2_inference, "run_texture_decoder_to_representation", fake_texture_decoder)
-    monkeypatch.setattr(trellis2_inference, "flexi_dual_grid_fields_to_mesh", fake_mesh_from_fields)
-    monkeypatch.setattr(trellis2_inference, "postprocess_trellis2_mesh_for_glb", fake_postprocess)
-    monkeypatch.setattr(trellis2_inference, "bake_trellis2_texture_fields_mac_native", fake_bake)
-    if patch_writer:
-        monkeypatch.setattr(trellis2_inference, "write_trellis2_textured_glb", fake_write_glb)
+    monkeypatch.setattr(trellis2_inference, "load_spatialkit_exporter", lambda: (fake_spatialkit_exporter, None))
     return calls, shape_coordinates, shape_features, texture_features, shape_subdivisions, texture_attributes
 
 
@@ -895,11 +803,12 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
         image,
         output_path="outputs/trellis2/demo.glb",
         slat_steps=2,
+        retain_trace_payloads=True,
     )
 
     assert result.ready
     assert result.artifact is not None
-    assert result.artifact.bytes_written == 1234
+    assert result.artifact.bytes_written == len(b"glTF fixture")
     assert result.trace.completed_stages == (
         "asset-config-validation",
         "checkpoint-probe-readiness",
@@ -911,6 +820,7 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
         "texture-slat-sampling",
         "shape-decoder",
         "texture-decoder",
+        "decoded-artifact-write",
         "mesh-export",
     )
     assert result.trace.outputs[0].detail.startswith("pipeline_type=1024_cascade; texture_model=tex_slat_flow_model_1024")
@@ -919,34 +829,13 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
     texture_output = next(output for output in result.trace.outputs if output.name == "texture_slat")
     shape_decoder_output = next(output for output in result.trace.outputs if output.name == "shape_flexidualgrid_fields")
     texture_attrs_output = next(output for output in result.trace.outputs if output.name == "texture_voxel_attrs")
-    mesh_postprocess_output = next(output for output in result.trace.outputs if output.name == "texture_mesh_postprocess")
-    bake_uv_output = next(output for output in result.trace.outputs if output.name == "texture_bake_uvs")
-    bake_color_output = next(output for output in result.trace.outputs if output.name == "texture_bake_base_color_rgba")
-    bake_mr_output = next(output for output in result.trace.outputs if output.name == "texture_bake_metallic_roughness")
+    decoded_output = next(output for output in result.trace.outputs if output.name == "decoded_ovoxel_artifacts")
     glb_output = next(output for output in result.trace.outputs if output.name == "textured_glb")
     assert shape_output.payload is shape_features
     assert texture_output.payload is texture_features
     assert texture_attrs_output.payload is texture_attributes
-    assert mesh_postprocess_output.shape == (17,)
-    assert "faces 2->2" in mesh_postprocess_output.detail
-    assert "boundary_edges=0" in mesh_postprocess_output.detail
-    assert bake_uv_output.shape == (6, 2)
-    assert bake_color_output.shape == (4, 4, 4)
-    assert bake_mr_output.shape == (4, 4, 3)
-    assert "coverage=0.5000" in bake_uv_output.detail
-    assert "raw_coverage=0.2500" in bake_uv_output.detail
-    assert "xatlas-kdtree" in bake_uv_output.detail
-    assert "unwrap_backend=xatlas-global" in bake_uv_output.detail
-    assert "unwrap_chunks=1" in bake_uv_output.detail
-    assert "xatlas_face_guard=125000" in bake_uv_output.detail
-    assert "xatlas_face_guard_mode=auto" in bake_uv_output.detail
-    assert "unwrap_seconds=0.123" in bake_uv_output.detail
-    assert "sampled_texels=9" in bake_uv_output.detail
-    assert "missing_texels=1" in bake_uv_output.detail
-    assert "out_of_grid_texels=2" in bake_uv_output.detail
-    assert "source_projection_used=False" in bake_uv_output.detail
-    assert "baseColorTexture" in bake_color_output.detail
-    assert "metallicRoughnessTexture" in bake_mr_output.detail
+    assert "shape_decoder_fields.npz" in decoded_output.detail
+    assert "texture_decoder_pbr.npz" in decoded_output.detail
     assert "wrote textured GLB artifact" in glb_output.detail
     assert "texture_tokens=2" in texture_output.detail
     assert "shape_tokens=2" in texture_output.detail
@@ -959,20 +848,23 @@ def test_generate_textured_glb_valid_metadata_writes_textured_glb(tmp_path, monk
     assert calls["shape_decoder_features_input"] is shape_features
     assert calls["texture_decoder_guides"] is shape_subdivisions
     assert calls["texture_decoder_decode_resolution"] == 1024
-    assert calls["mesh_grid_size"] == 1024
-    assert calls["postprocess_mesh"] is calls["bake_mesh"]
-    assert calls["postprocess_target_faces"] == 50000
-    assert calls["bake_decode_resolution"] == 1024
-    assert calls["bake_texture_size"] == 1024
-    assert calls["bake_xatlas_face_guard"] == "auto"
-    assert calls["bake_xatlas_parallel_chunks"] == 0
-    assert calls["bake_texture_bake_backend"] == "kdtree"
-    assert calls["bake_projection_source_mesh"] is calls["bake_mesh"]
-    assert calls["glb_output_path"] == "outputs/trellis2/demo.glb"
+    assert calls["decoded_dir"] == Path("outputs/trellis2/decoded")
+    assert calls["grid_size"] == 1024
+    assert calls["target_faces"] == 200000
+    assert calls["texture_size"] == 1024
+    assert calls["quality_preset"] == "reference-target"
+    assert calls["glb_output_path"] == Path("outputs/trellis2/demo.glb")
+    assert set(result.trace.timings_sec) >= {
+        "shape-decoder",
+        "texture-decoder",
+        "decoded-artifact-write",
+        "mesh-export",
+        "total",
+    }
     assert result.trace.blocker is None
 
 
-def test_generate_textured_glb_writer_failure_preserves_bake_outputs(tmp_path, monkeypatch):
+def test_generate_textured_glb_spatialkit_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_textured_trellis2_root(tmp_path / "trellis")
     image = tmp_path / "image.png"
@@ -983,10 +875,10 @@ def test_generate_textured_glb_writer_failure_preserves_bake_outputs(tmp_path, m
         expected_texture_model="tex_slat_flow_model_1024",
     )
 
-    def fake_write_glb(*args, **kwargs):
-        raise OSError("fixture GLB writer failure")
+    def fake_export(*args, **kwargs):
+        raise OSError("fixture SpatialKit export failure")
 
-    monkeypatch.setattr(trellis2_inference, "write_trellis2_textured_glb", fake_write_glb)
+    monkeypatch.setattr(trellis2_inference, "export_ovoxel_glb", fake_export)
 
     result = Trellis2InferencePipeline(tmp_path / "trellis").generate_textured_glb(
         image,
@@ -1005,16 +897,17 @@ def test_generate_textured_glb_writer_failure_preserves_bake_outputs(tmp_path, m
         "texture-slat-sampling",
         "shape-decoder",
         "texture-decoder",
+        "decoded-artifact-write",
     )
-    assert any(output.name == "texture_bake_base_color_rgba" for output in result.trace.outputs)
+    assert any(output.name == "decoded_ovoxel_artifacts" for output in result.trace.outputs)
     assert not result.ready
     assert result.trace.blocker is not None
     assert result.trace.blocker.stage == "mesh-export"
-    assert result.trace.blocker.operation == "textured GLB writer"
-    assert "fixture GLB writer failure" in result.trace.blocker.reason
+    assert result.trace.blocker.operation == "export decoded TRELLIS.2 O-Voxel artifacts through SpatialKit"
+    assert "fixture SpatialKit export failure" in result.trace.blocker.reason
 
 
-def test_generate_textured_glb_writer_oserror_is_structured_blocker(tmp_path, monkeypatch):
+def test_generate_textured_glb_spatialkit_oserror_is_structured_blocker(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_textured_trellis2_root(tmp_path / "trellis")
     image = tmp_path / "image.png"
@@ -1025,10 +918,10 @@ def test_generate_textured_glb_writer_oserror_is_structured_blocker(tmp_path, mo
         expected_texture_model="tex_slat_flow_model_1024",
     )
 
-    def fake_write_glb(*args, **kwargs):
+    def fake_export(*args, **kwargs):
         raise OSError("filesystem unavailable")
 
-    monkeypatch.setattr(trellis2_inference, "write_trellis2_textured_glb", fake_write_glb)
+    monkeypatch.setattr(trellis2_inference, "export_ovoxel_glb", fake_export)
 
     result = Trellis2InferencePipeline(tmp_path / "trellis").generate_textured_glb(
         image,
@@ -1038,7 +931,7 @@ def test_generate_textured_glb_writer_oserror_is_structured_blocker(tmp_path, mo
     assert not result.ready
     assert result.trace.blocker is not None
     assert result.trace.blocker.stage == "mesh-export"
-    assert result.trace.blocker.operation == "textured GLB writer"
+    assert result.trace.blocker.operation == "export decoded TRELLIS.2 O-Voxel artifacts through SpatialKit"
     assert "filesystem unavailable" in result.trace.blocker.reason
 
 
@@ -1051,7 +944,6 @@ def test_generate_textured_glb_fixture_writes_nonempty_glb(tmp_path, monkeypatch
         monkeypatch,
         expected_pipeline_type="1024_cascade",
         expected_texture_model="tex_slat_flow_model_1024",
-        patch_writer=False,
     )
 
     result = Trellis2InferencePipeline(tmp_path / "trellis").generate_textured_glb(

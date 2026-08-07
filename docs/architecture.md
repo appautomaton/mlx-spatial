@@ -19,8 +19,11 @@ These modules should remain model-neutral unless a pipeline contract requires ot
 sources live under `native/spatialkit/` and its Python orchestration lives under
 `src/mlx_spatial/spatialkit/`.
 
-The Python boundary is split by responsibility: `export.py` orchestrates the
-conversion, `pixal3d_quality.py` owns measured verdicts and parity gates,
+The Python boundary is split by responsibility: `contracts.py` validates the
+model-neutral decoded O-Voxel boundary, `export.py` orchestrates conversion,
+`uv.py` owns UV mesh generation, `glb.py` owns serialization, `quality.py`
+separates model-neutral artifact health from model-specific reference verdicts,
+`pixal3d_quality.py` owns measured verdicts and parity gates,
 `pixal3d_reporting.py` owns fixture lineage and report summaries, and
 `xatlas.py` owns global, clustered, and spatially partitioned xatlas behavior.
 
@@ -31,9 +34,27 @@ custom Metal kernels; irregular topology rebuilds use deterministic native C++
 multicore code. CUDA implementations are architecture references only and are
 never runtime dependencies on Apple Silicon.
 
-The Pixal3D inference pipeline may opt into this namespace, but SpatialKit
-experiments do not change model inference or the default GLB exporter until the
-recorded quality, runtime, RSS, swap, and visual gates pass.
+Pixal3D and TRELLIS.2 write the same decoded shape/PBR artifact contract, free
+model-stage memory, and call SpatialKit as their only textured GLB exporter.
+Model inference stays model-specific; export quality experiments operate on
+cached decoded artifacts and do not rerun inference.
+
+### Adding An O-Voxel Model
+
+Keep model-specific preprocessing, conditioning, sampling, and decoding in the
+model namespace. Reuse the shared export path only when the decoder produces
+the documented FlexiDualGrid shape fields and six-channel PBR voxel contract:
+
+1. Write `shape_decoder_fields.npz` and `texture_decoder_pbr.npz` with
+   `ovoxel_artifacts.py`.
+2. Record `model_family` and `source_coordinate_system` in both artifacts.
+3. Release model tensors and the MLX cache before CPU/native export work.
+4. Call `ovoxel_export.export_ovoxel_glb`; do not add another model-local mesh,
+   UV, texture-bake, or GLB writer.
+
+Models that produce a different representation, such as Gaussian splats or a
+scene point bundle, should keep their own typed export boundary instead of
+being forced through O-Voxel.
 
 ## SAM3D Boundary
 
@@ -63,7 +84,8 @@ Main modules:
 - `trellis2_rmbg.py`, `trellis2_rmbg_forward.py`: local RMBG asset inspection and MLX forward path.
 - `trellis2_dinov3.py`, `trellis2_dinov3_forward.py`: DINOv3 asset inspection and conditioning path.
 - `trellis2_sparse_structure.py`, `trellis2_slat.py`, `trellis2_forward.py`, `trellis2_decode.py`: staged generation and decode path.
-- `trellis2_export.py`, `trellis2_texturing.py`: OBJ/GLB export and texture baking.
+- `trellis2_export.py`: shape-only OBJ and sparse-preview helpers.
+- `trellis2_texturing.py`: standalone existing-mesh conditioning before the shared decoded O-Voxel export boundary.
 - `trellis2_inference.py`: forward traces, shape generation, textured GLB generation, structured blockers, and runtime options.
 
 TRELLIS.2 uses separate roots for model assets, RMBG, and DINOv3. Keep those dependencies explicit in docs and commands.
@@ -163,14 +185,14 @@ Main modules:
 - `pixal3d_camera.py`: upstream-compatible MoGe-intrinsics and manual-FOV camera math, cascade HR token planning, and HR coordinate selection.
 - `pixal3d_projection.py`: projection grid, front-view transform, FOV projection, feature sampling, coordinate-indexed feature selection, and explicit NAF map override support.
 - `naf.py`: converted NAF safetensors loading, image encoder/RoPE, and coordinate-sampled neighborhood attention without Torch or NATTEN runtime imports.
-- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, shape-decoder, texture-decoder, and textured-GLB artifact writers.
+- `pixal3d_export.py`: intermediate projection, sparse-coordinate, HR-coordinate, shape-SLat, texture-SLat, and compatibility wrappers for the shared decoded O-Voxel artifact writers.
 - `pixal3d_inference.py`: staged orchestration, trace metadata, memory snapshots, export settings, and blockers.
 - `pixal3d_parity.py`: dev-only reference bundle helpers gated away from runtime imports.
 
-Pixal3D reuses `trellis2_sparse_structure.py`, `trellis2_slat.py`,
-`trellis2_decode.py`, and `trellis2_export.py` for shared flow, decoder, and
-export math, but only through config-gated or caller-labeled paths so existing
-TRELLIS.2 checkpoints and GLB metadata stay on their original behavior.
+Pixal3D reuses `trellis2_sparse_structure.py`, `trellis2_slat.py`, and
+`trellis2_decode.py` for shared flow and decoder math. Both pipelines then
+converge on `ovoxel_artifacts.py`, `ovoxel_export.py`, and SpatialKit; decoded
+metadata preserves model-specific coordinate systems and GLB labels.
 
 ## CLI And Script Split
 

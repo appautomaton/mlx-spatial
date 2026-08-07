@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1139,12 +1141,20 @@ def test_telea_bake_path_is_deterministic() -> None:
 
 
 def test_reference_telea_path_is_dependency_light() -> None:
-    # TPP-09: the reference Telea path must not require cv2 (oracle-only) or torch.
-    import importlib.util
+    # TPP-09: runtime code must not import cv2 (oracle-only) or torch. The dev
+    # environment may still install either package for explicit parity tests.
+    import mlx_spatial.spatialkit.texture as texture_module
 
-    assert importlib.util.find_spec("cv2") is None, "cv2 must remain a dev-time oracle, not a runtime dep"
-    assert importlib.util.find_spec("torch") is None, "torch must not be a runtime dep of the telea path"
-    # And telea_inpaint works with neither importable.
+    tree = ast.parse(inspect.getsource(texture_module))
+    imported_roots = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert "cv2" not in imported_roots
+    assert "torch" not in imported_roots
+
     image = np.zeros((8, 8, 3), dtype=np.uint8)
     image[2:6, 2:6] = 200
     mask = np.zeros((8, 8), dtype=np.uint8)

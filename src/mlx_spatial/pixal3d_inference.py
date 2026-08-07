@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
 
+from .inference_timing import StageTimer
 from .model_assets import DINOv3_VITL16_ASSETS
 from .mlx_memory import clear_mlx_cache, mlx_memory_snapshot
 from .naf import NAF_DEFAULT_ROOT, load_naf_tensors, naf_conversion_command, prepare_naf_image_tensor, project_naf_features_at_points
-from .ovoxel import flexi_dual_grid_fields_to_mesh
+from .ovoxel_artifacts import write_decoded_ovoxel_shape_npz, write_decoded_ovoxel_texture_npz
+from .ovoxel_export import (
+    OVOXEL_DEFAULT_TARGET_FACES,
+    export_ovoxel_glb,
+    load_spatialkit_exporter,
+)
 from .pixal3d_assets import PIXAL3D_DEFAULT_ROOT, read_pixal3d_pipeline_config, validate_pixal3d_assets
 from .pixal3d_camera import (
     pixal3d_camera_params_from_moge_intrinsics,
@@ -23,13 +28,10 @@ from .pixal3d_camera import (
 )
 from .pixal3d_export import (
     write_pixal3d_projection_npz,
-    write_pixal3d_shape_decoder_npz,
     write_pixal3d_shape_hr_coordinates_npz,
     write_pixal3d_shape_slat_npz,
     write_pixal3d_sparse_structure_npz,
-    write_pixal3d_texture_decoder_npz,
     write_pixal3d_texture_slat_npz,
-    write_pixal3d_textured_glb,
 )
 from .pixal3d_preprocess import Pixal3DBackgroundRemover, preprocess_pixal3d_image
 from .pixal3d_projection import (
@@ -58,13 +60,6 @@ from .trellis2_dinov3 import (
     inspect_dinov3_assets,
 )
 from .trellis2_forward import prepare_dinov3_image_tensor, sparse_structure_target_resolution
-from .trellis2_export import (
-    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
-    TRELLIS2_TEXTURE_BAKE_BACKENDS,
-    TRELLIS2_XATLAS_AUTO_FACE_GUARD,
-    bake_trellis2_texture_fields_mac_native,
-    postprocess_trellis2_mesh_for_glb,
-)
 from .trellis2_sparse_structure import (
     probe_sparse_structure_decoder_boundary,
     probe_sparse_structure_forward_boundary,
@@ -78,40 +73,18 @@ PIXAL3D_RECOMMENDED_PIPELINE_TYPE = "1024_cascade"
 PIXAL3D_PIPELINE_TYPES = ("1024_cascade", "1536_cascade")
 PIXAL3D_DEFAULT_DINO_ROOT = DINOv3_VITL16_ASSETS.root_hint
 PIXAL3D_DEFAULT_SEED = 42
+# Upstream Pixal3D/TRELLIS.2 default for unique HR SLat coordinates after grid
+# quantization; it is not a decoder-output limit or a memory budget.
 PIXAL3D_DEFAULT_MAX_NUM_TOKENS = 49_152
 PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT = 1_000_000
 PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT = 1_100_000
 PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT = 1_100_000
 PIXAL3D_DEFAULT_TEXTURE_SIZE = 1024
-PIXAL3D_DEFAULT_GLB_TARGET_FACES = TRELLIS2_GLB_DEFAULT_FACE_TARGET
-PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND = "kdtree"
-PIXAL3D_GLB_EXPORT_BACKENDS = ("internal", "spatialkit")
-PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND = "internal"
+PIXAL3D_DEFAULT_GLB_TARGET_FACES = OVOXEL_DEFAULT_TARGET_FACES
 PIXAL3D_DEFAULT_NAF_ROOT = NAF_DEFAULT_ROOT
 PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
 PIXAL3D_DEFAULT_MOGE_ROOT = SAM3D_MOGE_DEFAULT_ROOT
 PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE = "balanced"
-
-
-class _StageTimer:
-    """Record independent stage durations and total pipeline wall time."""
-
-    def __init__(self, clock: Callable[[], float] = time.perf_counter):
-        self._clock = clock
-        self._pipeline_started = clock()
-        self.values: dict[str, float] = {}
-
-    def begin(self) -> float:
-        return self._clock()
-
-    def end(self, name: str, stage_started: float) -> None:
-        self.values[name] = max(0.0, self._clock() - stage_started)
-
-    def snapshot(self) -> dict[str, float]:
-        return {
-            **self.values,
-            "total": max(0.0, self._clock() - self._pipeline_started),
-        }
 
 
 @dataclass(frozen=True)
@@ -178,10 +151,6 @@ class Pixal3DInferencePipeline:
         dino_root: str | Path | None = None,
         texture_size: int = PIXAL3D_DEFAULT_TEXTURE_SIZE,
         glb_target_faces: int = PIXAL3D_DEFAULT_GLB_TARGET_FACES,
-        xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
-        xatlas_parallel_chunks: int = 0,
-        texture_bake_backend: str = PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
-        glb_export_backend: str = PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
         glb_diagnostics_path: str | Path | None = None,
         naf_root: str | Path | None = PIXAL3D_DEFAULT_NAF_ROOT,
         naf_coordinate_chunk_size: int = PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE,
@@ -200,21 +169,20 @@ class Pixal3DInferencePipeline:
         completed: list[str] = []
         output_path = _resolve_output_path(image_path, output=output, output_dir=output_dir)
         artifact_dir = output_path.parent
-        timer = _StageTimer()
-        spatialkit_exporter: Any | None = None
+        decoded_dir = artifact_dir / "decoded"
+        timer = StageTimer()
         metadata = {
             "memory_before": mlx_memory_snapshot().as_dict(),
             "export_options": {
                 "texture_size": int(texture_size),
                 "glb_target_faces": int(glb_target_faces),
-                "xatlas_face_guard": xatlas_face_guard,
-                "xatlas_parallel_chunks": int(xatlas_parallel_chunks),
-                "texture_bake_backend": texture_bake_backend,
-                "glb_export_backend": glb_export_backend,
+                "exporter": "spatialkit",
                 "glb_diagnostics_path": str(glb_diagnostics_path) if glb_diagnostics_path is not None else None,
-                "glb_export_backend_requested": glb_export_backend,
-                "glb_export_backend_used": "internal" if glb_export_backend == "internal" else None,
-                "glb_export_backend_error": None,
+                "quality_preset": "reference-target",
+                "uv_backend": "xatlas-clustered",
+                "simplify_backend": "mlx-qem",
+                "remesh": True,
+                "texture_postprocess": "telea",
             },
             "naf_options": {
                 "naf_root": str(naf_root) if naf_root is not None else None,
@@ -265,9 +233,6 @@ class Pixal3DInferencePipeline:
         export_guard_error = _validate_pixal3d_export_guards(
             texture_size=texture_size,
             glb_target_faces=glb_target_faces,
-            xatlas_parallel_chunks=xatlas_parallel_chunks,
-            texture_bake_backend=texture_bake_backend,
-            glb_export_backend=glb_export_backend,
         )
         if export_guard_error is not None:
             return self._blocked(
@@ -284,11 +249,6 @@ class Pixal3DInferencePipeline:
                 {
                     "texture_size": texture_size,
                     "glb_target_faces": glb_target_faces,
-                    "xatlas_parallel_chunks": xatlas_parallel_chunks,
-                    "texture_bake_backend": texture_bake_backend,
-                    "glb_export_backend": glb_export_backend,
-                    "supported_texture_bake_backends": TRELLIS2_TEXTURE_BAKE_BACKENDS,
-                    "supported_glb_export_backends": PIXAL3D_GLB_EXPORT_BACKENDS,
                 },
                 metadata=metadata,
             )
@@ -389,28 +349,23 @@ class Pixal3DInferencePipeline:
             )
         completed.append("input-image")
 
-        if glb_export_backend == "spatialkit":
-            spatialkit_exporter, spatialkit_import_error = _load_spatialkit_exporter()
-            if spatialkit_exporter is None:
-                metadata["export_options"]["glb_export_backend_error"] = spatialkit_import_error
-                metadata["timings_sec"] = timer.snapshot()
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "export-backend-validation",
-                    "load integrated mlx_spatial.spatialkit export backend",
-                    spatialkit_import_error or "mlx_spatial.spatialkit exporter is unavailable",
-                    {
-                        "glb_export_backend": glb_export_backend,
-                        "requested_backend": "spatialkit",
-                    },
-                    metadata=metadata,
-                )
+        spatialkit_exporter, spatialkit_import_error = load_spatialkit_exporter()
+        if spatialkit_exporter is None:
+            metadata["timings_sec"] = timer.snapshot()
+            return self._blocked(
+                image_path,
+                completed,
+                pipeline_type,
+                manual_fov,
+                seed,
+                max_num_tokens,
+                output_path,
+                "export-backend-validation",
+                "load integrated mlx_spatial.spatialkit exporter",
+                spatialkit_import_error or "mlx_spatial.spatialkit exporter is unavailable",
+                {"required_backend": "spatialkit"},
+                metadata=metadata,
+            )
 
         validation = validate_pixal3d_assets(self.root)
         metadata["asset_present"] = list(validation.present)
@@ -1041,6 +996,8 @@ class Pixal3DInferencePipeline:
                 decoded_shape=decoder_probe.decoded_shape or (),
                 target_resolution=decoder_probe.target_resolution or sparse_structure_target_resolution(pipeline_type),
                 metadata={
+                    "model_family": "pixal3d",
+                    "source_coordinate_system": "gltf-y-up",
                     "pipeline_type": pipeline_type,
                     "manual_fov": manual_fov,
                     "seed": seed,
@@ -1244,6 +1201,8 @@ class Pixal3DInferencePipeline:
                 decoder_probe.coordinates,
                 shape_features,
                 metadata={
+                    "model_family": "pixal3d",
+                    "source_coordinate_system": "gltf-y-up",
                     "pipeline_type": pipeline_type,
                     "manual_fov": manual_fov,
                     "seed": seed,
@@ -1892,27 +1851,51 @@ class Pixal3DInferencePipeline:
                 "decoder_token_limit": shape_decode.probe.reference_token_limit,
                 "hr_selection_max_num_tokens": max_num_tokens,
             }
-            shape_decoder_artifact = write_pixal3d_shape_decoder_npz(
-                artifact_dir / "shape_decoder_fields.npz",
-                shape_decode.coordinates,
-                shape_decode.fields,
-                subdivisions=shape_decode.subdivisions,
-                metadata={
-                    "pipeline_type": pipeline_type,
-                    "manual_fov": manual_fov,
-                    "seed": seed,
-                    "shape_decoder_model": shape_decoder_model.key,
-                    "shape_decoder_config_path": shape_decoder_model.config_path,
-                    "shape_decoder_checkpoint_path": shape_decoder_model.checkpoint_path,
-                    "shape_slat_hr_artifact": str(shape_hr_slat_artifact.path),
-                    "texture_slat_artifact": str(texture_slat_artifact.path),
-                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
-                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
-                    "decoder_token_limit": shape_decode.probe.reference_token_limit,
-                    "hr_selection_max_num_tokens": max_num_tokens,
-                    "blocker_next_target": "texture-decoder",
-                },
-            )
+            shape_artifact_write_started = timer.begin()
+            try:
+                shape_decoder_artifact = write_decoded_ovoxel_shape_npz(
+                    decoded_dir / "shape_decoder_fields.npz",
+                    shape_decode.coordinates,
+                    shape_decode.fields,
+                    subdivisions=shape_decode.subdivisions,
+                    metadata={
+                        "model_family": "pixal3d",
+                        "source_coordinate_system": "gltf-y-up",
+                        "pipeline_type": pipeline_type,
+                        "manual_fov": manual_fov,
+                        "seed": seed,
+                        "shape_decoder_model": shape_decoder_model.key,
+                        "shape_decoder_config_path": shape_decoder_model.config_path,
+                        "shape_decoder_checkpoint_path": shape_decoder_model.checkpoint_path,
+                        "shape_slat_hr_artifact": str(shape_hr_slat_artifact.path),
+                        "texture_slat_artifact": str(texture_slat_artifact.path),
+                        "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                        "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
+                        "decoder_token_limit": shape_decode.probe.reference_token_limit,
+                        "hr_selection_max_num_tokens": max_num_tokens,
+                        "blocker_next_target": "texture-decoder",
+                    },
+                )
+            except (OSError, ValueError) as error:
+                timer.end("shape-artifact-write", shape_artifact_write_started)
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timer.snapshot()
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "decoded-artifact-write",
+                    "persist decoded Pixal3D shape artifact",
+                    str(error),
+                    {"decoded_dir": str(decoded_dir)},
+                    metadata=metadata,
+                    artifacts=texture_slat_artifacts,
+                )
+            timer.end("shape-artifact-write", shape_artifact_write_started)
             completed.append("shape-decoder")
             completed.append("artifact:shape_decoder_fields")
             shape_decode_artifacts = (*texture_slat_artifacts, shape_decoder_artifact.path)
@@ -1993,32 +1976,56 @@ class Pixal3DInferencePipeline:
                 "decoder_token_limit": texture_decode.probe.reference_token_limit,
                 "hr_selection_max_num_tokens": max_num_tokens,
             }
-            texture_decoder_artifact = write_pixal3d_texture_decoder_npz(
-                artifact_dir / "texture_decoder_pbr.npz",
-                texture_decode.coordinates,
-                texture_decode.attributes,
-                spatial_shape=texture_decode.spatial_shape,
-                batch_size=texture_decode.batch_size,
-                decode_resolution=texture_decode.decode_resolution,
-                voxel_size=texture_decode.voxel_size,
-                metadata={
-                    "pipeline_type": pipeline_type,
-                    "manual_fov": manual_fov,
-                    "seed": seed,
-                    "texture_decoder_model": texture_decoder_model.key,
-                    "texture_decoder_config_path": texture_decoder_model.config_path,
-                    "texture_decoder_checkpoint_path": texture_decoder_model.checkpoint_path,
-                    "shape_decoder_artifact": str(shape_decoder_artifact.path),
-                    "texture_slat_artifact": str(texture_slat_artifact.path),
-                    "actual_hr_resolution": hr_selection.actual_hr_resolution,
-                    "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
-                    "decoder_token_limit": texture_decode.probe.reference_token_limit,
-                    "hr_selection_max_num_tokens": max_num_tokens,
-                    "guide_subdivision_shapes": texture_decode.guide_subdivision_shapes,
-                    "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
-                    "blocker_next_target": "mesh-extraction",
-                },
-            )
+            texture_artifact_write_started = timer.begin()
+            try:
+                texture_decoder_artifact = write_decoded_ovoxel_texture_npz(
+                    decoded_dir / "texture_decoder_pbr.npz",
+                    texture_decode.coordinates,
+                    texture_decode.attributes,
+                    spatial_shape=texture_decode.spatial_shape,
+                    batch_size=texture_decode.batch_size,
+                    decode_resolution=texture_decode.decode_resolution,
+                    voxel_size=texture_decode.voxel_size,
+                    metadata={
+                        "model_family": "pixal3d",
+                        "source_coordinate_system": "gltf-y-up",
+                        "pipeline_type": pipeline_type,
+                        "manual_fov": manual_fov,
+                        "seed": seed,
+                        "texture_decoder_model": texture_decoder_model.key,
+                        "texture_decoder_config_path": texture_decoder_model.config_path,
+                        "texture_decoder_checkpoint_path": texture_decoder_model.checkpoint_path,
+                        "shape_decoder_artifact": str(shape_decoder_artifact.path),
+                        "texture_slat_artifact": str(texture_slat_artifact.path),
+                        "actual_hr_resolution": hr_selection.actual_hr_resolution,
+                        "actual_hr_grid_resolution": hr_selection.actual_hr_grid_resolution,
+                        "decoder_token_limit": texture_decode.probe.reference_token_limit,
+                        "hr_selection_max_num_tokens": max_num_tokens,
+                        "guide_subdivision_shapes": texture_decode.guide_subdivision_shapes,
+                        "shape_decoder_coordinate_shape": texture_decode.shape_decoder_coordinate_shape,
+                        "blocker_next_target": "mesh-extraction",
+                    },
+                )
+            except (OSError, ValueError) as error:
+                timer.end("texture-artifact-write", texture_artifact_write_started)
+                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
+                metadata["timings_sec"] = timer.snapshot()
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "decoded-artifact-write",
+                    "persist decoded Pixal3D texture artifact",
+                    str(error),
+                    {"decoded_dir": str(decoded_dir)},
+                    metadata=metadata,
+                    artifacts=shape_decode_artifacts,
+                )
+            timer.end("texture-artifact-write", texture_artifact_write_started)
             completed.append("texture-decoder")
             completed.append("artifact:texture_decoder_pbr")
             decode_artifacts = (*shape_decode_artifacts, texture_decoder_artifact.path)
@@ -2027,141 +2034,27 @@ class Pixal3DInferencePipeline:
             del texture_features
             _release_pixal3d_mlx_stage_memory(metadata, "after_texture_decoder")
 
-            if glb_export_backend == "spatialkit":
-                if spatialkit_exporter is None:
-                    raise RuntimeError("validated SpatialKit exporter became unavailable during Pixal3D inference")
-                if spatialkit_exporter is not None:
-                    metadata["export_options"]["glb_export_backend_used"] = "spatialkit"
-                    shape_decode_shape = {
-                        "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
-                        "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
-                        "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
-                        "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
-                    }
-                    del shape_decode, texture_decode
-                    _release_pixal3d_mlx_stage_memory(metadata, "before_spatialkit_glb_export")
+            shape_decode_shape = {
+                "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
+                "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
+                "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
+                "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
+            }
+            del shape_decode, texture_decode
+            _release_pixal3d_mlx_stage_memory(metadata, "before_spatialkit_glb_export")
 
-                    spatialkit_export_started = timer.begin()
-                    try:
-                        spatialkit_result = _export_pixal3d_glb_with_spatialkit(
-                            spatialkit_exporter,
-                            artifact_dir,
-                            output_path,
-                            texture_size=texture_size,
-                            target_faces=glb_target_faces,
-                            grid_size=hr_selection.actual_hr_resolution,
-                            diagnostics_path=glb_diagnostics_path,
-                        )
-                    except (ImportError, RuntimeError, ValueError) as error:
-                        metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                        metadata["timings_sec"] = timer.snapshot()
-                        return self._blocked(
-                            image_path,
-                            completed,
-                            pipeline_type,
-                            manual_fov,
-                            seed,
-                            max_num_tokens,
-                            output_path,
-                            "mesh-export",
-                            "export decoded Pixal3D NPZ artifacts through integrated mlx_spatial.spatialkit",
-                            str(error),
-                            {
-                                **shape_decode_shape,
-                                "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
-                                "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
-                                "actual_hr_resolution": hr_selection.actual_hr_resolution,
-                                "texture_size": texture_size,
-                                "glb_target_faces": glb_target_faces,
-                                "glb_export_backend": glb_export_backend,
-                            },
-                            metadata=metadata,
-                            artifacts=decode_artifacts,
-                        )
-
-                    timer.end("mesh-export", spatialkit_export_started)
-                    spatialkit_diagnostics = dict(getattr(spatialkit_result, "diagnostics", {}))
-                    texture_bake_stats = (
-                        spatialkit_diagnostics.get("stages", {})
-                        .get("texture_bake", {})
-                        .get("stats", {})
-                    )
-                    metadata["mesh_export"] = {
-                        "export_backend": "spatialkit",
-                        "spatialkit_diagnostics_path": str(spatialkit_result.diagnostics_path),
-                        "source_mesh_vertices": _diagnostic_int(spatialkit_diagnostics, ("stages", "extract_mesh", "source_vertices")),
-                        "source_mesh_faces": _diagnostic_int(spatialkit_diagnostics, ("stages", "extract_mesh", "source_faces")),
-                        "postprocess_stats": spatialkit_diagnostics.get("stages", {}).get("simplify_mesh", {}).get("stats", {}),
-                        "baked_vertices_shape": tuple(
-                            spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("vertices_shape", ())
-                        ),
-                        "baked_faces_shape": tuple(
-                            spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("faces_shape", ())
-                        ),
-                        "baked_uv_shape": tuple(spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("uvs_shape", ())),
-                        "texture_size": int(texture_bake_stats.get("texture_size", texture_size)),
-                        "voxel_count": int(texture_bake_stats.get("voxel_count", 0)),
-                        "coverage_ratio": float(texture_bake_stats.get("coverage_ratio", 0.0)),
-                        "raw_coverage_ratio": float(texture_bake_stats.get("raw_coverage_ratio", 0.0)),
-                        "bake_backend": str(texture_bake_stats.get("backend", "spatialkit")),
-                        "unwrap_backend": spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("stats", {}).get("backend"),
-                        "unwrap_chunks": 0,
-                        "unwrap_chart_count": 0,
-                        "unwrap_utilization": 0.0,
-                        "xatlas_face_guard": None,
-                        "xatlas_face_guard_mode": "not_used",
-                        "sampled_texel_count": int(texture_bake_stats.get("sampled_texel_count", 0)),
-                        "missing_texel_count": int(texture_bake_stats.get("missing_texel_count", 0)),
-                        "out_of_grid_texel_count": int(texture_bake_stats.get("out_of_grid_texel_count", 0)),
-                        "source_projection_used": False,
-                        "source_projection_detail": (
-                            "integrated mlx_spatial.spatialkit export uses decoded NPZ artifacts directly"
-                        ),
-                    }
-                    completed.append("mesh-export")
-                    completed.append("artifact:textured_glb")
-                    final_artifacts = (*decode_artifacts, spatialkit_result.glb.path, spatialkit_result.diagnostics_path)
-                    metadata["artifact_paths"] = list(final_artifacts)
-                    metadata["textured_glb_artifact"] = spatialkit_result.glb
-                    _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
-                    metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                    metadata["timings_sec"] = timer.snapshot()
-                    return Pixal3DGenerationResult(
-                        trace=Pixal3DInferenceTrace(
-                            root=self.root,
-                            image_path=image_path,
-                            completed_stages=tuple(completed),
-                            pipeline_type=pipeline_type,
-                            manual_fov=manual_fov,
-                            seed=seed,
-                            max_num_tokens=max_num_tokens,
-                            output_path=output_path,
-                            blocker=None,
-                            metadata=metadata,
-                        ),
-                        artifacts=final_artifacts,
-                    )
-
-            internal_mesh_export_started = timer.begin()
+            spatialkit_export_started = timer.begin()
             try:
-                mesh = flexi_dual_grid_fields_to_mesh(
-                    shape_decode.coordinates,
-                    shape_decode.fields,
-                    grid_size=hr_selection.actual_hr_resolution,
-                )
-                postprocess_result = postprocess_trellis2_mesh_for_glb(mesh, target_faces=glb_target_faces)
-                baked_texture = bake_trellis2_texture_fields_mac_native(
-                    postprocess_result.mesh,
-                    texture_decode.coordinates,
-                    texture_decode.attributes,
-                    decode_resolution=hr_selection.actual_hr_resolution,
+                spatialkit_result = export_ovoxel_glb(
+                    decoded_dir,
+                    output_path,
                     texture_size=texture_size,
-                    xatlas_face_guard=xatlas_face_guard,
-                    xatlas_parallel_chunks=xatlas_parallel_chunks,
-                    texture_bake_backend=texture_bake_backend,
-                    projection_source_mesh=getattr(postprocess_result, "source_mesh", None),
+                    target_faces=glb_target_faces,
+                    grid_size=hr_selection.actual_hr_resolution,
+                    diagnostics_path=glb_diagnostics_path,
+                    exporter=spatialkit_exporter,
                 )
-            except (ImportError, RuntimeError, ValueError) as error:
+            except (ImportError, OSError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
                 metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
@@ -2173,102 +2066,49 @@ class Pixal3DInferencePipeline:
                     max_num_tokens,
                     output_path,
                     "mesh-export",
-                    "extract Pixal3D FlexiDualGrid mesh and bake decoded PBR voxels",
+                    "export decoded Pixal3D O-Voxel artifacts through SpatialKit",
                     str(error),
                     {
-                        "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
-                        "shape_decoder_fields_shape": tuple(int(dim) for dim in shape_decode.fields.shape),
-                        "texture_decoder_coordinates_shape": tuple(int(dim) for dim in texture_decode.coordinates.shape),
-                        "texture_decoder_attributes_shape": tuple(int(dim) for dim in texture_decode.attributes.shape),
+                        **shape_decode_shape,
                         "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
                         "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
                         "actual_hr_resolution": hr_selection.actual_hr_resolution,
                         "texture_size": texture_size,
                         "glb_target_faces": glb_target_faces,
-                        "xatlas_face_guard": xatlas_face_guard,
-                        "xatlas_parallel_chunks": xatlas_parallel_chunks,
-                        "texture_bake_backend": texture_bake_backend,
-                        "glb_export_backend": glb_export_backend,
                     },
                     metadata=metadata,
                     artifacts=decode_artifacts,
                 )
 
-            timer.end("mesh-export", internal_mesh_export_started)
+            timer.end("mesh-export", spatialkit_export_started)
+            spatialkit_diagnostics = dict(spatialkit_result.diagnostics)
+            texture_bake_stats = spatialkit_diagnostics.get("stages", {}).get("texture_bake", {}).get("stats", {})
             metadata["mesh_export"] = {
-                "export_backend": "internal",
-                "source_mesh_vertices": int(mesh.vertices.shape[0]),
-                "source_mesh_faces": int(mesh.faces.shape[0]),
-                "postprocess_stats": postprocess_result.stats,
-                "baked_vertices_shape": tuple(int(dim) for dim in baked_texture.vertices.shape),
-                "baked_faces_shape": tuple(int(dim) for dim in baked_texture.faces.shape),
-                "baked_uv_shape": tuple(int(dim) for dim in baked_texture.uvs.shape),
-                "texture_size": int(baked_texture.texture_size),
-                "voxel_count": int(baked_texture.voxel_count),
-                "coverage_ratio": float(baked_texture.coverage_ratio),
-                "raw_coverage_ratio": float(baked_texture.raw_coverage_ratio),
-                "bake_backend": baked_texture.backend,
-                "unwrap_backend": baked_texture.unwrap_backend,
-                "unwrap_chunks": baked_texture.unwrap_chunks,
-                "unwrap_chart_count": baked_texture.unwrap_chart_count,
-                "unwrap_utilization": float(baked_texture.unwrap_utilization),
-                "xatlas_face_guard": baked_texture.xatlas_face_guard,
-                "xatlas_face_guard_mode": baked_texture.xatlas_face_guard_mode,
-                "sampled_texel_count": baked_texture.sampled_texel_count,
-                "missing_texel_count": baked_texture.missing_texel_count,
-                "out_of_grid_texel_count": baked_texture.out_of_grid_texel_count,
-                "source_projection_used": baked_texture.source_projection_used,
-                "source_projection_detail": baked_texture.source_projection_detail,
+                "export_backend": "spatialkit",
+                "spatialkit_diagnostics_path": str(spatialkit_result.diagnostics_path),
+                "source_mesh_vertices": _diagnostic_int(
+                    spatialkit_diagnostics, ("stages", "extract_mesh", "source_vertices")
+                ),
+                "source_mesh_faces": _diagnostic_int(
+                    spatialkit_diagnostics, ("stages", "extract_mesh", "source_faces")
+                ),
+                "postprocess_stats": spatialkit_diagnostics.get("stages", {})
+                .get("simplify_mesh", {})
+                .get("stats", {}),
+                "texture_size": int(texture_bake_stats.get("texture_size", texture_size)),
+                "voxel_count": int(texture_bake_stats.get("voxel_count", 0)),
+                "coverage_ratio": float(texture_bake_stats.get("coverage_ratio", 0.0)),
+                "raw_coverage_ratio": float(texture_bake_stats.get("raw_coverage_ratio", 0.0)),
+                "bake_backend": str(texture_bake_stats.get("backend", "spatialkit")),
+                "uv_backend": spatialkit_diagnostics.get("stages", {}).get("uv", {}).get("stats", {}).get("backend"),
+                "sampled_texel_count": int(texture_bake_stats.get("sampled_texel_count", 0)),
+                "missing_texel_count": int(texture_bake_stats.get("missing_texel_count", 0)),
+                "out_of_grid_texel_count": int(texture_bake_stats.get("out_of_grid_texel_count", 0)),
             }
-            completed.append("mesh-export")
-
-            glb_export_started = timer.begin()
-            try:
-                glb_artifact = write_pixal3d_textured_glb(
-                    baked_texture,
-                    output_path,
-                    metadata={
-                        "pipeline_type": pipeline_type,
-                        "manual_fov": manual_fov,
-                        "seed": seed,
-                        "texture_size": int(baked_texture.texture_size),
-                        "coverage_ratio": float(baked_texture.coverage_ratio),
-                        "raw_coverage_ratio": float(baked_texture.raw_coverage_ratio),
-                        "bake_backend": baked_texture.backend,
-                        "unwrap_backend": baked_texture.unwrap_backend,
-                        "shape_decoder_artifact": str(shape_decoder_artifact.path),
-                        "texture_decoder_artifact": str(texture_decoder_artifact.path),
-                    },
-                )
-            except (OSError, ValueError) as error:
-                metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timer.snapshot()
-                return self._blocked(
-                    image_path,
-                    completed,
-                    pipeline_type,
-                    manual_fov,
-                    seed,
-                    max_num_tokens,
-                    output_path,
-                    "glb-export",
-                    "write Pixal3D textured GLB",
-                    str(error),
-                    {
-                        "output_path": str(output_path),
-                        "shape_decoder_artifact_path": str(shape_decoder_artifact.path),
-                        "texture_decoder_artifact_path": str(texture_decoder_artifact.path),
-                    },
-                    metadata=metadata,
-                    artifacts=decode_artifacts,
-                )
-
-            timer.end("glb-export", glb_export_started)
-            completed.append("artifact:textured_glb")
-            final_artifacts = (*decode_artifacts, glb_artifact.path)
+            completed.extend(("mesh-export", "artifact:textured_glb"))
+            final_artifacts = (*decode_artifacts, spatialkit_result.glb.path, spatialkit_result.diagnostics_path)
             metadata["artifact_paths"] = list(final_artifacts)
-            metadata["textured_glb_artifact"] = glb_artifact
-            del shape_decode, texture_decode, mesh, postprocess_result, baked_texture
+            metadata["textured_glb_artifact"] = spatialkit_result.glb
             _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
             metadata["timings_sec"] = timer.snapshot()
@@ -2363,49 +2203,12 @@ def _validate_pixal3d_export_guards(
     *,
     texture_size: int,
     glb_target_faces: int,
-    xatlas_parallel_chunks: int,
-    texture_bake_backend: str,
-    glb_export_backend: str,
 ) -> str | None:
     if texture_size <= 0:
         return f"texture_size must be positive, got {texture_size}"
     if glb_target_faces <= 0:
         return f"glb_target_faces must be positive, got {glb_target_faces}"
-    if xatlas_parallel_chunks < 0:
-        return f"xatlas_parallel_chunks must be non-negative, got {xatlas_parallel_chunks}"
-    if texture_bake_backend not in TRELLIS2_TEXTURE_BAKE_BACKENDS:
-        return f"texture_bake_backend must be one of {TRELLIS2_TEXTURE_BAKE_BACKENDS}, got {texture_bake_backend}"
-    if glb_export_backend not in PIXAL3D_GLB_EXPORT_BACKENDS:
-        return f"glb_export_backend must be one of {PIXAL3D_GLB_EXPORT_BACKENDS}, got {glb_export_backend}"
     return None
-
-
-def _load_spatialkit_exporter() -> tuple[Any | None, str | None]:
-    try:
-        from .spatialkit import export_pixal3d_glb
-    except ImportError as error:
-        return None, f"mlx_spatial.spatialkit is not importable: {error}"
-    return export_pixal3d_glb, None
-
-
-def _export_pixal3d_glb_with_spatialkit(
-    exporter: Any,
-    decoded_dir: Path,
-    output_path: Path,
-    *,
-    texture_size: int,
-    target_faces: int,
-    grid_size: int,
-    diagnostics_path: str | Path | None,
-) -> Any:
-    return exporter(
-        decoded_dir,
-        output_path,
-        texture_size=texture_size,
-        target_faces=target_faces,
-        grid_size=grid_size,
-        diagnostics_path=diagnostics_path,
-    )
 
 
 def _diagnostic_int(diagnostics: dict[str, Any], path: tuple[str, ...]) -> int | None:

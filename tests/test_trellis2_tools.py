@@ -254,8 +254,7 @@ def test_cli_runs_against_fake_fixtures(tmp_path, capsys):
 
     assert main(["generate-shape", str(tmp_path), str(tmp_path / "missing.png"), "--output", str(tmp_path / "bad.obj")]) == 2
     shape_help = capsys.readouterr().out
-    assert "blocker_stage=mesh-export" in shape_help
-    assert "must stay under outputs" in shape_help
+    assert "blocker_stage=input-image" in shape_help
 
     assert main(["generate-textured", str(tmp_path), str(tmp_path / "missing.png"), "--output", str(tmp_path / "bad.obj")]) == 2
     textured_help = capsys.readouterr().out
@@ -291,12 +290,8 @@ def test_generate_textured_cli_accepts_shared_generation_flags(tmp_path, monkeyp
             "128",
             "--glb-target-faces",
             "100000",
-            "--xatlas-face-guard",
-            "auto",
-            "--xatlas-parallel-chunks",
-            "4",
-            "--texture-bake-backend",
-            "trilinear",
+            "--glb-diagnostics-path",
+            str(tmp_path / "diagnostics.json"),
         ]
     )
 

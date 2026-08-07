@@ -487,13 +487,24 @@ def bake_sam3d_gaussian_texture_for_glb(
 
     start = time.perf_counter()
     vertices, faces, normals = _mesh_arrays_for_texture_bake(mesh)
-    from .trellis2_export import unwrap_trellis2_mesh_xatlas_with_stats
+    if faces.shape[0] > xatlas_face_guard:
+        raise ValueError(
+            f"xatlas unwrap face count {faces.shape[0]} exceeds guard {xatlas_face_guard}; "
+            "simplify the GLB mesh before UV unwrapping"
+        )
 
-    unwrap = unwrap_trellis2_mesh_xatlas_with_stats(
-        FlexibleDualGridMesh(vertices=vertices, faces=faces),
-        face_guard=int(xatlas_face_guard),
-        parallel_chunks=xatlas_parallel_chunks,
+    from .spatialkit.uv import make_xatlas_uvs
+    from .spatialkit.xatlas import resolve_xatlas_parallel_chunks
+
+    resolved_chunks = resolve_xatlas_parallel_chunks(
+        int(faces.shape[0]),
+        xatlas_parallel_chunks,
+        face_target=50_000,
+        max_auto_chunks=8,
     )
+    unwrap_started = time.perf_counter()
+    unwrap = make_xatlas_uvs(vertices, faces, parallel_chunks=resolved_chunks)
+    unwrap_elapsed = time.perf_counter() - unwrap_started
     atlas_vertices = unwrap.vertices.astype(np.float32, copy=False)
     atlas_faces = unwrap.faces.astype(np.int64, copy=False)
     atlas_uvs = unwrap.uvs.astype(np.float32, copy=False)
@@ -549,12 +560,20 @@ def bake_sam3d_gaussian_texture_for_glb(
             raster_texel_count=raster_texel_count,
             raw_coverage_ratio=raw_coverage_ratio,
             final_coverage_ratio=float(np.count_nonzero(final_mask) / final_mask.size),
-            unwrap_backend=unwrap.stats.backend,
+            unwrap_backend=str(unwrap.stats["backend"]),
             xatlas_face_guard=int(xatlas_face_guard),
-            unwrap_seconds=unwrap.stats.elapsed_seconds,
-            unwrap_chunks=unwrap.stats.chunks,
-            unwrap_chart_count=unwrap.stats.chart_count,
-            unwrap_utilization=unwrap.stats.utilization,
+            unwrap_seconds=float(unwrap_elapsed),
+            unwrap_chunks=int(resolved_chunks),
+            unwrap_chart_count=(
+                int(unwrap.stats["chart_count"])
+                if unwrap.stats.get("chart_count") is not None
+                else None
+            ),
+            unwrap_utilization=(
+                float(unwrap.stats["atlas_utilization"])
+                if unwrap.stats.get("atlas_utilization") is not None
+                else None
+            ),
             elapsed_seconds=float(elapsed),
         ),
     )

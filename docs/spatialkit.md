@@ -27,7 +27,7 @@ uv run pytest tests/spatialkit \
   --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"
 ```
 
-## Decoded Pixal3D Export
+## Decoded O-Voxel Export
 
 Create one task-specific scratch root before an audit or heavy export, or reuse
 the root created during an earlier conversion session:
@@ -43,21 +43,20 @@ Then call the decoded-NPZ entry point:
 import os
 from pathlib import Path
 
-from mlx_spatial.spatialkit import export_pixal3d_glb
+from mlx_spatial.spatialkit import export_decoded_ovoxel_glb
 
 scratch = Path(os.environ["MLX_SPATIAL_TEST_SCRATCH"])
-result = export_pixal3d_glb(
-    "inputs/mlx-spatialkit/pixal3d-1024-cascade-decoded-pbr",
-    scratch / "outputs" / "pixal3d-preview",
+result = export_decoded_ovoxel_glb(
+    scratch / "inputs" / "decoded-ovoxel",
+    scratch / "outputs" / "model.glb",
 )
 print(result.glb.path)
 print(result.diagnostics_path)
 ```
 
-`inputs/mlx-spatialkit/` is a legacy fixture-directory name retained so large
-local decoded artifacts and existing oracle metadata do not need to move. It
-does not name an installable package; runtime imports use
-`mlx_spatial.spatialkit` from the single `mlx-spatial` distribution.
+`export_pixal3d_glb` remains a compatibility alias for existing callers. New
+code should use the model-neutral name because Pixal3D and TRELLIS.2 share this
+decoded boundary.
 
 The decoded directory must contain:
 
@@ -66,8 +65,9 @@ shape_decoder_fields.npz
 texture_decoder_pbr.npz
 ```
 
-The exporter writes `model.glb`, `diagnostics.json`, and optional visual parity
-sidecars below the requested output directory.
+The exporter writes `model.glb`, `diagnostics.json`,
+`artifact-manifest.json`, and optional visual parity sidecars below the
+requested output directory.
 
 ## Quality Paths
 
@@ -93,7 +93,7 @@ The native implementation currently includes:
   with deterministic multicore native topology rebuilds
 - paired-triangle face atlas and native chart UV candidates
 - real pinned-xatlas `xatlas-global` and CuMesh-style `xatlas-clustered` paths
-- the shared `xatlas-parallel-spatial` experiment available to Trellis2,
+- the shared `xatlas-parallel-spatial` experiment available to TRELLIS.2,
   SAM3D, and direct SpatialKit exports; its diagnostics report artificial
   spatial-partition cut edges
 - a separate measured `xatlas-equivalent-native` implementation using native
@@ -107,7 +107,7 @@ The native implementation currently includes:
 The current single-surface geometry/UV experiment is:
 
 ```python
-result = export_pixal3d_glb(
+result = export_decoded_ovoxel_glb(
     decoded_dir,
     output_dir,
     quality_preset="reference-target",
@@ -147,7 +147,7 @@ Performance evidence is valid only when diagnostics confirm the execution
 device and the watchdog records CPU/GPU utilization, peak RSS, and zero swap
 growth. Any swap growth invalidates a run.
 
-## Current Measured Evidence
+## Current Pixal3D Reference Evidence
 
 Cached decoded-NPZ runs now separate topology, geometric distance, rendered
 appearance, and runtime evidence:
@@ -175,22 +175,26 @@ appearance, and runtime evidence:
   growth. MLX QEM and Metal texture stages use the Apple GPU; irregular
   topology and xatlas stages remain CPU work by design.
 
-These results do not establish a production default. In particular, the UDF
-path is still an offset double cover, the evidence is below the upstream
-1M-face/4096-texture contract, and the fine-structure suite needs another
-independent asset.
+These results support the current SpatialKit integration, but they do not
+establish upstream production equivalence. The UDF path is still an offset
+double cover, the evidence is below the upstream 1M-face/4096-texture contract,
+and the fine-structure suite needs another independent asset.
 
 ## Readiness Contract
 
-Keep these concepts separate:
+For model families with a configured production-reference profile, keep these
+concepts separate:
 
 - `artifact_ready`: a parseable GLB was produced.
 - `production_quality_ready`: scalar quality thresholds passed.
 - `production_equivalence_ready`: reference stages, upstream settings,
   measured UV parity, rendered comparison, and deferred boundaries all passed.
 
-The strict production-equivalence gate is intentionally conservative. Before
-changing any Pixal3D or TRELLIS.2 pipeline default, the current work is:
+The strict production-equivalence gate is intentionally conservative. The
+current profile is Pixal3D-specific; TRELLIS.2 exports report artifact health
+but return `model_reference_profile_unavailable` instead of inheriting
+Pixal3D's 1M-face/4096-texture thresholds. The remaining Pixal3D quality work
+is:
 
 - extend the cached decoded-NPZ evidence to another independent fine-structure
   fixture beyond the car and violin cases
@@ -198,8 +202,8 @@ changing any Pixal3D or TRELLIS.2 pipeline default, the current work is:
   `texture_size=4096` evidence within time and memory budgets
 - add an object-level preservation gate for fine structures such as the
   violin-bow fixture
-- decide whether the measured single-layer MLX QEM candidate is strong enough
-  to replace the current default exporter
+- compare the remesh + MLX QEM production policy with the single-layer MLX QEM
+  candidate on the same independent fixtures
 
 Do not describe QEM, narrow-band UDF remesh, or reference UV as missing; those
 implementations exist. Do not describe the UDF double cover as a solved
@@ -222,6 +226,28 @@ Apple hardware:
 uv run pytest tests/spatialkit -m heavy \
   --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest-heavy"
 ```
+
+Reuse cached decoded artifacts without rerunning inference through the guarded
+export script:
+
+```bash
+uv run python scripts/spatialkit/export_cached_ovoxel.py \
+  "$MLX_SPATIAL_TEST_SCRATCH/inputs/decoded" \
+  "$MLX_SPATIAL_TEST_SCRATCH/outputs/model.glb" \
+  --quality-preset reference-target \
+  --target-faces 200000 \
+  --grid-size 1536 \
+  --uv-backend xatlas-clustered \
+  --remesh --remesh-resolution 1536 \
+  --simplify-backend mlx-qem \
+  --texture-postprocess telea \
+  --max-rss-gib 70 \
+  --max-swap-growth-gib 0
+```
+
+The watchdog records stage, CPU, Apple GPU, RSS, and swap samples. It terminates
+the worker if RSS exceeds the limit, swap grows, or required utilization probes
+are unavailable.
 
 Oracle environments, caches, generated GLBs, screenshots, JSON/HTML reports,
 and logs must remain below `MLX_SPATIAL_TEST_SCRATCH`. Committed anchor metadata

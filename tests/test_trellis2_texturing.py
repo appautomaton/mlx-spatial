@@ -18,8 +18,6 @@ from mlx_spatial.trellis2_texturing import (
     TRELLIS2_TEXTURING_DEFAULT_TEXTURE_SIZE,
 )
 from mlx_spatial.model_assets import TRELLIS2_ASSETS
-from mlx_spatial.ovoxel import FlexibleDualGridMesh
-from mlx_spatial.trellis2_export import Trellis2ExportArtifact
 
 
 def _write_texturing_root(root: Path, *, skip_encoder_config: bool = False):
@@ -456,7 +454,7 @@ class TestTrellis2TexturingPipeline:
         assert result.blocker.stage == "mesh-export"
         assert "only writes .glb" in result.blocker.reason
 
-    def test_run_rejects_export_path_outside_outputs(self, tmp_path):
+    def test_run_allows_export_path_outside_repository_outputs(self, tmp_path):
         pipeline = Trellis2TexturingPipeline(root=tmp_path / "weights/trellis2")
         _write_rgb_image(tmp_path / "img.png")
         _write_obj_mesh(tmp_path / "mesh.obj")
@@ -467,7 +465,7 @@ class TestTrellis2TexturingPipeline:
         )
         assert not result.ready
         assert result.blocker is not None
-        assert result.blocker.stage == "mesh-export"
+        assert result.blocker.operation != "export path validation"
 
     def test_run_rejects_missing_image(self, tmp_path):
         pipeline = Trellis2TexturingPipeline(root=tmp_path / "weights/trellis2")
@@ -543,7 +541,7 @@ class TestTrellis2TexturingPipeline:
             assert result.blocker is not None
             assert result.blocker.stage in {
                 "mesh-export", "image-conditioning", "fdg-encoder",
-                "shape-decoder", "texture-slat", "texture-decoder",
+                "shape-decoder", "texture-slat", "texture-decoder", "decoded-artifact-write",
             }
 
     def test_run_with_fixture_assets_512_pipeline_type(self, tmp_path):
@@ -575,7 +573,7 @@ class TestTrellis2TexturingPipeline:
             assert result.blocker is not None
             assert result.blocker.stage in {
                 "mesh-export", "image-conditioning", "fdg-encoder",
-                "shape-decoder", "texture-slat", "texture-decoder",
+                "shape-decoder", "texture-slat", "texture-decoder", "decoded-artifact-write",
             }
 
     def test_run_missing_encoder_config_is_blocked(self, tmp_path):

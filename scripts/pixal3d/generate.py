@@ -23,10 +23,10 @@ Recommended settings:
     Default root weights/pixal3d, pipeline-type 1024_cascade for Apple Silicon,
     DINOv3 root weights/dinov3-vitl16-pretrain-lvd1689m, converted NAF root
     weights/naf, seed 42, max-num-tokens 49152, texture size 1024,
-    GLB target faces 50000, kdtree texture baking, MoGe root
+    GLB target faces 200000, SpatialKit high-quality export, MoGe root
     weights/sam-3d-objects-mlx/moge for auto-camera, shape upsample token
-    guard 1000000, decoder token guards 1100000, internal GLB export by
-    default, and manual FOV only when intentionally overriding auto-camera.
+    guard 1000000, decoder token guards 1100000, and manual FOV only when
+    intentionally overriding auto-camera.
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ from mlx_spatial.pixal3d import main as pixal3d_main  # noqa: E402
 from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_DINO_ROOT,
     PIXAL3D_DEFAULT_GLB_TARGET_FACES,
-    PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
     PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
     PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE,
     PIXAL3D_DEFAULT_MOGE_ROOT,
@@ -54,14 +53,11 @@ from mlx_spatial.pixal3d_inference import (  # noqa: E402
     PIXAL3D_DEFAULT_SHAPE_DECODER_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_SHAPE_UPSAMPLE_TOKEN_LIMIT,
     PIXAL3D_DEFAULT_TEXTURE_DECODER_TOKEN_LIMIT,
-    PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
     PIXAL3D_DEFAULT_TEXTURE_SIZE,
-    PIXAL3D_GLB_EXPORT_BACKENDS,
     PIXAL3D_PIPELINE_TYPES,
     PIXAL3D_RECOMMENDED_PIPELINE_TYPE,
 )
 from mlx_spatial.sam3d_moge import SAM3D_MOGE_MEMORY_PROFILES  # noqa: E402
-from mlx_spatial.trellis2_export import TRELLIS2_TEXTURE_BAKE_BACKENDS  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,7 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         "--max-num-tokens",
         type=int,
         default=PIXAL3D_DEFAULT_MAX_NUM_TOKENS,
-        help="Pixal3D sparse token guard; default: %(default)s",
+        help=(
+            "upstream-compatible cap on unique HR SLat coordinates after grid quantization; "
+            "not a decoder or memory limit; default: %(default)s"
+        ),
     )
     parser.add_argument(
         "--shape-upsample-token-limit",
@@ -135,33 +134,9 @@ def main(argv: list[str] | None = None) -> int:
         help="mesh postprocess face target before GLB export; default: %(default)s",
     )
     parser.add_argument(
-        "--xatlas-face-guard",
-        type=_parse_xatlas_face_guard,
-        default="auto",
-        help="maximum faces allowed into xatlas unwrap, or 'auto'; default: %(default)s",
-    )
-    parser.add_argument(
-        "--xatlas-parallel-chunks",
-        type=int,
-        default=0,
-        help="split xatlas unwrap into chunks; default: %(default)s",
-    )
-    parser.add_argument(
-        "--texture-bake-backend",
-        choices=TRELLIS2_TEXTURE_BAKE_BACKENDS,
-        default=PIXAL3D_DEFAULT_TEXTURE_BAKE_BACKEND,
-        help="texture voxel sampling backend for GLB export; default: %(default)s",
-    )
-    parser.add_argument(
-        "--glb-export-backend",
-        choices=PIXAL3D_GLB_EXPORT_BACKENDS,
-        default=PIXAL3D_DEFAULT_GLB_EXPORT_BACKEND,
-        help="GLB export implementation; default: %(default)s",
-    )
-    parser.add_argument(
         "--glb-diagnostics-path",
         type=Path,
-        help="diagnostics JSON path for the opt-in integrated SpatialKit GLB export backend",
+        help="SpatialKit diagnostics JSON path; default: next to output",
     )
     parser.add_argument(
         "--naf-root",
@@ -198,14 +173,6 @@ def main(argv: list[str] | None = None) -> int:
         str(args.texture_size),
         "--glb-target-faces",
         str(args.glb_target_faces),
-        "--xatlas-face-guard",
-        str(args.xatlas_face_guard),
-        "--xatlas-parallel-chunks",
-        str(args.xatlas_parallel_chunks),
-        "--texture-bake-backend",
-        args.texture_bake_backend,
-        "--glb-export-backend",
-        args.glb_export_backend,
         "--dino-root",
         str(args.dino_root),
         "--moge-root",
@@ -228,16 +195,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.glb_diagnostics_path is not None:
         cli_args.extend(["--glb-diagnostics-path", str(args.glb_diagnostics_path)])
     return pixal3d_main(cli_args)
-
-
-def _parse_xatlas_face_guard(value: str) -> int | str:
-    normalized = value.strip().lower()
-    if normalized == "auto":
-        return "auto"
-    parsed = int(normalized)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("--xatlas-face-guard must be 'auto' or a positive integer")
-    return parsed
 
 
 if __name__ == "__main__":

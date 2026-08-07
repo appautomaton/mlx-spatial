@@ -69,7 +69,10 @@ def main(argv: list[str] | None = None) -> int:
         "--max-num-tokens",
         type=int,
         default=49_152,
-        help="sparse sampling token budget; default: %(default)s",
+        help=(
+            "upstream-compatible cap on unique HR SLat coordinates after grid quantization; "
+            "not a decoder or memory limit; default: %(default)s"
+        ),
     )
     parser.add_argument(
         "--decoder-token-limit",

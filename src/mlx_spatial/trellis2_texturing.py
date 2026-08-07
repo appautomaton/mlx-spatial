@@ -9,13 +9,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import mlx.core as mx
 import numpy as np
 
+if TYPE_CHECKING:
+    from .spatialkit import NativeGlbArtifact
+
+from .inference_timing import StageTimer
 from .mesh_to_fdg import mesh_to_flexible_dual_grid
 from .mlx_memory import clear_mlx_cache
-from .ovoxel import FlexibleDualGridMesh, flexi_dual_grid_fields_to_mesh
+from .ovoxel_artifacts import write_decoded_ovoxel_shape_npz, write_decoded_ovoxel_texture_npz
+from .ovoxel_export import (
+    export_ovoxel_glb,
+    load_spatialkit_exporter,
+)
 from .trellis2_decode import (
     read_structured_latent_decoder_config,
     read_structured_latent_encoder_config,
@@ -23,18 +32,7 @@ from .trellis2_decode import (
     run_shape_decoder_to_fields,
     run_texture_decoder_to_representation,
 )
-from .trellis2_export import (
-    TRELLIS2_GLB_DEFAULT_FACE_TARGET,
-    TRELLIS2_TEXTURE_BAKE_BACKENDS,
-    TRELLIS2_XATLAS_AUTO_FACE_GUARD,
-    Trellis2ExportArtifact,
-    bake_trellis2_texture_fields_mac_native,
-    missing_trellis2_mac_export_dependencies,
-    postprocess_trellis2_mesh_for_glb,
-    resolve_trellis2_xatlas_face_guard,
-    validate_trellis2_export_path,
-    write_trellis2_textured_glb,
-)
+from .trellis2 import TRELLIS2_GLB_DEFAULT_FACE_TARGET
 from .trellis2_forward import (
     Trellis2ForwardBlocker,
     Trellis2ForwardTraceResult,
@@ -72,7 +70,7 @@ class Trellis2TexturingResult:
 
     image_path: Path
     mesh_path: Path
-    artifact: Trellis2ExportArtifact | None = None
+    artifact: NativeGlbArtifact | None = None
     blocker: Trellis2TexturingBlocker | None = None
     trace: Trellis2ForwardTraceResult | None = None
 
@@ -86,8 +84,8 @@ class Trellis2TexturingPipeline:
 
     Reuses the FlexiDualGrid VAE encoder for shape SLat extraction,
     DINOv3 + shape SLat conditioning for texture SLat FlowEuler sampling,
-    SparseUnetVaeDecoder for PBR voxel decoding, and Mac-native UV baking
-    with xatlas for textured GLB export.
+    SparseUnetVaeDecoder for PBR voxel decoding, and SpatialKit for textured
+    GLB export.
     """
 
     def __init__(
@@ -118,10 +116,9 @@ class Trellis2TexturingPipeline:
         decoder_token_limit: int = TRELLIS2_TEXTURING_DEFAULT_DECODER_TOKEN_LIMIT,
         texture_size: int = TRELLIS2_TEXTURING_DEFAULT_TEXTURE_SIZE,
         glb_target_faces: int = TRELLIS2_GLB_DEFAULT_FACE_TARGET,
-        xatlas_face_guard: int | str = TRELLIS2_XATLAS_AUTO_FACE_GUARD,
-        xatlas_parallel_chunks: int = 0,
-        texture_bake_backend: str = "trilinear",
+        glb_diagnostics_path: str | Path | None = None,
     ) -> Trellis2TexturingResult:
+        timer = StageTimer()
         image = Path(image_path)
         mesh_file = Path(mesh_path)
         output = Path(output_path)
@@ -135,7 +132,7 @@ class Trellis2TexturingPipeline:
                     operation="textured GLB output format validation",
                     reference=str(output_path),
                     reason=f"texturing pipeline only writes .glb outputs, got {output.suffix or '<none>'}",
-                    next_slice="choose a .glb output path under outputs/ for texturing",
+                    next_slice="choose a .glb output path for texturing",
                 ),
             )
 
@@ -178,32 +175,30 @@ class Trellis2TexturingPipeline:
                 ),
             )
 
-        try:
-            validate_trellis2_export_path(output_path, suffixes=(".glb",))
-        except (OSError, ValueError) as error:
+        if texture_size <= 0 or glb_target_faces <= 0:
             return Trellis2TexturingResult(
                 image_path=image,
                 mesh_path=mesh_file,
                 blocker=Trellis2TexturingBlocker(
                     stage="mesh-export",
-                    operation="export path validation",
-                    reference=str(output_path),
-                    reason=str(error),
-                    next_slice="choose a .glb output path under outputs/",
+                    operation="SpatialKit export option validation",
+                    reference="texture_size, glb_target_faces",
+                    reason="texture_size and glb_target_faces must both be positive",
+                    next_slice="use positive SpatialKit export options",
                 ),
             )
 
-        missing_deps = missing_trellis2_mac_export_dependencies()
-        if missing_deps:
+        spatialkit_exporter, spatialkit_import_error = load_spatialkit_exporter()
+        if spatialkit_exporter is None:
             return Trellis2TexturingResult(
                 image_path=image,
                 mesh_path=mesh_file,
                 blocker=Trellis2TexturingBlocker(
                     stage="mesh-export",
-                    operation="Mac-native GLB export dependency validation",
-                    reference="xatlas, scipy, fast_simplification",
-                    reason=f"missing {', '.join(missing_deps)}",
-                    next_slice="install xatlas, scipy, and fast-simplification",
+                    operation="load integrated mlx_spatial.spatialkit exporter",
+                    reference="mlx_spatial.spatialkit.export_decoded_ovoxel_glb",
+                    reason=spatialkit_import_error or "mlx_spatial.spatialkit exporter is unavailable",
+                    next_slice="build or install mlx-spatial with its integrated SpatialKit extension",
                 ),
             )
 
@@ -475,59 +470,143 @@ class Trellis2TexturingPipeline:
                 ),
             )
 
+        decoded_dir = output.parent / "decoded"
+        decoded_write_started = timer.begin()
         try:
-            mesh = flexi_dual_grid_fields_to_mesh(
+            shape_artifact = write_decoded_ovoxel_shape_npz(
+                decoded_dir / "shape_decoder_fields.npz",
                 shape_result.coordinates,
                 shape_result.fields,
-                grid_size=route.output_resolution,
+                subdivisions=shape_result.subdivisions,
+                metadata={
+                    "model_family": "trellis2",
+                    "source_coordinate_system": "trellis-z-up",
+                    "pipeline_type": selected_pipeline_type,
+                    "seed": int(seed),
+                    "actual_hr_resolution": int(route.output_resolution),
+                    "source_mesh": str(mesh_file),
+                    "shape_decoder_checkpoint_path": config.shape_decoder_checkpoint_path,
+                },
             )
-            postprocess_result = postprocess_trellis2_mesh_for_glb(
-                mesh, target_faces=glb_target_faces
-            )
-            baked = bake_trellis2_texture_fields_mac_native(
-                postprocess_result.mesh,
+            texture_artifact = write_decoded_ovoxel_texture_npz(
+                decoded_dir / "texture_decoder_pbr.npz",
                 texture_result.coordinates,
                 texture_result.attributes,
-                decode_resolution=route.output_resolution,
-                texture_size=texture_size,
-                xatlas_face_guard=xatlas_face_guard,
-                xatlas_parallel_chunks=xatlas_parallel_chunks,
-                texture_bake_backend=texture_bake_backend,
-                projection_source_mesh=getattr(postprocess_result, "source_mesh", None),
+                spatial_shape=texture_result.spatial_shape,
+                batch_size=texture_result.batch_size,
+                decode_resolution=texture_result.decode_resolution,
+                voxel_size=texture_result.voxel_size,
+                metadata={
+                    "model_family": "trellis2",
+                    "source_coordinate_system": "trellis-z-up",
+                    "pipeline_type": selected_pipeline_type,
+                    "seed": int(seed),
+                    "actual_hr_resolution": int(route.output_resolution),
+                    "source_mesh": str(mesh_file),
+                    "shape_decoder_artifact": str(shape_artifact.path),
+                    "texture_decoder_checkpoint_path": config.texture_decoder_checkpoint_path,
+                },
             )
-        except (ImportError, ValueError) as error:
-            return Trellis2TexturingResult(
-                image_path=image,
-                mesh_path=mesh_file,
-                blocker=Trellis2TexturingBlocker(
-                    stage="mesh-export",
-                    operation="mesh extraction and texture baking",
-                    reference="src/mlx_spatial/trellis2_export.py:bake_trellis2_texture_fields_mac_native",
-                    reason=str(error),
-                    next_slice="ensure mesh extraction, postprocessing, and UV baking are functional",
-                ),
-            )
-
-        try:
-            artifact = write_trellis2_textured_glb(baked, output_path)
-            clear_mlx_cache()
         except (OSError, ValueError) as error:
             return Trellis2TexturingResult(
                 image_path=image,
                 mesh_path=mesh_file,
                 blocker=Trellis2TexturingBlocker(
-                    stage="mesh-export",
-                    operation="textured GLB writer",
-                    reference=str(output_path),
+                    stage="decoded-artifact-write",
+                    operation="persist decoded O-Voxel boundary artifacts",
+                    reference=str(decoded_dir),
                     reason=str(error),
-                    next_slice="ensure output directory is writable",
+                    next_slice="make the decoded artifact directory writable before SpatialKit export",
                 ),
             )
+        timer.end("decoded-artifact-write", decoded_write_started)
+
+        del (
+            preprocessed,
+            mesh_vertices,
+            mesh_faces,
+            fdg_coords,
+            fdg_dual,
+            fdg_intersected,
+            encoder_coords,
+            encoder_coords_mx,
+            dual_mx,
+            intersected_mx,
+            encoder_result,
+            cond_output,
+            texture_conditioning,
+            texture_coords,
+            texture_features,
+            shape_result,
+            texture_result,
+        )
+        clear_mlx_cache()
+
+        spatialkit_export_started = timer.begin()
+        try:
+            spatialkit_result = export_ovoxel_glb(
+                decoded_dir,
+                output,
+                texture_size=texture_size,
+                target_faces=glb_target_faces,
+                grid_size=route.output_resolution,
+                diagnostics_path=glb_diagnostics_path,
+                exporter=spatialkit_exporter,
+            )
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            return Trellis2TexturingResult(
+                image_path=image,
+                mesh_path=mesh_file,
+                blocker=Trellis2TexturingBlocker(
+                    stage="mesh-export",
+                    operation="export decoded TRELLIS.2 O-Voxel artifacts through SpatialKit",
+                    reference="mlx_spatial.ovoxel_export.export_ovoxel_glb",
+                    reason=str(error),
+                    next_slice="inspect SpatialKit diagnostics and decoded artifacts before retrying export",
+                ),
+            )
+        timer.end("mesh-export", spatialkit_export_started)
+        artifact = spatialkit_result.glb
 
         return Trellis2TexturingResult(
             image_path=image,
             mesh_path=mesh_file,
             artifact=artifact,
+            trace=Trellis2ForwardTraceResult(
+                root=self.root,
+                image_path=image,
+                completed_stages=(
+                    "input-image",
+                    "mesh-load",
+                    "fdg-encoder",
+                    "image-conditioning",
+                    "shape-decoder",
+                    "texture-slat-sampling",
+                    "texture-decoder",
+                    "decoded-artifact-write",
+                    "mesh-export",
+                ),
+                outputs=(
+                    Trellis2StageOutput(
+                        stage="decoded-artifact-write",
+                        name="decoded_ovoxel_artifacts",
+                        shape=(),
+                        dtype="metadata",
+                        detail=f"shape={shape_artifact.path}; texture={texture_artifact.path}",
+                    ),
+                    Trellis2StageOutput(
+                        stage="mesh-export",
+                        name="textured_glb",
+                        shape=(),
+                        dtype="metadata",
+                        detail=(
+                            f"artifact={artifact.path}; bytes={artifact.bytes_written}; "
+                            f"diagnostics={spatialkit_result.diagnostics_path}"
+                        ),
+                    ),
+                ),
+                timings_sec=timer.snapshot(),
+            ),
         )
 
 

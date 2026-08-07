@@ -71,8 +71,7 @@ Defaults:
 - decoder token limit: `1000000`
 - textured GLB texture size: `1024`
 - textured GLB face target: `200000`
-- xatlas parallel chunks: `1`
-- texture bake backend: `kdtree`
+- exporter: integrated SpatialKit (MLX QEM, clustered xatlas, Metal PBR bake)
 
 Low-step commands are smoke checks, not representative quality runs. See
 `docs/trellis2.md` for the asset roots and validation commands.
@@ -139,17 +138,15 @@ Defaults:
 - shape upsample token limit: `1000000`
 - shape/texture decoder token limits: `1100000`
 - texture size: `1024`
-- GLB face target: `50000`
-- texture bake backend: `kdtree`
-- GLB export backend: `internal`
+- GLB face target: `200000`
+- GLB exporter: integrated SpatialKit
 - MoGe memory profile: `balanced`
 
-The integrated `mlx_spatial.spatialkit` backend already provides opt-in native
-and MLX/Metal single-layer QEM, a narrow-band UDF double-cover control, real and
-native-equivalent xatlas paths, Telea, Metal texture, and GLB stages. They are
-not yet the default production contract. Full 1M/4096 readiness and
-fine-structure preservation remain open; use `production_equivalence_ready`
-instead of inferring readiness from the existence of a GLB. See
+The integrated `mlx_spatial.spatialkit` namespace owns the decoded O-Voxel to
+GLB boundary for Pixal3D and TRELLIS.2. Full Pixal3D 1M/4096 equivalence and
+fine-structure preservation remain open. TRELLIS.2 currently has no configured
+production-equivalence profile, so use `artifact_ready` for artifact health and
+do not infer reference equivalence from the existence of a GLB. See
 `docs/pixal3d.md` and `docs/spatialkit.md`.
 
 ### LiTo
