@@ -13,6 +13,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
+from .coordinate_systems import TRELLIS_Z_UP, vertices_to_gltf_y_up
 from .export_utils import (
     fill_texture_holes,
     fill_texture_holes_ndimage,
@@ -1068,7 +1069,10 @@ def trellis2_textured_glb_payload(
 ) -> bytes:
     """Build a self-contained GLB 2.0 payload from a baked texture."""
 
-    vertices = np.asarray(baked_texture.vertices, dtype=np.float32)
+    vertices = vertices_to_gltf_y_up(
+        baked_texture.vertices,
+        source_coordinate_system=TRELLIS_Z_UP,
+    )
     faces = np.asarray(baked_texture.faces, dtype=np.int64)
     uvs = np.asarray(baked_texture.uvs, dtype=np.float32)
     if vertices.ndim != 2 or vertices.shape[1] != 3 or vertices.shape[0] == 0:

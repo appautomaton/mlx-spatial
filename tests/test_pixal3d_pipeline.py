@@ -49,6 +49,18 @@ def _pixal3d_hidden_states(*, patch_grid: int, channels: int) -> mx.array:
     return mx.zeros((1, token_count, channels), dtype=mx.float32)
 
 
+def test_pixal3d_stage_timer_records_independent_durations_and_total():
+    values = iter((0.0, 10.0, 13.0, 20.0, 27.0, 30.0))
+    timer = pixal3d_inference._StageTimer(lambda: next(values))
+
+    first_started = timer.begin()
+    timer.end("first", first_started)
+    second_started = timer.begin()
+    timer.end("second", second_started)
+
+    assert timer.snapshot() == {"first": 3.0, "second": 7.0, "total": 30.0}
+
+
 def test_pixal3d_pipeline_manual_fov_records_camera_and_stage_plan(tmp_path):
     root = write_fake_pixal3d_root(tmp_path / "weights")
     image = tmp_path / "image.png"
@@ -1004,40 +1016,37 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
     assert result.trace.metadata["artifact_paths"][-1] == tmp_path / "out" / "spatialkit-diagnostics.json"
 
 
-def test_pixal3d_pipeline_falls_back_when_integrated_spatialkit_import_fails(tmp_path, monkeypatch):
+def test_pixal3d_pipeline_fails_before_inference_when_integrated_spatialkit_import_fails(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
     _write_pixal3d_test_rgba(image)
-    patch_grid = 32
-    token_count = 1 + PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS + patch_grid * patch_grid
-    hidden_states = mx.zeros((1, token_count, 3), dtype=mx.float32)
-    naf = mx.zeros((1, patch_grid, patch_grid, 3), dtype=mx.float32)
     calls = _patch_pixal3d_export_fixtures(monkeypatch)
     monkeypatch.setattr(
         pixal3d_inference,
         "_load_spatialkit_exporter",
-        lambda: (None, "mlx_spatial.spatialkit import failed; falling back to internal Pixal3D GLB export"),
+        lambda: (None, "mlx_spatial.spatialkit import failed"),
     )
 
     result = Pixal3DInferencePipeline(root).generate(
         image,
         output=tmp_path / "out" / "pixal3d.glb",
         manual_fov=0.2,
-        projection_hidden_states=hidden_states,
-        projection_hidden_states_1024=_pixal3d_hidden_states(patch_grid=64, channels=3),
-        shape_lr_naf_feature_map=naf,
-        shape_hr_naf_feature_map=naf,
-        texture_naf_feature_map=naf,
         glb_export_backend="spatialkit",
     )
 
-    assert result.ready
-    assert result.trace.metadata["mesh_export"]["export_backend"] == "internal"
+    assert not result.ready
+    assert result.trace.blocker is not None
+    assert result.trace.blocker.stage == "export-backend-validation"
+    assert result.trace.blocker.operation == "load integrated mlx_spatial.spatialkit export backend"
+    assert result.trace.blocker.reason == "mlx_spatial.spatialkit import failed"
+    assert result.trace.completed_stages == ("input-image",)
+    assert result.artifacts == ()
     assert result.trace.metadata["export_options"]["glb_export_backend_requested"] == "spatialkit"
-    assert result.trace.metadata["export_options"]["glb_export_backend_used"] == "internal"
-    assert "falling back to internal" in result.trace.metadata["export_options"]["glb_export_backend_fallback_reason"]
-    assert calls["mesh_grid_size"] == 1024
-    assert result.artifacts[-1].read_bytes() == b"glb"
+    assert result.trace.metadata["export_options"]["glb_export_backend_used"] is None
+    assert result.trace.metadata["export_options"]["glb_export_backend_error"] == "mlx_spatial.spatialkit import failed"
+    assert set(result.trace.metadata["timings_sec"]) == {"total"}
+    assert calls == {}
+    assert not (tmp_path / "out" / "pixal3d.glb").exists()
 
 
 def test_pixal3d_pipeline_glb_writer_failure_preserves_decoded_artifacts(tmp_path, monkeypatch):

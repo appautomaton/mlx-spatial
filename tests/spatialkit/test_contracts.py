@@ -3,12 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from mlx_spatial.coordinate_systems import GLTF_Y_UP, TRELLIS_Z_UP, vertices_to_gltf_y_up
 from mlx_spatial.spatialkit import (
     load_pixal3d_decoded_npz,
     validate_pixal3d_decoded,
     validate_pixal3d_shape_fields,
     validate_pixal3d_texture_attributes,
 )
+from mlx_spatial.spatialkit.export import _resolve_source_coordinate_system
 
 
 def _shape_coordinates() -> np.ndarray:
@@ -116,3 +118,26 @@ def test_load_pixal3d_decoded_npz_reports_missing_required_array(tmp_path) -> No
 
     with pytest.raises(ValueError, match="missing required array 'fields'"):
         load_pixal3d_decoded_npz(shape_path, texture_path)
+
+
+def test_vertices_to_gltf_y_up_applies_trellis_reference_rotation() -> None:
+    vertices = np.array([[1.0, 2.0, 3.0], [-4.0, -5.0, -6.0]], dtype=np.float32)
+
+    converted = vertices_to_gltf_y_up(vertices, source_coordinate_system=TRELLIS_Z_UP)
+
+    np.testing.assert_array_equal(
+        converted,
+        np.array([[1.0, 3.0, -2.0], [-4.0, -6.0, 5.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        vertices_to_gltf_y_up(vertices, source_coordinate_system=GLTF_Y_UP),
+        vertices,
+    )
+
+
+def test_source_coordinate_system_auto_detects_trellis_metadata() -> None:
+    metadata = {"source_model": "trellis.2"}
+
+    assert _resolve_source_coordinate_system("auto", metadata, metadata) == TRELLIS_Z_UP
+    assert _resolve_source_coordinate_system("auto", {}, {}) == GLTF_Y_UP
+    assert _resolve_source_coordinate_system(GLTF_Y_UP, metadata, metadata) == GLTF_Y_UP

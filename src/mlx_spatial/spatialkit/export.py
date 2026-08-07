@@ -11,6 +11,12 @@ from typing import Any, Callable, TypeVar
 
 import numpy as np
 
+from ..coordinate_systems import (
+    GLTF_Y_UP,
+    SUPPORTED_SOURCE_COORDINATE_SYSTEMS,
+    TRELLIS_Z_UP,
+    vertices_to_gltf_y_up,
+)
 from ._native import (
     backend_info,
     make_face_atlas_uvs as _make_face_atlas_uvs,
@@ -543,6 +549,7 @@ def export_pixal3d_glb(
     diagnostics_path: str | Path | None = None,
     texture_postprocess: str = "legacy-dilation",
     expose_raw_postprocess_inputs: bool = False,
+    source_coordinate_system: str = "auto",
 ) -> Pixal3DGlbExportResult:
     """Convert decoded Pixal3D NPZ artifacts into a textured GLB through native hot paths."""
 
@@ -574,6 +581,11 @@ def export_pixal3d_glb(
         raise ValueError("source_projection_fallback_neighbors must be positive")
     if source_projection_fallback_max_distance_voxels <= 0:
         raise ValueError("source_projection_fallback_max_distance_voxels must be positive")
+    if source_coordinate_system != "auto" and source_coordinate_system not in SUPPORTED_SOURCE_COORDINATE_SYSTEMS:
+        raise ValueError(
+            "source_coordinate_system must be 'auto' or one of "
+            f"{SUPPORTED_SOURCE_COORDINATE_SYSTEMS}, got {source_coordinate_system!r}"
+        )
     if remesh:
         if not math.isfinite(remesh_band) or remesh_band <= 0:
             raise ValueError("remesh_band must be positive and finite")
@@ -663,6 +675,7 @@ def export_pixal3d_glb(
             "remesh_project_back": float(remesh_project_back),
             "remesh_repair_nonmanifold": bool(remesh_repair_nonmanifold),
             "simplify_backend": resolved_simplify_backend,
+            "source_coordinate_system_requested": source_coordinate_system,
         },
         "stages": {},
         "timings_sec": {},
@@ -699,6 +712,17 @@ def export_pixal3d_glb(
             "voxel_size": decoded.texture_voxel_size,
         },
     }
+    resolved_source_coordinate_system = _resolve_source_coordinate_system(
+        source_coordinate_system,
+        decoded.shape_metadata,
+        decoded.texture_metadata,
+    )
+    diagnostics["settings"]["source_coordinate_system"] = resolved_source_coordinate_system
+    diagnostics["settings"]["gltf_coordinate_transform"] = (
+        "identity"
+        if resolved_source_coordinate_system == GLTF_Y_UP
+        else "(x,y,z)->(x,z,-y)"
+    )
     sample("after_load_npz")
 
     resolved_grid_size = _resolve_positive_int(
@@ -1340,12 +1364,21 @@ def export_pixal3d_glb(
     quality["production_equivalence"] = _production_equivalence_summary(quality, None)
     diagnostics["quality"] = quality
 
+    gltf_uv_mesh = NativeUvMesh(
+        vertices=vertices_to_gltf_y_up(
+            uv_mesh.vertices,
+            source_coordinate_system=resolved_source_coordinate_system,
+        ),
+        faces=uv_mesh.faces,
+        uvs=uv_mesh.uvs,
+        stats=uv_mesh.stats,
+    )
     glb = _timed_stage(
         diagnostics,
         "write_glb",
         lambda: write_textured_glb(
             glb_path,
-            uv_mesh,
+            gltf_uv_mesh,
             base_color_rgba=baked.base_color_rgba,
             metallic_roughness=baked.metallic_roughness,
             generator="mlx-spatial SpatialKit Pixal3D",
@@ -1369,6 +1402,7 @@ def export_pixal3d_glb(
                 "simplifier_quality_tier": quality["simplifier_quality_tier"],
                 "production_quality_ready": bool(quality["production_quality_ready"]),
                 "production_equivalence_ready": bool(quality["production_equivalence"]["ready"]),
+                "source_coordinate_system": resolved_source_coordinate_system,
             },
         ),
         memory_monitor=memory_monitor,
@@ -1379,6 +1413,7 @@ def export_pixal3d_glb(
     quality["glb_viewer_compatibility"] = _glb_viewer_compatibility_summary(glb_inspection)
     diagnostics["quality"] = quality
     sample("after_write_glb")
+    del gltf_uv_mesh
 
     if reference is not None:
         reference_glb = _reference_glb_path(reference)
@@ -1474,6 +1509,45 @@ def _load_optional_scalar(payload: np.lib.npyio.NpzFile, key: str, path: Path) -
     if value.shape != ():
         raise ValueError(f"{path} optional scalar {key!r} must be rank 0")
     return value.item()
+
+
+def _resolve_source_coordinate_system(
+    requested: str,
+    shape_metadata: dict[str, Any],
+    texture_metadata: dict[str, Any],
+) -> str:
+    if requested != "auto":
+        return requested
+
+    explicit_values = {
+        str(metadata["source_coordinate_system"]).strip().lower()
+        for metadata in (shape_metadata, texture_metadata)
+        if metadata.get("source_coordinate_system")
+    }
+    if len(explicit_values) > 1:
+        raise ValueError(
+            "decoded shape and texture artifacts disagree on source_coordinate_system: "
+            f"{tuple(sorted(explicit_values))}"
+        )
+    if explicit_values:
+        resolved = next(iter(explicit_values))
+        if resolved not in SUPPORTED_SOURCE_COORDINATE_SYSTEMS:
+            raise ValueError(f"decoded artifacts declare unsupported source_coordinate_system {resolved!r}")
+        return resolved
+
+    source_models = {
+        str(metadata["source_model"]).strip().lower()
+        for metadata in (shape_metadata, texture_metadata)
+        if metadata.get("source_model")
+    }
+    if len(source_models) > 1:
+        raise ValueError(
+            "decoded shape and texture artifacts disagree on source_model: "
+            f"{tuple(sorted(source_models))}"
+        )
+    if source_models and next(iter(source_models)).startswith("trellis"):
+        return TRELLIS_Z_UP
+    return GLTF_Y_UP
 
 
 def load_pixal3d_decoded_npz(

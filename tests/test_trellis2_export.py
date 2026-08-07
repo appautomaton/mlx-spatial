@@ -10,6 +10,7 @@ import pytest
 
 import mlx_spatial
 from mlx_spatial.ovoxel import FlexibleDualGridMesh
+from mlx_spatial.coordinate_systems import TRELLIS_Z_UP, vertices_to_gltf_y_up
 from mlx_spatial.trellis2_export import (
     SUPPORTED_TRELLIS2_EXPORT_SUFFIXES,
     TRELLIS2_GLB_DEFAULT_FACE_TARGET,
@@ -628,7 +629,8 @@ def test_texture_png_payload_encodes_baked_image():
 
 
 def test_textured_glb_payload_contains_mesh_material_and_embedded_images():
-    payload = trellis2_textured_glb_payload(_fixture_bake())
+    baked = _fixture_bake()
+    payload = trellis2_textured_glb_payload(baked)
     document = _glb_json(payload)
 
     assert payload.startswith(b"glTF")
@@ -644,6 +646,12 @@ def test_textured_glb_payload_contains_mesh_material_and_embedded_images():
     assert material["metallicRoughnessTexture"] == {"index": 1}
     assert document["images"][0]["mimeType"] == "image/png"
     assert document["images"][1]["mimeType"] == "image/png"
+    expected_vertices = vertices_to_gltf_y_up(
+        baked.vertices,
+        source_coordinate_system=TRELLIS_Z_UP,
+    )
+    np.testing.assert_allclose(document["accessors"][0]["min"], expected_vertices.min(axis=0))
+    np.testing.assert_allclose(document["accessors"][0]["max"], expected_vertices.max(axis=0))
 
 
 def test_textured_glb_payload_rejects_non_finite_geometry():

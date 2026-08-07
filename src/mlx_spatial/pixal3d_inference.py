@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import mlx.core as mx
 import numpy as np
@@ -91,6 +91,28 @@ PIXAL3D_DEFAULT_NAF_ROOT = NAF_DEFAULT_ROOT
 PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
 PIXAL3D_DEFAULT_MOGE_ROOT = SAM3D_MOGE_DEFAULT_ROOT
 PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE = "balanced"
+
+
+class _StageTimer:
+    """Record independent stage durations and total pipeline wall time."""
+
+    def __init__(self, clock: Callable[[], float] = time.perf_counter):
+        self._clock = clock
+        self._pipeline_started = clock()
+        self.values: dict[str, float] = {}
+
+    def begin(self) -> float:
+        return self._clock()
+
+    def end(self, name: str, stage_started: float) -> None:
+        self.values[name] = max(0.0, self._clock() - stage_started)
+
+    def snapshot(self) -> dict[str, float]:
+        return {
+            **self.values,
+            "total": max(0.0, self._clock() - self._pipeline_started),
+        }
+
 
 @dataclass(frozen=True)
 class Pixal3DInferenceBlocker:
@@ -178,7 +200,8 @@ class Pixal3DInferencePipeline:
         completed: list[str] = []
         output_path = _resolve_output_path(image_path, output=output, output_dir=output_dir)
         artifact_dir = output_path.parent
-        timings: dict[str, float] = {}
+        timer = _StageTimer()
+        spatialkit_exporter: Any | None = None
         metadata = {
             "memory_before": mlx_memory_snapshot().as_dict(),
             "export_options": {
@@ -190,7 +213,8 @@ class Pixal3DInferencePipeline:
                 "glb_export_backend": glb_export_backend,
                 "glb_diagnostics_path": str(glb_diagnostics_path) if glb_diagnostics_path is not None else None,
                 "glb_export_backend_requested": glb_export_backend,
-                "glb_export_backend_used": "internal",
+                "glb_export_backend_used": "internal" if glb_export_backend == "internal" else None,
+                "glb_export_backend_error": None,
             },
             "naf_options": {
                 "naf_root": str(naf_root) if naf_root is not None else None,
@@ -221,7 +245,6 @@ class Pixal3DInferencePipeline:
                 "background_remover_supplied": background_remover is not None,
             },
         }
-        started = time.perf_counter()
         mx.random.seed(seed)
 
         if pipeline_type not in PIXAL3D_PIPELINE_TYPES:
@@ -366,6 +389,29 @@ class Pixal3DInferencePipeline:
             )
         completed.append("input-image")
 
+        if glb_export_backend == "spatialkit":
+            spatialkit_exporter, spatialkit_import_error = _load_spatialkit_exporter()
+            if spatialkit_exporter is None:
+                metadata["export_options"]["glb_export_backend_error"] = spatialkit_import_error
+                metadata["timings_sec"] = timer.snapshot()
+                return self._blocked(
+                    image_path,
+                    completed,
+                    pipeline_type,
+                    manual_fov,
+                    seed,
+                    max_num_tokens,
+                    output_path,
+                    "export-backend-validation",
+                    "load integrated mlx_spatial.spatialkit export backend",
+                    spatialkit_import_error or "mlx_spatial.spatialkit exporter is unavailable",
+                    {
+                        "glb_export_backend": glb_export_backend,
+                        "requested_backend": "spatialkit",
+                    },
+                    metadata=metadata,
+                )
+
         validation = validate_pixal3d_assets(self.root)
         metadata["asset_present"] = list(validation.present)
         metadata["asset_missing"] = list(validation.missing)
@@ -386,6 +432,7 @@ class Pixal3DInferencePipeline:
             )
         completed.append("asset-validation")
 
+        pipeline_config_started = timer.begin()
         try:
             config = read_pixal3d_pipeline_config(self.root)
         except (FileNotFoundError, ValueError) as error:
@@ -404,7 +451,7 @@ class Pixal3DInferencePipeline:
                 metadata=metadata,
             )
         completed.append("pipeline-config")
-        timings["pipeline-config"] = time.perf_counter() - started
+        timer.end("pipeline-config", pipeline_config_started)
         metadata["default_pipeline_type"] = config.default_pipeline_type
         metadata["model_keys"] = [asset.key for asset in config.models]
         plan = pixal3d_stage_plan(pipeline_type, max_num_tokens=max_num_tokens)
@@ -431,10 +478,11 @@ class Pixal3DInferencePipeline:
                 metadata=metadata,
             )
 
+        input_preprocessing_started = timer.begin()
         preprocess_result = preprocess_pixal3d_image(image_path, background_remover=background_remover)
         if preprocess_result.blocker is not None or preprocess_result.image is None:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             blocker = preprocess_result.blocker
             return self._blocked(
                 image_path,
@@ -451,10 +499,11 @@ class Pixal3DInferencePipeline:
                 metadata=metadata,
             )
         completed.append("input-preprocessing")
-        timings["input-preprocessing"] = time.perf_counter() - started
+        timer.end("input-preprocessing", input_preprocessing_started)
         preprocessed_rgb = preprocess_result.image.image
         metadata["input_preprocessing"] = preprocess_result.image.metadata()
 
+        camera_setup_started = timer.begin()
         if manual_fov is None:
             resolved_moge_root = Path(moge_root) if moge_root is not None else Path(PIXAL3D_DEFAULT_MOGE_ROOT)
             try:
@@ -462,7 +511,7 @@ class Pixal3DInferencePipeline:
                 image_width = int(preprocessed_rgb.width)
             except ValueError as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -485,7 +534,7 @@ class Pixal3DInferencePipeline:
                 )
             except (OSError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -502,7 +551,7 @@ class Pixal3DInferencePipeline:
                 )
             if moge_result.blocker is not None or moge_result.pointmap is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 blocker = moge_result.blocker
                 return self._blocked(
                     image_path,
@@ -532,7 +581,7 @@ class Pixal3DInferencePipeline:
                 )
             except ValueError as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -580,7 +629,7 @@ class Pixal3DInferencePipeline:
                 )
             metadata["camera_source"] = "manual_fov"
         completed.append("camera-setup")
-        timings["camera-setup"] = time.perf_counter() - started
+        timer.end("camera-setup", camera_setup_started)
         metadata["camera"] = camera
 
         resolved_dino_root = Path(dino_root) if dino_root is not None else Path(PIXAL3D_DEFAULT_DINO_ROOT)
@@ -632,6 +681,7 @@ class Pixal3DInferencePipeline:
             image_size = int(image_size)
             if image_size in dino_hidden_states_by_size:
                 return None
+            image_conditioning_started = timer.begin()
             if dino_inspection is None:
                 dino_inspection = inspect_dinov3_assets(resolved_dino_root)
             if dino_inspection.blocker is not None:
@@ -686,7 +736,7 @@ class Pixal3DInferencePipeline:
             stage_name = "image-conditioning" if image_size == 512 else f"image-conditioning:{image_size}"
             if stage_name not in completed:
                 completed.append(stage_name)
-            timings[stage_name] = time.perf_counter() - started
+            timer.end(stage_name, image_conditioning_started)
             del dino_result, image_tensor
             _release_pixal3d_mlx_stage_memory(metadata, f"after_dino_conditioning_{image_size}")
             return None
@@ -695,7 +745,7 @@ class Pixal3DInferencePipeline:
         dino_blocker = ensure_dino_hidden_states(ss_stage.image_size, stage_label="ss")
         if dino_blocker is not None:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return self._blocked(
                 image_path,
                 completed,
@@ -817,6 +867,7 @@ class Pixal3DInferencePipeline:
                     ),
                 )
 
+        ss_projection_started = timer.begin()
         ss_conditioning = build_pixal3d_projection_conditioning(
             projection_hidden_states_512,
             "ss",
@@ -839,7 +890,7 @@ class Pixal3DInferencePipeline:
         }
         if ss_conditioning.blocker is not None:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return self._blocked(
                 image_path,
                 completed,
@@ -855,7 +906,7 @@ class Pixal3DInferencePipeline:
                 metadata=metadata,
             )
         completed.append("projection-conditioning:ss")
-        timings["projection-conditioning:ss"] = time.perf_counter() - started
+        timer.end("projection-conditioning:ss", ss_projection_started)
         projection_artifact = write_pixal3d_projection_npz(
             artifact_dir / "sparse_projection.npz",
             ss_conditioning,
@@ -871,6 +922,7 @@ class Pixal3DInferencePipeline:
         metadata["artifact_paths"] = [projection_artifact.path]
         metadata["projection_artifact"] = projection_artifact
 
+        sparse_flow_started = timer.begin()
         sparse_flow_model = _pixal3d_model_asset(config.models, "sparse_structure_flow_model")
         sparse_decoder_model = _pixal3d_model_asset(config.models, "sparse_structure_decoder")
         try:
@@ -891,7 +943,7 @@ class Pixal3DInferencePipeline:
             )
         except (FileNotFoundError, RuntimeError, ValueError) as error:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return self._blocked(
                 image_path,
                 completed,
@@ -919,7 +971,7 @@ class Pixal3DInferencePipeline:
         }
         if sparse_probe.sampled_latent is None:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return self._blocked(
                 image_path,
                 completed,
@@ -939,8 +991,9 @@ class Pixal3DInferencePipeline:
                 artifacts=(projection_artifact.path,),
             )
         completed.append("sparse-structure-flow")
-        timings["sparse-structure-flow"] = time.perf_counter() - started
+        timer.end("sparse-structure-flow", sparse_flow_started)
 
+        sparse_decoder_started = timer.begin()
         try:
             decoder_config = read_sparse_structure_decoder_config(self.root, sparse_decoder_model.config_path)
             decoder_probe = probe_sparse_structure_decoder_boundary(
@@ -951,7 +1004,7 @@ class Pixal3DInferencePipeline:
             )
         except (FileNotFoundError, RuntimeError, ValueError) as error:
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return self._blocked(
                 image_path,
                 completed,
@@ -980,6 +1033,7 @@ class Pixal3DInferencePipeline:
             "blocker_detail": decoder_probe.blocker_detail,
         }
         if decoder_probe.coordinates is not None and decoder_probe.coordinates_shape is not None and decoder_probe.coordinates_shape[0] > 0:
+            timer.end("sparse-structure-decoding", sparse_decoder_started)
             completed.append("sparse-structure-decoding")
             sparse_structure_artifact = write_pixal3d_sparse_structure_npz(
                 artifact_dir / "sparse_structure.npz",
@@ -1002,6 +1056,7 @@ class Pixal3DInferencePipeline:
             del sparse_probe, sparse_config, decoder_config, ss_conditioning
             _release_pixal3d_mlx_stage_memory(metadata, "after_sparse_structure")
 
+            shape_lr_projection_started = timer.begin()
             shape_conditioning = build_pixal3d_projection_conditioning(
                 projection_hidden_states_512,
                 "shape_512",
@@ -1042,7 +1097,7 @@ class Pixal3DInferencePipeline:
                         metadata["shape_lr_projection"]["blocker"] = None
                     else:
                         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                        metadata["timings_sec"] = timings
+                        metadata["timings_sec"] = timer.snapshot()
                         return self._blocked(
                             image_path,
                             completed,
@@ -1060,7 +1115,7 @@ class Pixal3DInferencePipeline:
                         )
                 else:
                     metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                    metadata["timings_sec"] = timings
+                    metadata["timings_sec"] = timer.snapshot()
                     return self._blocked(
                         image_path,
                         completed,
@@ -1078,7 +1133,7 @@ class Pixal3DInferencePipeline:
                     )
             if shape_conditioning.blocker is not None and shape_projected is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1095,7 +1150,7 @@ class Pixal3DInferencePipeline:
                     artifacts=(projection_artifact.path, sparse_structure_artifact.path),
                 )
             completed.append("projection-conditioning:shape_512")
-            timings["projection-conditioning:shape_512"] = time.perf_counter() - started
+            timer.end("projection-conditioning:shape_512", shape_lr_projection_started)
 
             assert shape_conditioning.global_tokens is not None
             if shape_projected is None:
@@ -1107,6 +1162,7 @@ class Pixal3DInferencePipeline:
                 )
             metadata["shape_lr_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in shape_projected.shape)
 
+            shape_slat_lr_started = timer.begin()
             shape_slat_model = _pixal3d_model_asset(config.models, "shape_slat_flow_model_512")
             try:
                 shape_slat_config = read_slat_flow_config(self.root, shape_slat_model.config_path)
@@ -1127,7 +1183,7 @@ class Pixal3DInferencePipeline:
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1157,7 +1213,7 @@ class Pixal3DInferencePipeline:
             }
             if shape_probe.sampled_features is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1177,6 +1233,7 @@ class Pixal3DInferencePipeline:
                     artifacts=(projection_artifact.path, sparse_structure_artifact.path),
                 )
 
+            timer.end("shape-slat-sampling:512", shape_slat_lr_started)
             shape_features = _apply_pixal3d_slat_normalization(
                 shape_probe.sampled_features,
                 config.shape_slat_normalization,
@@ -1203,6 +1260,7 @@ class Pixal3DInferencePipeline:
             metadata["shape_slat_lr_artifact"] = shape_slat_artifact
             del shape_probe, shape_conditioning, shape_projected, shape_slat_config, shape_lr_naf_feature_map
             _release_pixal3d_mlx_stage_memory(metadata, "after_shape_slat_lr")
+            shape_slat_upsample_started = timer.begin()
             shape_decoder_model = _pixal3d_model_asset(config.models, "shape_slat_decoder")
             try:
                 shape_decoder_config = read_structured_latent_decoder_config(self.root, shape_decoder_model.config_path)
@@ -1221,7 +1279,7 @@ class Pixal3DInferencePipeline:
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1244,6 +1302,7 @@ class Pixal3DInferencePipeline:
                     artifacts=(projection_artifact.path, sparse_structure_artifact.path, shape_slat_artifact.path),
                 )
 
+            timer.end("shape-slat-cascade:upsample", shape_slat_upsample_started)
             metadata["shape_hr_cascade"] = {
                 "input_coordinate_shape": shape_upsample.input_coordinate_shape,
                 "raw_upsampled_shape": shape_upsample.output_coordinate_shape,
@@ -1294,7 +1353,7 @@ class Pixal3DInferencePipeline:
             dino_blocker = ensure_dino_hidden_states(shape_hr_stage.image_size, stage_label="shape_1024")
             if dino_blocker is not None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1316,6 +1375,7 @@ class Pixal3DInferencePipeline:
                     ),
                 )
             projection_hidden_states_hr = dino_hidden_states_by_size[shape_hr_stage.image_size]
+            shape_hr_projection_started = timer.begin()
             shape_hr_conditioning = build_pixal3d_projection_conditioning(
                 projection_hidden_states_hr,
                 shape_hr_stage,
@@ -1356,7 +1416,7 @@ class Pixal3DInferencePipeline:
                         metadata["shape_hr_projection"]["blocker"] = None
                     else:
                         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                        metadata["timings_sec"] = timings
+                        metadata["timings_sec"] = timer.snapshot()
                         return self._blocked(
                             image_path,
                             completed,
@@ -1379,7 +1439,7 @@ class Pixal3DInferencePipeline:
                         )
                 else:
                     metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                    metadata["timings_sec"] = timings
+                    metadata["timings_sec"] = timer.snapshot()
                     return self._blocked(
                         image_path,
                         completed,
@@ -1401,7 +1461,7 @@ class Pixal3DInferencePipeline:
                         ),
                     )
             completed.append("projection-conditioning:shape_1024")
-            timings["projection-conditioning:shape_1024"] = time.perf_counter() - started
+            timer.end("projection-conditioning:shape_1024", shape_hr_projection_started)
 
             assert shape_hr_conditioning.global_tokens is not None
             if shape_hr_projected is None:
@@ -1413,6 +1473,7 @@ class Pixal3DInferencePipeline:
                 )
             metadata["shape_hr_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in shape_hr_projected.shape)
 
+            shape_slat_hr_started = timer.begin()
             shape_hr_slat_model = _pixal3d_model_asset(config.models, "shape_slat_flow_model_1024")
             try:
                 shape_hr_slat_config = read_slat_flow_config(self.root, shape_hr_slat_model.config_path)
@@ -1433,7 +1494,7 @@ class Pixal3DInferencePipeline:
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1468,7 +1529,7 @@ class Pixal3DInferencePipeline:
             }
             if shape_hr_probe.sampled_features is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1493,6 +1554,7 @@ class Pixal3DInferencePipeline:
                     ),
                 )
 
+            timer.end("shape-slat-sampling:1024", shape_slat_hr_started)
             shape_hr_features = _apply_pixal3d_slat_normalization(
                 shape_hr_probe.sampled_features,
                 config.shape_slat_normalization,
@@ -1532,6 +1594,7 @@ class Pixal3DInferencePipeline:
                 pixal3d_projection_stage_config("tex_1024"),
                 hr_selection.actual_hr_grid_resolution,
             )
+            texture_projection_started = timer.begin()
             texture_conditioning = build_pixal3d_projection_conditioning(
                 projection_hidden_states_hr,
                 texture_stage,
@@ -1572,7 +1635,7 @@ class Pixal3DInferencePipeline:
                         metadata["texture_projection"]["blocker"] = None
                     else:
                         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                        metadata["timings_sec"] = timings
+                        metadata["timings_sec"] = timer.snapshot()
                         return self._blocked(
                             image_path,
                             completed,
@@ -1596,7 +1659,7 @@ class Pixal3DInferencePipeline:
                         )
                 else:
                     metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                    metadata["timings_sec"] = timings
+                    metadata["timings_sec"] = timer.snapshot()
                     return self._blocked(
                         image_path,
                         completed,
@@ -1619,7 +1682,7 @@ class Pixal3DInferencePipeline:
                         ),
                     )
             completed.append("projection-conditioning:tex_1024")
-            timings["projection-conditioning:tex_1024"] = time.perf_counter() - started
+            timer.end("projection-conditioning:tex_1024", texture_projection_started)
 
             assert texture_conditioning.global_tokens is not None
             if texture_projected is None:
@@ -1631,6 +1694,7 @@ class Pixal3DInferencePipeline:
                 )
             metadata["texture_projection"]["selected_projected_shape"] = tuple(int(dim) for dim in texture_projected.shape)
 
+            texture_slat_started = timer.begin()
             texture_slat_model = _pixal3d_model_asset(config.models, "tex_slat_flow_model_1024")
             shape_hr_features_for_texture = _remove_pixal3d_slat_normalization(
                 shape_hr_features,
@@ -1660,7 +1724,7 @@ class Pixal3DInferencePipeline:
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1700,7 +1764,7 @@ class Pixal3DInferencePipeline:
             )
             if texture_probe.sampled_features is None:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1726,6 +1790,7 @@ class Pixal3DInferencePipeline:
                     ),
                 )
 
+            timer.end("texture-slat-sampling:1024", texture_slat_started)
             texture_features = _apply_pixal3d_slat_normalization(
                 texture_probe.sampled_features,
                 config.texture_slat_normalization,
@@ -1778,6 +1843,7 @@ class Pixal3DInferencePipeline:
             del dino_hidden_states_by_size, dino_sources_by_size, naf_tensors, naf_image_cache
             _release_pixal3d_mlx_stage_memory(metadata, "after_texture_slat")
 
+            shape_decoder_started = timer.begin()
             try:
                 shape_decode = run_shape_decoder_to_fields(
                     self.root / shape_decoder_model.checkpoint_path,
@@ -1788,7 +1854,7 @@ class Pixal3DInferencePipeline:
                 )
             except (FileNotFoundError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1812,6 +1878,7 @@ class Pixal3DInferencePipeline:
                     artifacts=texture_slat_artifacts,
                 )
 
+            timer.end("shape-decoder", shape_decoder_started)
             metadata["shape_decoder"] = {
                 "shape_decoder_model": shape_decoder_model.key,
                 "shape_decoder_config_path": shape_decoder_model.config_path,
@@ -1854,6 +1921,7 @@ class Pixal3DInferencePipeline:
             del shape_hr_features
             _release_pixal3d_mlx_stage_memory(metadata, "after_shape_decoder")
 
+            texture_decoder_started = timer.begin()
             texture_decoder_model = None
             try:
                 texture_decoder_model = _pixal3d_model_asset(config.models, "tex_slat_decoder")
@@ -1888,7 +1956,7 @@ class Pixal3DInferencePipeline:
                         }
                     )
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -1905,6 +1973,7 @@ class Pixal3DInferencePipeline:
                     artifacts=shape_decode_artifacts,
                 )
 
+            timer.end("texture-decoder", texture_decoder_started)
             metadata["texture_decoder"] = {
                 "texture_decoder_model": texture_decoder_model.key,
                 "texture_decoder_config_path": texture_decoder_model.config_path,
@@ -1959,10 +2028,9 @@ class Pixal3DInferencePipeline:
             _release_pixal3d_mlx_stage_memory(metadata, "after_texture_decoder")
 
             if glb_export_backend == "spatialkit":
-                spatialkit_exporter, spatialkit_import_error = _load_spatialkit_exporter()
                 if spatialkit_exporter is None:
-                    metadata["export_options"]["glb_export_backend_fallback_reason"] = spatialkit_import_error
-                else:
+                    raise RuntimeError("validated SpatialKit exporter became unavailable during Pixal3D inference")
+                if spatialkit_exporter is not None:
                     metadata["export_options"]["glb_export_backend_used"] = "spatialkit"
                     shape_decode_shape = {
                         "shape_decoder_coordinates_shape": tuple(int(dim) for dim in shape_decode.coordinates.shape),
@@ -1973,6 +2041,7 @@ class Pixal3DInferencePipeline:
                     del shape_decode, texture_decode
                     _release_pixal3d_mlx_stage_memory(metadata, "before_spatialkit_glb_export")
 
+                    spatialkit_export_started = timer.begin()
                     try:
                         spatialkit_result = _export_pixal3d_glb_with_spatialkit(
                             spatialkit_exporter,
@@ -1985,7 +2054,7 @@ class Pixal3DInferencePipeline:
                         )
                     except (ImportError, RuntimeError, ValueError) as error:
                         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                        metadata["timings_sec"] = timings
+                        metadata["timings_sec"] = timer.snapshot()
                         return self._blocked(
                             image_path,
                             completed,
@@ -2010,6 +2079,7 @@ class Pixal3DInferencePipeline:
                             artifacts=decode_artifacts,
                         )
 
+                    timer.end("mesh-export", spatialkit_export_started)
                     spatialkit_diagnostics = dict(getattr(spatialkit_result, "diagnostics", {}))
                     texture_bake_stats = (
                         spatialkit_diagnostics.get("stages", {})
@@ -2055,7 +2125,7 @@ class Pixal3DInferencePipeline:
                     metadata["textured_glb_artifact"] = spatialkit_result.glb
                     _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
                     metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                    metadata["timings_sec"] = timings
+                    metadata["timings_sec"] = timer.snapshot()
                     return Pixal3DGenerationResult(
                         trace=Pixal3DInferenceTrace(
                             root=self.root,
@@ -2072,6 +2142,7 @@ class Pixal3DInferencePipeline:
                         artifacts=final_artifacts,
                     )
 
+            internal_mesh_export_started = timer.begin()
             try:
                 mesh = flexi_dual_grid_fields_to_mesh(
                     shape_decode.coordinates,
@@ -2092,7 +2163,7 @@ class Pixal3DInferencePipeline:
                 )
             except (ImportError, RuntimeError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -2123,6 +2194,7 @@ class Pixal3DInferencePipeline:
                     artifacts=decode_artifacts,
                 )
 
+            timer.end("mesh-export", internal_mesh_export_started)
             metadata["mesh_export"] = {
                 "export_backend": "internal",
                 "source_mesh_vertices": int(mesh.vertices.shape[0]),
@@ -2150,6 +2222,7 @@ class Pixal3DInferencePipeline:
             }
             completed.append("mesh-export")
 
+            glb_export_started = timer.begin()
             try:
                 glb_artifact = write_pixal3d_textured_glb(
                     baked_texture,
@@ -2169,7 +2242,7 @@ class Pixal3DInferencePipeline:
                 )
             except (OSError, ValueError) as error:
                 metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-                metadata["timings_sec"] = timings
+                metadata["timings_sec"] = timer.snapshot()
                 return self._blocked(
                     image_path,
                     completed,
@@ -2190,6 +2263,7 @@ class Pixal3DInferencePipeline:
                     artifacts=decode_artifacts,
                 )
 
+            timer.end("glb-export", glb_export_started)
             completed.append("artifact:textured_glb")
             final_artifacts = (*decode_artifacts, glb_artifact.path)
             metadata["artifact_paths"] = list(final_artifacts)
@@ -2197,7 +2271,7 @@ class Pixal3DInferencePipeline:
             del shape_decode, texture_decode, mesh, postprocess_result, baked_texture
             _release_pixal3d_mlx_stage_memory(metadata, "after_glb_export")
             metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-            metadata["timings_sec"] = timings
+            metadata["timings_sec"] = timer.snapshot()
             return Pixal3DGenerationResult(
                 trace=Pixal3DInferenceTrace(
                     root=self.root,
@@ -2214,7 +2288,7 @@ class Pixal3DInferencePipeline:
                 artifacts=final_artifacts,
             )
         metadata["memory_after"] = mlx_memory_snapshot().as_dict()
-        metadata["timings_sec"] = timings
+        metadata["timings_sec"] = timer.snapshot()
         return self._blocked(
             image_path,
             completed,
@@ -2310,7 +2384,7 @@ def _load_spatialkit_exporter() -> tuple[Any | None, str | None]:
     try:
         from .spatialkit import export_pixal3d_glb
     except ImportError as error:
-        return None, f"mlx_spatial.spatialkit is not importable; falling back to internal Pixal3D GLB export: {error}"
+        return None, f"mlx_spatial.spatialkit is not importable: {error}"
     return export_pixal3d_glb, None
 
 
