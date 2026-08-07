@@ -339,6 +339,45 @@ def test_fill_holes_rejects_invalid_perimeter() -> None:
         fill_holes(vertices, faces, max_hole_perimeter=0.0)
 
 
+def test_fill_holes_stabilizes_float32_scale_boundary_loop() -> None:
+    outer = np.array(
+        [[0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], [1e-3, 1e-3, 0.0], [0.0, 1e-3, 0.0]],
+        dtype=np.float32,
+    )
+    center = np.float32(5e-4)
+    half_width = np.float32(5e-8)
+    inner = np.array(
+        [
+            [center - half_width, center - half_width, 0.0],
+            [center + half_width, center - half_width, 0.0],
+            [center + half_width, center + half_width, 0.0],
+            [center - half_width, center + half_width, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    vertices = np.concatenate((outer, inner), axis=0)
+    faces = np.array(
+        [
+            [0, 1, 5], [0, 5, 4],
+            [1, 2, 6], [1, 6, 5],
+            [2, 3, 7], [2, 7, 6],
+            [3, 0, 4], [3, 4, 7],
+        ],
+        dtype=np.int64,
+    )
+
+    mesh, stats = fill_holes(vertices, faces, max_hole_perimeter=1e-5)
+    metrics = mesh_metrics(mesh.vertices, mesh.faces)
+
+    assert stats["filled_loops"] == 1
+    assert stats["numerically_stabilized_centers"] == 1
+    assert stats["skipped_numerically_unstable_loops"] == 0
+    assert 0.0 < stats["max_center_offset"] < 1e-5
+    assert metrics["boundary_loop_count"] == 1
+    assert metrics["degenerate_faces"] == 0
+    assert metrics["nonmanifold_edges"] == 0
+
+
 def _assert_manifold_edges_have_opposite_winding(faces: np.ndarray) -> None:
     directed_edges: dict[tuple[int, int], list[bool]] = {}
     for face in faces:

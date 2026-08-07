@@ -208,12 +208,14 @@ inline float triangle_area2(const MeshData &mesh, const std::array<int64_t, 3> &
   return std::sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]);
 }
 
+inline constexpr float kDegenerateTriangleArea2Epsilon = 1e-14f;
+
 inline bool face_degenerate(const MeshData &mesh, const std::array<int64_t, 3> &face) {
   if (face[0] == face[1] || face[1] == face[2] || face[0] == face[2]) {
     return true;
   }
   const float area2 = triangle_area2(mesh, face);
-  return !std::isfinite(area2) || area2 <= 1e-14f;
+  return !std::isfinite(area2) || area2 <= kDegenerateTriangleArea2Epsilon;
 }
 
 inline std::array<int64_t, 3> canonical_face(std::array<int64_t, 3> face) {

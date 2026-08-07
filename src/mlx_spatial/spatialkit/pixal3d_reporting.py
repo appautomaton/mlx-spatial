@@ -147,7 +147,6 @@ def _load_pixal3d_reference_trace(
     else:
         candidates = [
             decoded_dir.parent / "pixal3d-1024-cascade-glb-reference" / "trace.json",
-            Path.cwd() / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-glb-reference" / "trace.json",
         ]
     for path in candidates:
         if path is None or not path.exists():
@@ -584,7 +583,10 @@ def _build_pixal3d_run_manifest(
     source_image = (
         fixture_manifest.get("source_image", {})
         if fixture_manifest is not None
-        else {"path": decoded_metadata_value(diagnostics, "image_path"), "preprocess_variant": "unknown"}
+        else {
+            "path": _unmanifested_source_image_path(decoded_dir, diagnostics),
+            "preprocess_variant": "unknown",
+        }
     )
     roles: dict[str, Any] = {
         "A": {
@@ -634,6 +636,29 @@ def _build_pixal3d_run_manifest(
         "roles": roles,
         "readiness": diagnostics.get("result", {}),
     }
+
+
+def decoded_metadata_value(diagnostics: dict[str, Any], key: str) -> Any:
+    source = diagnostics.get("source", {})
+    for section in ("shape_decoder", "texture_decoder"):
+        metadata = source.get(section, {}).get("metadata", {})
+        if key in metadata:
+            return metadata[key]
+    return None
+
+
+def _unmanifested_source_image_path(decoded_dir: Path, diagnostics: dict[str, Any]) -> Any:
+    metadata_path = decoded_metadata_value(diagnostics, "image_path")
+    if metadata_path is not None:
+        return metadata_path
+    trace_path = decoded_dir / "trace.json"
+    if not trace_path.is_file():
+        return None
+    try:
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return trace.get("image_path") if isinstance(trace, dict) else None
 
 
 def _nested_get(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:

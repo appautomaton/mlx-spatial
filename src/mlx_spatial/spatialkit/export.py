@@ -62,6 +62,7 @@ from .pixal3d_reporting import (
     _reference_glb_path,
     _upstream_export_settings_summary as _upstream_export_settings_summary,
     _visual_comparison_summary,
+    decoded_metadata_value,
 )
 
 _T = TypeVar("_T")
@@ -1574,15 +1575,6 @@ def _resolve_positive_int(*values: Any, default: int, name: str) -> int:
             raise ValueError(f"{name} must be positive")
         return resolved
     return int(default)
-
-
-def decoded_metadata_value(diagnostics: dict[str, Any], key: str) -> Any:
-    source = diagnostics.get("source", {})
-    for section in ("shape_decoder", "texture_decoder"):
-        metadata = source.get(section, {}).get("metadata", {})
-        if key in metadata:
-            return metadata[key]
-    return None
 
 
 def _resolve_pixal3d_export_settings(

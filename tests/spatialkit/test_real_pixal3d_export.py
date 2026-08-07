@@ -23,6 +23,7 @@ from mlx_spatial.spatialkit.export import (
     _export_quality_summary,
     _glb_viewer_compatibility_summary,
     _load_pixal3d_fixture_manifest,
+    _load_pixal3d_reference_trace,
     _native_chart_uv_candidate_status,
     _production_equivalence_summary,
     _resolve_pixal3d_export_settings,
@@ -155,6 +156,20 @@ def test_pixal3d_fixture_manifest_fails_closed_on_mismatched_or_ambiguous_lineag
         _load_pixal3d_fixture_manifest(decoded_dir)
 
 
+def test_unmanifested_pixal3d_cache_does_not_borrow_global_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decoded_dir = tmp_path / "external" / "decoded"
+    decoded_dir.mkdir(parents=True)
+    global_reference = tmp_path / "inputs" / "mlx-spatialkit" / "pixal3d-1024-cascade-glb-reference"
+    global_reference.mkdir(parents=True)
+    (global_reference / "trace.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert _load_pixal3d_reference_trace(decoded_dir) is None
+
+
 def test_pixal3d_run_manifest_records_abc_roles_and_browser_paths(tmp_path: Path) -> None:
     decoded_dir = tmp_path / "decoded"
     decoded_dir.mkdir()
@@ -212,6 +227,47 @@ def test_pixal3d_run_manifest_records_abc_roles_and_browser_paths(tmp_path: Path
     assert manifest["roles"]["B"]["visual_parity_report_path"].endswith("visual_parity.json")
     assert manifest["roles"]["B"]["browser_render_report_path"].endswith("browser_render_report.json")
     assert manifest["roles"]["C"]["lineage_id"] == "lineage-a"
+
+
+def test_pixal3d_run_manifest_supports_unmanifested_cached_output(tmp_path: Path) -> None:
+    decoded_dir = tmp_path / "decoded"
+    decoded_dir.mkdir()
+    shape_path = decoded_dir / "shape_decoder_fields.npz"
+    texture_path = decoded_dir / "texture_decoder_pbr.npz"
+    shape_path.write_bytes(b"shape")
+    texture_path.write_bytes(b"texture")
+    (decoded_dir / "trace.json").write_text(
+        json.dumps({"image_path": "/tmp/cached-input.png"}),
+        encoding="utf-8",
+    )
+    glb_path = tmp_path / "model.glb"
+    glb_path.write_bytes(b"glTF")
+    diagnostics_path = tmp_path / "diagnostics.json"
+    diagnostics = {
+        "source": {"shape_decoder": {"metadata": {}}},
+        "settings": {"texture_size": 1024, "uv_backend": "xatlas-clustered"},
+        "result": {"artifact_ready": True},
+    }
+    glb = NativeGlbArtifact(path=glb_path, format="glb", bytes_written=4, metadata={})
+
+    manifest = _build_pixal3d_run_manifest(
+        decoded_dir=decoded_dir,
+        shape_path=shape_path,
+        texture_path=texture_path,
+        glb=glb,
+        diagnostics_path=diagnostics_path,
+        diagnostics=diagnostics,
+        fixture_manifest=None,
+        reference=None,
+    )
+
+    assert manifest["lineage_id"] == f"unmanifested:{decoded_dir.resolve()}"
+    assert manifest["case_id"] is None
+    assert manifest["source_image"] == {
+        "path": "/tmp/cached-input.png",
+        "preprocess_variant": "unknown",
+    }
+    assert "C" not in manifest["roles"]
 
 
 @pytest.mark.heavy

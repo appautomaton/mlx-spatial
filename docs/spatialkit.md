@@ -164,9 +164,16 @@ appearance, and runtime evidence:
   violin asset, and 11.52 seconds versus 1.74 seconds on the 212k-face main
   asset. It also introduces 941 and 2,999 spatial partition cuts,
   respectively. It remains an explicit compatibility/experiment path.
-- The measured runs peak below 4.4 GiB RSS and record zero swap growth. MLX
-  QEM and Metal texture stages use the Apple GPU; irregular topology and
-  xatlas stages remain CPU work by design.
+- A separate 6.16M-token car cache produces a 195,028-face r1024 clustered
+  GLB with zero degenerate, duplicate, boundary, nonmanifold-edge, and
+  nonmanifold-vertex counts. Four float32-scale boundary-loop centers require
+  bounded normal-offset stabilization; the maximum measured offset is
+  1.96e-6 model units. The shared-camera comparison against the prior internal
+  export passes all three views, but that prior export is not a quality oracle.
+- The violin/main comparison runs peak below 4.4 GiB RSS. The larger car r1024
+  run takes 75.25 seconds and peaks at 14.95 GiB RSS. All runs record zero swap
+  growth. MLX QEM and Metal texture stages use the Apple GPU; irregular
+  topology and xatlas stages remain CPU work by design.
 
 These results do not establish a production default. In particular, the UDF
 path is still an offset double cover, the evidence is below the upstream
@@ -185,7 +192,8 @@ Keep these concepts separate:
 The strict production-equivalence gate is intentionally conservative. Before
 changing any Pixal3D or TRELLIS.2 pipeline default, the current work is:
 
-- extend the cached decoded-NPZ evidence to a second fine-structure fixture
+- extend the cached decoded-NPZ evidence to another independent fine-structure
+  fixture beyond the car and violin cases
 - establish full reference-scale `target_faces=1000000` and
   `texture_size=4096` evidence within time and memory budgets
 - add an object-level preservation gate for fine structures such as the

@@ -128,8 +128,11 @@ struct ReferenceLoopFillResult {
   int64_t filled_loops = 0;
   int64_t skipped_large_loops = 0;
   int64_t skipped_complex_components = 0;
+  int64_t numerically_stabilized_centers = 0;
+  int64_t skipped_numerically_unstable_loops = 0;
   int64_t vertices_added = 0;
   int64_t faces_added = 0;
+  double max_center_offset = 0.0;
 };
 
 struct FaceEdgeIncidence {
@@ -1182,6 +1185,117 @@ std::array<float, 3> loop_boundary_midpoint_mean(const mesh_common::MeshData &me
   };
 }
 
+bool patch_has_degenerate_faces(
+    const mesh_common::MeshData &mesh,
+    const std::vector<std::array<int64_t, 3>> &patch_faces) {
+  return std::any_of(patch_faces.begin(), patch_faces.end(), [&](const auto &face) {
+    return mesh_common::face_degenerate(mesh, face);
+  });
+}
+
+double mesh_bbox_diagonal(const mesh_common::MeshData &mesh) {
+  if (mesh.vertices.empty()) {
+    return 0.0;
+  }
+  std::array<double, 3> lower{
+      static_cast<double>(mesh.vertices[0][0]),
+      static_cast<double>(mesh.vertices[0][1]),
+      static_cast<double>(mesh.vertices[0][2]),
+  };
+  std::array<double, 3> upper = lower;
+  for (const auto &vertex : mesh.vertices) {
+    for (size_t axis = 0; axis < 3; ++axis) {
+      lower[axis] = std::min(lower[axis], static_cast<double>(vertex[axis]));
+      upper[axis] = std::max(upper[axis], static_cast<double>(vertex[axis]));
+    }
+  }
+  const double dx = upper[0] - lower[0];
+  const double dy = upper[1] - lower[1];
+  const double dz = upper[2] - lower[2];
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool stabilize_centroid_fan_center(
+    mesh_common::MeshData &mesh,
+    const std::vector<int64_t> &loop,
+    int64_t center_vertex_id,
+    const std::vector<std::array<int64_t, 3>> &patch_faces,
+    double perimeter,
+    double mesh_scale,
+    double &applied_offset) {
+  if (loop.size() < 3 || center_vertex_id < 0 ||
+      static_cast<size_t>(center_vertex_id) >= mesh.vertices.size()) {
+    return false;
+  }
+  const std::array<float, 3> original = mesh.vertices[static_cast<size_t>(center_vertex_id)];
+  std::array<double, 3> normal{0.0, 0.0, 0.0};
+  double min_edge_length = std::numeric_limits<double>::infinity();
+  for (size_t index = 0; index < loop.size(); ++index) {
+    const auto &current = mesh.vertices[static_cast<size_t>(loop[index])];
+    const auto &next = mesh.vertices[static_cast<size_t>(loop[(index + 1) % loop.size()])];
+    const std::array<double, 3> left{
+        static_cast<double>(current[0]) - static_cast<double>(original[0]),
+        static_cast<double>(current[1]) - static_cast<double>(original[1]),
+        static_cast<double>(current[2]) - static_cast<double>(original[2]),
+    };
+    const std::array<double, 3> right{
+        static_cast<double>(next[0]) - static_cast<double>(original[0]),
+        static_cast<double>(next[1]) - static_cast<double>(original[1]),
+        static_cast<double>(next[2]) - static_cast<double>(original[2]),
+    };
+    normal[0] += left[1] * right[2] - left[2] * right[1];
+    normal[1] += left[2] * right[0] - left[0] * right[2];
+    normal[2] += left[0] * right[1] - left[1] * right[0];
+    const double dx = static_cast<double>(next[0]) - static_cast<double>(current[0]);
+    const double dy = static_cast<double>(next[1]) - static_cast<double>(current[1]);
+    const double dz = static_cast<double>(next[2]) - static_cast<double>(current[2]);
+    const double edge_length = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (edge_length > 0.0 && std::isfinite(edge_length)) {
+      min_edge_length = std::min(min_edge_length, edge_length);
+    }
+  }
+  const double normal_length =
+      std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+  if (!std::isfinite(normal_length) || normal_length <= 0.0 ||
+      !std::isfinite(min_edge_length) || min_edge_length <= 0.0) {
+    return false;
+  }
+  for (double &value : normal) {
+    value /= normal_length;
+  }
+
+  // Use a margin above the shared degeneracy threshold so float32 rounding
+  // cannot immediately collapse a numerically stabilized cap.
+  constexpr double kStableArea2Target =
+      4.0 * static_cast<double>(mesh_common::kDegenerateTriangleArea2Epsilon);
+  double offset = kStableArea2Target / min_edge_length;
+  const double max_offset = std::max(perimeter * 8.0, mesh_scale * 1e-5);
+  for (int attempt = 0; attempt < 12 && offset <= max_offset; ++attempt, offset *= 2.0) {
+    // Either normal direction closes the same microscopic loop. Trying both
+    // avoids a one-sided float32 rounding failure without assuming an axis.
+    for (const double direction : {1.0, -1.0}) {
+      const std::array<float, 3> candidate{
+          static_cast<float>(static_cast<double>(original[0]) + direction * normal[0] * offset),
+          static_cast<float>(static_cast<double>(original[1]) + direction * normal[1] * offset),
+          static_cast<float>(static_cast<double>(original[2]) + direction * normal[2] * offset),
+      };
+      if (!std::isfinite(candidate[0]) || !std::isfinite(candidate[1]) || !std::isfinite(candidate[2])) {
+        continue;
+      }
+      mesh.vertices[static_cast<size_t>(center_vertex_id)] = candidate;
+      if (!patch_has_degenerate_faces(mesh, patch_faces)) {
+        const double dx = static_cast<double>(candidate[0]) - static_cast<double>(original[0]);
+        const double dy = static_cast<double>(candidate[1]) - static_cast<double>(original[1]);
+        const double dz = static_cast<double>(candidate[2]) - static_cast<double>(original[2]);
+        applied_offset = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return true;
+      }
+    }
+  }
+  mesh.vertices[static_cast<size_t>(center_vertex_id)] = original;
+  return false;
+}
+
 ReferenceLoopFillResult fill_reference_clean_boundary_loops(
     const mesh_common::MeshData &input,
     int64_t max_loop_edges,
@@ -1208,11 +1322,9 @@ ReferenceLoopFillResult fill_reference_clean_boundary_loops(
   for (const DirectedBoundaryEdge &edge : boundary_edges) {
     directed_boundary.insert(DirectedEdgeKey{edge.start, edge.end});
   }
-
-  std::vector<std::array<float, 3>> new_vertices;
-  std::vector<std::array<int64_t, 3>> new_faces;
-  new_vertices.reserve(loops.size());
-  new_faces.reserve(loops.size() * 4);
+  const double mesh_scale = mesh_bbox_diagonal(input);
+  result.mesh.vertices.reserve(input.vertices.size() + loops.size());
+  result.mesh.faces.reserve(input.faces.size() + loops.size() * 4);
   for (const std::vector<int64_t> &loop : loops) {
     if (static_cast<int64_t>(loop.size()) > max_loop_edges) {
       result.skipped_large_loops += 1;
@@ -1223,27 +1335,37 @@ ReferenceLoopFillResult fill_reference_clean_boundary_loops(
       result.skipped_large_loops += 1;
       continue;
     }
-    const int64_t center_vertex_id = static_cast<int64_t>(input.vertices.size() + new_vertices.size());
+    const int64_t center_vertex_id = static_cast<int64_t>(result.mesh.vertices.size());
     const std::array<float, 3> center = loop_boundary_midpoint_mean(input, loop);
     if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2])) {
       result.skipped_large_loops += 1;
       continue;
     }
+    result.mesh.vertices.push_back(center);
     std::vector<std::array<int64_t, 3>> patch_faces =
         reference_centroid_fan_patch(loop, center_vertex_id, directed_boundary);
-    new_vertices.push_back(center);
-    new_faces.insert(new_faces.end(), patch_faces.begin(), patch_faces.end());
+    if (patch_has_degenerate_faces(result.mesh, patch_faces)) {
+      double applied_offset = 0.0;
+      if (!stabilize_centroid_fan_center(
+              result.mesh,
+              loop,
+              center_vertex_id,
+              patch_faces,
+              perimeter,
+              mesh_scale,
+              applied_offset)) {
+        result.mesh.vertices.pop_back();
+        result.skipped_numerically_unstable_loops += 1;
+        continue;
+      }
+      result.numerically_stabilized_centers += 1;
+      result.max_center_offset = std::max(result.max_center_offset, applied_offset);
+    }
+    result.mesh.faces.insert(result.mesh.faces.end(), patch_faces.begin(), patch_faces.end());
+    result.filled_loops += 1;
+    result.vertices_added += 1;
+    result.faces_added += static_cast<int64_t>(patch_faces.size());
   }
-
-  if (!new_vertices.empty()) {
-    result.mesh.vertices.reserve(input.vertices.size() + new_vertices.size());
-    result.mesh.faces.reserve(input.faces.size() + new_faces.size());
-    result.mesh.vertices.insert(result.mesh.vertices.end(), new_vertices.begin(), new_vertices.end());
-    result.mesh.faces.insert(result.mesh.faces.end(), new_faces.begin(), new_faces.end());
-  }
-  result.filled_loops = static_cast<int64_t>(new_vertices.size());
-  result.vertices_added = static_cast<int64_t>(new_vertices.size());
-  result.faces_added = static_cast<int64_t>(new_faces.size());
   return result;
 }
 
@@ -2970,6 +3092,9 @@ nb::dict fill_holes(
   stats["residual_clean_boundary_loops"] = residual_clean_boundary_loops;
   stats["skipped_large_loops"] = fill.skipped_large_loops;
   stats["skipped_complex_components"] = fill.skipped_complex_components;
+  stats["numerically_stabilized_centers"] = fill.numerically_stabilized_centers;
+  stats["skipped_numerically_unstable_loops"] = fill.skipped_numerically_unstable_loops;
+  stats["max_center_offset"] = fill.max_center_offset;
   stats["vertices_added"] = fill.vertices_added;
   stats["faces_added"] = fill.faces_added;
   result["stats"] = stats;
