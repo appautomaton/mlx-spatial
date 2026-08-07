@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>mlx-spatial — Open Graph card source</title>
+<!--
+  Source for assets/og.png. Rendered at 1200x630 CSS px with the real
+  webfonts, never approximated. To re-cut:
+
+    open at a 1200x630 viewport with devicePixelRatio 2, wait for
+    document.fonts.ready, then capture the viewport to assets/og.png.
+
+  Keep in step with index.html: same tokens, same signature, and no number
+  that has to be maintained.
+-->
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=zodiak@700&f[]=synonym@400,500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #0F1116; --ink: #E9ECF2; --muted: #949BA8;
+    --iso-line: #333A47; --line: #262B35;
+    --x: #FF8375; --y: #7FD25C; --z: #86ACFF;
+    --display: 'Zodiak', Georgia, serif;
+    --body: 'Synonym', ui-sans-serif, system-ui, sans-serif;
+    --mono: 'DM Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #000; }
+  .card {
+    position: relative; width: 1200px; height: 630px; overflow: hidden;
+    background: var(--bg); color: var(--ink);
+    font-family: var(--body); padding: 68px 76px;
+    display: flex; flex-direction: column;
+  }
+  .iso {
+    position: absolute; inset: -15% -8% auto; height: 130%; z-index: 0;
+    background-image:
+      repeating-linear-gradient(30deg,  var(--iso-line) 0 1px, transparent 1px 74px),
+      repeating-linear-gradient(150deg, var(--iso-line) 0 1px, transparent 1px 74px),
+      repeating-linear-gradient(90deg,  var(--iso-line) 0 1px, transparent 1px 74px);
+    -webkit-mask-image: radial-gradient(120% 85% at 16% 20%, #000 6%, transparent 72%);
+    mask-image: radial-gradient(120% 85% at 16% 20%, #000 6%, transparent 72%);
+  }
+  .in { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100%; }
+
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 40px; }
+  .eyebrow {
+    display: flex; align-items: center; gap: .75rem;
+    font: 500 15px/1.5 var(--mono); letter-spacing: .2em;
+    text-transform: uppercase; color: var(--muted); margin: 0;
+  }
+  .eyebrow::before { content: ""; width: 40px; height: 2px; background: var(--z); flex: none; }
+  .mark {
+    display: flex; align-items: center; gap: 12px; flex: none;
+    font-family: var(--display); font-weight: 700; font-size: 29px; letter-spacing: -.01em;
+  }
+  .mark svg { display: block; width: 32px; height: 32px; }
+
+  /* the signature: a bounding box fitted to its contents */
+  /* align-self is load-bearing: .in is a flex column, so a bare inline-block
+     is still stretched to the full width and the box stops bounding anything. */
+  .bbox { position: relative; display: inline-block; align-self: flex-start;
+    margin: 30px 0 0; padding: 30px 34px; }
+  .bbox h1 {
+    font-family: var(--display); font-weight: 700;
+    font-size: 96px; line-height: .96; letter-spacing: -.02em;
+    margin: 0; width: fit-content;
+  }
+  .corner { position: absolute; width: 38px; height: 38px; border: 2.5px solid var(--z); }
+  .c-tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+  .c-tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+  .c-bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+  .c-br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+  .foot { margin-top: auto; display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
+  .leg { display: flex; align-items: center; gap: 10px;
+    font: 500 14px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .leg i { width: 30px; height: 2px; display: block; }
+  .leg-x i { background: var(--x); } .leg-y i { background: var(--y); } .leg-z i { background: var(--z); }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+  .fmt { font: 400 14px/1 var(--mono); letter-spacing: .06em; color: var(--muted);
+    border: 1px solid var(--line); padding: 10px 13px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="iso"></div>
+    <div class="in">
+      <div class="bar">
+        <p class="eyebrow">MLX · Apple silicon · inference only</p>
+        <div class="mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2.6 20.5 7v10L12 21.4 3.5 17V7z" stroke="var(--z)" stroke-width="1.6"/>
+            <path d="M12 2.6V12l8.5-5M12 12 3.5 7M12 12v9.4" stroke="var(--muted)" stroke-width="1.1"/>
+          </svg>
+          mlx-spatial
+        </div>
+      </div>
+
+      <div class="bbox">
+        <span class="corner c-tl"></span><span class="corner c-tr"></span>
+        <span class="corner c-bl"></span><span class="corner c-br"></span>
+        <h1>Pixels in.<br>Geometry out.</h1>
+      </div>
+
+      <div class="foot">
+        <span class="leg leg-x"><i></i>image</span>
+        <span class="leg leg-y"><i></i>mesh</span>
+        <span class="leg leg-z"><i></i>scene</span>
+        <span class="sep"></span>
+        <span class="fmt">GLB</span>
+        <span class="fmt">PLY</span>
+        <span class="fmt">NPZ</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
