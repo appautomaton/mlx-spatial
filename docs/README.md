@@ -10,6 +10,7 @@ Start with the page that matches the job:
 | Run Apple LiTo image-to-3DGS research inference | [lito.md](lito.md) |
 | Run MapAnything multi-view scene generation | [mapanything.md](mapanything.md) |
 | Inspect Pixal3D MLX implementation status | [pixal3d.md](pixal3d.md) |
+| Use the integrated native/Metal GLB conversion layer | [spatialkit.md](spatialkit.md) |
 | Start from recommended runnable scripts | [scripts/README.md](../scripts/README.md) |
 | Understand module boundaries | [architecture.md](architecture.md) |
 | Contribute or verify changes locally | [development.md](development.md) |
@@ -20,8 +21,9 @@ Start with the page that matches the job:
 
 The docs are written for both humans and coding agents:
 
-- Commands should be copyable from a clean checkout after `uv sync`, or from an installed package when explicitly stated.
-- Model weights, inputs, and outputs stay under ignored local directories: `weights/`, `inputs/`, and `outputs/`.
+- Commands should be copyable after `uv sync` and after the documented model assets and user-provided inputs are present. Repository scripts use `uv run python`.
+- Model weights and user inference data stay under ignored local directories: `weights/`, `inputs/`, and `outputs/`.
+- Tests and audits use one task-specific system temporary directory; their inputs, outputs, logs, caches, and intermediate artifacts do not go under the repository.
 - Runtime pages should say what the pipeline is for, what assets it needs, how to run it, what it writes, and what common blockers mean.
 - Avoid one-off run logs in stable docs. Put dated evidence in release notes, model cards, or local project notes.
 - Keep upstream license and access terms linked, not pasted.

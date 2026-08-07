@@ -20,8 +20,6 @@ from mlx_spatial.mapanything_parity import (
 from mlx_spatial.mapanything_preprocess import MapAnythingPreprocessedInput, MapAnythingPreprocessedView
 
 
-DEFAULT_REFERENCE = Path("/tmp/mapanything-desk-scene-reference.npz")
-
 pytestmark = pytest.mark.skipif(
     os.environ.get(MAPANYTHING_TORCH_PARITY_ENV) != "1",
     reason="opt-in MapAnything Torch reference parity",
@@ -29,13 +27,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_mapanything_scene_postprocess_matches_desk_reference():
-    reference_path = Path(os.environ.get("MAPANYTHING_SCENE_REFERENCE", str(DEFAULT_REFERENCE)))
+    reference_path = _reference_path()
     if not reference_path.is_file():
         pytest.fail(
             f"missing scene reference bundle: {reference_path}; run "
             "tools/mapanything_dump_torch_scene_reference.py first"
         )
-
     reference = load_mapanything_parity_bundle(reference_path)
     heads_output = _heads_output_from_reference(reference.tensors)
     preprocessed = _preprocessed_input_from_reference(reference.tensors)
@@ -107,6 +104,16 @@ def test_mapanything_scene_postprocess_matches_desk_reference():
     actual_scene_mask = actual["scene.final_masks"].astype(bool)
     expected_scene_mask = reference.tensors["scene.final_masks"].astype(bool)
     assert int((actual_scene_mask != expected_scene_mask).sum()) <= 9
+
+
+def _reference_path() -> Path:
+    value = os.environ.get("MAPANYTHING_SCENE_REFERENCE")
+    if not value:
+        pytest.fail(
+            "set MAPANYTHING_SCENE_REFERENCE to a parity bundle under the task-specific "
+            "MLX_SPATIAL_TEST_SCRATCH root"
+        )
+    return Path(value)
 
 
 def _heads_output_from_reference(tensors: dict[str, object]) -> MapAnythingHeadsOutput:

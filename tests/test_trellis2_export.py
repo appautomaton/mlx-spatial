@@ -245,7 +245,9 @@ def test_postprocess_parity_audit_records_known_source_gaps():
 
     assert all(isinstance(item, Trellis2PostprocessParityItem) for item in audit)
     assert any(item.stage == "texture sampling" and "trilinear" in item.mlx_spatial for item in audit)
-    assert any(item.stage == "remeshing" and item.parity == "missing" for item in audit)
+    remeshing = next(item for item in audit if item.stage == "remeshing")
+    assert remeshing.parity == "partial"
+    assert "not integrated" in remeshing.mlx_spatial
     assert any(
         item.stage == "mesh cleanup" and "compare_trellis2_mesh_improvement" in item.next_action
         for item in audit
@@ -559,6 +561,20 @@ def test_xatlas_chunked_unwrap_reports_parallel_stats():
     assert result.stats.elapsed_seconds >= 0.0
     assert np.all(result.uvs >= 0.0)
     assert np.all(result.uvs <= 1.0)
+
+
+def test_trellis2_xatlas_adapter_matches_spatialkit_arrays():
+    from mlx_spatial.spatialkit import unwrap_xatlas_spatial
+
+    mesh = _fixture_mesh()
+    expected = unwrap_xatlas_spatial(mesh.vertices, mesh.faces, chunks=2)
+    actual = unwrap_trellis2_mesh_xatlas_with_stats(mesh, parallel_chunks=2)
+
+    np.testing.assert_array_equal(actual.vertices, expected.vertices)
+    np.testing.assert_array_equal(actual.faces, expected.faces)
+    np.testing.assert_array_equal(actual.uvs, expected.uvs)
+    assert actual.stats.backend == expected.stats["backend"]
+    assert actual.stats.chunk_faces == expected.stats["chunk_faces"]
 
 
 def test_mac_native_texture_bake_can_request_chunked_xatlas():

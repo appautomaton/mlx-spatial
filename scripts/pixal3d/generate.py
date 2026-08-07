@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--glb-diagnostics-path",
         type=Path,
-        help="diagnostics JSON path for the optional spatialkit GLB export backend",
+        help="diagnostics JSON path for the opt-in integrated SpatialKit GLB export backend",
     )
     parser.add_argument(
         "--naf-root",

@@ -11,6 +11,7 @@ build/
 /.agent/*
 !/.agent/work/
 !/.agent/work/**
+/.agents/
 /.claude/
 /.codex/
 /.opencode/
@@ -19,7 +20,5 @@ weights/
 inputs/
 outputs/
 vendors/
-
-.opencode/node_modules/
 
 .antigravitycli/

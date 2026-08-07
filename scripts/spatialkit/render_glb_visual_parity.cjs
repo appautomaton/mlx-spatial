@@ -10,15 +10,15 @@ const HELP = `Render candidate/reference GLBs in Chrome and write browser visual
 
 Usage:
   node scripts/spatialkit/render_glb_visual_parity.cjs \\
-    --candidate /tmp/export/model.glb \\
+    --candidate "$MLX_SPATIAL_TEST_SCRATCH/outputs/candidate/model.glb" \\
     --reference inputs/mlx-spatialkit/pixal3d-1024-cascade-glb-reference/model.glb \\
-    --output-dir /tmp/export/visual_parity/browser_render \\
-    [--visual-report /tmp/export/visual_parity/visual_parity.json] \\
-    [--artifact-manifest /tmp/export/artifact-manifest.json]
+    --output-dir "$MLX_SPATIAL_TEST_SCRATCH/artifacts/browser-render" \\
+    [--visual-report "$MLX_SPATIAL_TEST_SCRATCH/artifacts/visual-parity.json"] \\
+    [--artifact-manifest "$MLX_SPATIAL_TEST_SCRATCH/artifacts/artifact-manifest.json"]
 
 Dev dependency setup, kept out of package runtime:
-  npm install --prefix /tmp/mlx-spatialkit-render-deps playwright@1.60.0 three@0.181.2
-  NODE_PATH=/tmp/mlx-spatialkit-render-deps/node_modules node scripts/spatialkit/render_glb_visual_parity.cjs ...
+  npm install --prefix "$MLX_SPATIAL_TEST_SCRATCH/cache/render-deps" playwright@1.60.0 three@0.181.2
+  NODE_PATH="$MLX_SPATIAL_TEST_SCRATCH/cache/render-deps/node_modules" node scripts/spatialkit/render_glb_visual_parity.cjs ...
 `;
 
 const VIEWS = [
@@ -253,7 +253,7 @@ function renderPageHtml() {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>mlx-spatialkit browser render proof</title>
+  <title>mlx-spatial SpatialKit browser render proof</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 20px; color: #111; }
     h1 { font-size: 20px; margin: 0 0 16px; }
@@ -267,7 +267,7 @@ function renderPageHtml() {
   </script>
 </head>
 <body>
-  <h1>mlx-spatialkit Browser Render Proof</h1>
+  <h1>mlx-spatial SpatialKit Browser Render Proof</h1>
   <div id="root"></div>
   <script type="module" src="/viewer.js"></script>
 </body>
@@ -287,19 +287,52 @@ const root = document.getElementById('root');
 const report = { views: [], errors: [] };
 
 try {
+  const [candidateGltf, referenceGltf] = await Promise.all([
+    loader.loadAsync('/candidate.glb'),
+    loader.loadAsync('/reference.glb'),
+  ]);
+  const candidateBounds = measureBounds(candidateGltf.scene);
+  const referenceBounds = measureBounds(referenceGltf.scene);
+  const framing = {
+    center: referenceBounds.center,
+    radius: Math.max(referenceBounds.size.x, referenceBounds.size.y, referenceBounds.size.z, 1e-5),
+  };
+  report.bounds = {
+    candidate: candidateBounds,
+    reference: referenceBounds,
+    camera_frame_source: 'reference',
+  };
   for (const view of VIEWS) {
     const section = document.createElement('section');
     section.className = 'view';
     section.innerHTML = '<h2>' + view.name + '</h2><div class="row"></div>';
     root.appendChild(section);
     const row = section.querySelector('.row');
-    const candidate = await renderModel('/candidate.glb', 'candidate', view, row);
-    const reference = await renderModel('/reference.glb', 'reference', view, row);
+    const candidate = renderModel(candidateGltf.scene, 'candidate', view, row, framing);
+    const reference = renderModel(referenceGltf.scene, 'reference', view, row, framing);
+    const comparison = compareRenderPixels(
+      candidate.pixels,
+      reference.pixels,
+      candidate.normalPixels,
+      reference.normalPixels,
+      candidate.depthPixels,
+      reference.depthPixels,
+      candidate.cameraNear,
+      candidate.cameraFar,
+      framing.radius,
+    );
+    delete candidate.pixels;
+    delete reference.pixels;
+    delete candidate.normalPixels;
+    delete reference.normalPixels;
+    delete candidate.depthPixels;
+    delete reference.depthPixels;
     report.views.push({
       name: view.name,
       candidate,
       reference,
       visible_pixel_ratio: reference.visible_pixel_count > 0 ? candidate.visible_pixel_count / reference.visible_pixel_count : null,
+      ...comparison,
     });
   }
 } catch (error) {
@@ -309,7 +342,21 @@ try {
 globalThis.__renderReport = report;
 globalThis.__renderDone = true;
 
-async function renderModel(url, label, view, row) {
+function measureBounds(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+  return {
+    min: { x: box.min.x, y: box.min.y, z: box.min.z },
+    max: { x: box.max.x, y: box.max.y, z: box.max.z },
+    size: { x: size.x, y: size.y, z: size.z },
+    center: { x: center.x, y: center.y, z: center.z },
+  };
+}
+
+function renderModel(object, label, view, row, framing) {
   const figure = document.createElement('figure');
   const caption = document.createElement('figcaption');
   caption.textContent = label + ' / ' + view.name;
@@ -326,16 +373,13 @@ async function renderModel(url, label, view, row) {
   const directional = new THREE.DirectionalLight(0xffffff, 2.0);
   directional.position.set(3, 4, 5);
   scene.add(directional);
-  const gltf = await loader.loadAsync(url);
-  const object = gltf.scene;
   scene.add(object);
 
   const box = new THREE.Box3().setFromObject(object);
   const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
   box.getSize(size);
-  box.getCenter(center);
-  const radius = Math.max(size.x, size.y, size.z, 1e-5);
+  const center = new THREE.Vector3(framing.center.x, framing.center.y, framing.center.z);
+  const radius = framing.radius;
   const camera = new THREE.PerspectiveCamera(35, WIDTH / HEIGHT, radius / 100, radius * 100);
   const direction = new THREE.Vector3(view.direction[0], view.direction[1], view.direction[2]).normalize();
   camera.position.copy(center).add(direction.multiplyScalar(radius * 2.4));
@@ -346,6 +390,32 @@ async function renderModel(url, label, view, row) {
   const pixels = new Uint8Array(WIDTH * HEIGHT * 4);
   const gl = renderer.getContext();
   gl.readPixels(0, 0, WIDTH, HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  // Derive normals from rendered triangle geometry. Stored GLB NORMAL
+  // attributes may use different smoothing conventions and are validated
+  // separately by the structural GLB checks.
+  const originalOutputColorSpace = renderer.outputColorSpace;
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  const normalMaterial = new THREE.MeshNormalMaterial({
+    flatShading: true,
+    side: THREE.DoubleSide,
+  });
+  scene.overrideMaterial = normalMaterial;
+  renderer.render(scene, camera);
+  const normalPixels = new Uint8Array(WIDTH * HEIGHT * 4);
+  gl.readPixels(0, 0, WIDTH, HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, normalPixels);
+  const depthMaterial = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBDepthPacking,
+    side: THREE.DoubleSide,
+  });
+  scene.overrideMaterial = depthMaterial;
+  renderer.render(scene, camera);
+  const depthPixels = new Uint8Array(WIDTH * HEIGHT * 4);
+  gl.readPixels(0, 0, WIDTH, HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, depthPixels);
+  scene.overrideMaterial = null;
+  normalMaterial.dispose();
+  depthMaterial.dispose();
+  renderer.outputColorSpace = originalOutputColorSpace;
+  renderer.render(scene, camera);
   let visible = 0;
   let rgb = 0;
   for (let index = 0; index < pixels.length; index += 4) {
@@ -353,12 +423,94 @@ async function renderModel(url, label, view, row) {
     if (pixels[index] || pixels[index + 1] || pixels[index + 2]) rgb += 1;
   }
   return {
+    pixels,
+    normalPixels,
+    depthPixels,
+    cameraNear: camera.near,
+    cameraFar: camera.far,
     visible_pixel_count: visible,
     rgb_nonzero_pixel_count: rgb,
     pixel_count: WIDTH * HEIGHT,
     visible_pixel_ratio: visible / (WIDTH * HEIGHT),
     bbox_size: { x: size.x, y: size.y, z: size.z },
   };
+}
+
+function compareRenderPixels(
+  candidate,
+  reference,
+  candidateNormals,
+  referenceNormals,
+  candidateDepths,
+  referenceDepths,
+  cameraNear,
+  cameraFar,
+  radius,
+) {
+  let intersection = 0;
+  let union = 0;
+  let rgbAbsoluteError = 0;
+  let normalAbsoluteError = 0;
+  let depthAbsoluteError = 0;
+  let rawDepthAbsoluteError = 0;
+  let candidateViewDepthSum = 0;
+  let referenceViewDepthSum = 0;
+  for (let index = 0; index < candidate.length; index += 4) {
+    const candidateVisible = candidate[index + 3] > 8;
+    const referenceVisible = reference[index + 3] > 8;
+    if (candidateVisible && referenceVisible) {
+      intersection += 1;
+      rgbAbsoluteError += Math.abs(candidate[index] - reference[index]);
+      rgbAbsoluteError += Math.abs(candidate[index + 1] - reference[index + 1]);
+      rgbAbsoluteError += Math.abs(candidate[index + 2] - reference[index + 2]);
+      const directNormalError = (
+        Math.abs(candidateNormals[index] - referenceNormals[index])
+        + Math.abs(candidateNormals[index + 1] - referenceNormals[index + 1])
+        + Math.abs(candidateNormals[index + 2] - referenceNormals[index + 2])
+      );
+      const flippedNormalError = (
+        Math.abs(candidateNormals[index] - (255 - referenceNormals[index]))
+        + Math.abs(candidateNormals[index + 1] - (255 - referenceNormals[index + 1]))
+        + Math.abs(candidateNormals[index + 2] - (255 - referenceNormals[index + 2]))
+      );
+      normalAbsoluteError += Math.min(directNormalError, flippedNormalError);
+      const candidateDepth = unpackRgbDepth(candidateDepths, index);
+      const referenceDepth = unpackRgbDepth(referenceDepths, index);
+      const candidateViewZ = perspectiveDepthToViewZ(candidateDepth, cameraNear, cameraFar);
+      const referenceViewZ = perspectiveDepthToViewZ(referenceDepth, cameraNear, cameraFar);
+      rawDepthAbsoluteError += Math.abs(candidateDepth - referenceDepth);
+      depthAbsoluteError += Math.abs(candidateViewZ - referenceViewZ) / radius;
+      candidateViewDepthSum += -candidateViewZ / radius;
+      referenceViewDepthSum += -referenceViewZ / radius;
+    }
+    if (candidateVisible || referenceVisible) union += 1;
+  }
+  return {
+    silhouette_intersection_pixels: intersection,
+    silhouette_union_pixels: union,
+    silhouette_iou: union > 0 ? intersection / union : null,
+    shared_visible_rgb_mae: intersection > 0 ? rgbAbsoluteError / (intersection * 3 * 255) : null,
+    shared_visible_orientation_invariant_normal_mae: (
+      intersection > 0 ? normalAbsoluteError / (intersection * 3 * 255) : null
+    ),
+    shared_visible_depth_mae_radius_ratio: intersection > 0 ? depthAbsoluteError / intersection : null,
+    shared_visible_raw_depth_mae: intersection > 0 ? rawDepthAbsoluteError / intersection : null,
+    candidate_mean_view_depth_radius_ratio: intersection > 0 ? candidateViewDepthSum / intersection : null,
+    reference_mean_view_depth_radius_ratio: intersection > 0 ? referenceViewDepthSum / intersection : null,
+  };
+}
+
+function unpackRgbDepth(pixels, index) {
+  const unpackDownscale = 255 / 256;
+  return (
+    (pixels[index] / 255) * unpackDownscale
+    + (pixels[index + 1] / 255) * (unpackDownscale / 256)
+    + (pixels[index + 2] / 255) / (256 * 256)
+  );
+}
+
+function perspectiveDepthToViewZ(depth, near, far) {
+  return (near * far) / ((far - near) * depth - far);
 }
 `;
 }
@@ -368,6 +520,22 @@ function buildReport({ browserReport, candidate, reference, outputDir, htmlPath,
   const views = Array.isArray(browserReport.views) ? browserReport.views : [];
   const minVisible = Math.max(128, Math.floor(width * height * 0.0025));
   const ratios = views.map((view) => view.visible_pixel_ratio).filter((value) => typeof value === "number" && Number.isFinite(value));
+  const silhouetteIous = views.map((view) => view.silhouette_iou).filter(isFiniteNumber);
+  const rgbErrors = views.map((view) => view.shared_visible_rgb_mae).filter(isFiniteNumber);
+  const normalErrors = views
+    .map((view) => view.shared_visible_orientation_invariant_normal_mae)
+    .filter(isFiniteNumber);
+  const depthErrors = views
+    .map((view) => view.shared_visible_depth_mae_radius_ratio)
+    .filter(isFiniteNumber);
+  const rawDepthErrors = views.map((view) => view.shared_visible_raw_depth_mae).filter(isFiniteNumber);
+  const candidateMeanDepths = views
+    .map((view) => view.candidate_mean_view_depth_radius_ratio)
+    .filter(isFiniteNumber);
+  const referenceMeanDepths = views
+    .map((view) => view.reference_mean_view_depth_radius_ratio)
+    .filter(isFiniteNumber);
+  const boundsComparison = compareBounds(browserReport.bounds);
   checks.browser_render_completed = {
     passed: Array.isArray(browserReport.errors) && browserReport.errors.length === 0,
     errors: browserReport.errors || [],
@@ -386,14 +554,52 @@ function buildReport({ browserReport, candidate, reference, outputDir, htmlPath,
     required_min_visible_pixels: minVisible,
   };
   checks.visible_pixel_ratio = {
-    passed: ratios.length === VIEWS.length && ratios.every((ratio) => ratio >= 0.25 && ratio <= 4.0),
+    passed: ratios.length === VIEWS.length && ratios.every((ratio) => ratio >= 0.95 && ratio <= 1.05),
     actual: ratios,
-    required_min: 0.25,
-    required_max: 4.0,
+    required_min: 0.95,
+    required_max: 1.05,
+  };
+  checks.shared_camera_frame = {
+    passed: browserReport.bounds?.camera_frame_source === "reference",
+    actual: browserReport.bounds?.camera_frame_source || null,
+    required: "reference",
+  };
+  checks.bounding_box_center_offset = {
+    passed: boundsComparison.center_offset_ratio !== null && boundsComparison.center_offset_ratio <= 0.02,
+    actual: boundsComparison.center_offset_ratio,
+    required_max: 0.02,
+  };
+  checks.bounding_box_extent_ratio = {
+    passed: boundsComparison.extent_ratios.length === 3
+      && boundsComparison.extent_ratios.every((ratio) => ratio >= 0.95 && ratio <= 1.05),
+    actual: boundsComparison.extent_ratios,
+    required_min: 0.95,
+    required_max: 1.05,
+  };
+  checks.silhouette_iou = {
+    passed: silhouetteIous.length === VIEWS.length && silhouetteIous.every((value) => value >= 0.95),
+    actual: silhouetteIous,
+    required_min: 0.95,
+  };
+  checks.shared_visible_rgb_mae = {
+    passed: rgbErrors.length === VIEWS.length && rgbErrors.every((value) => value <= 0.15),
+    actual: rgbErrors,
+    required_max: 0.15,
+  };
+  checks.shared_visible_orientation_invariant_normal_mae = {
+    passed: normalErrors.length === VIEWS.length && normalErrors.every((value) => value <= 0.12),
+    actual: normalErrors,
+    required_max: 0.12,
+  };
+  checks.shared_visible_depth_mae_radius_ratio = {
+    passed: depthErrors.length === VIEWS.length && depthErrors.every((value) => value >= 0.0),
+    actual: depthErrors,
+    required: "reported informationally; the non-watertight reference GLB is not a surface-distance oracle",
+    quality_gate: false,
   };
   const allPassed = Object.values(checks).every((check) => Boolean(check.passed));
   return {
-    schema: "mlx-spatialkit-browser-render-v1",
+    schema: "mlx-spatial-spatialkit-browser-render-v2",
     candidate,
     reference,
     settings: {
@@ -401,14 +607,28 @@ function buildReport({ browserReport, candidate, reference, outputDir, htmlPath,
       height,
       channel,
       views: VIEWS,
+      camera_frame_source: "reference",
     },
     summary: {
       all_passed: allPassed,
+      spatial_proof_ready: allPassed,
+      rendered_visual_ready: allPassed,
+      comparison_kind: "shared-camera-browser-render",
       rendered_view_count: views.length,
       min_visible_pixel_count: minVisible,
       visible_pixel_ratios: ratios,
+      silhouette_ious: silhouetteIous,
+      shared_visible_rgb_mae: rgbErrors,
+      shared_visible_orientation_invariant_normal_mae: normalErrors,
+      shared_visible_depth_mae_radius_ratio: depthErrors,
+      shared_visible_raw_depth_mae: rawDepthErrors,
+      candidate_mean_view_depth_radius_ratios: candidateMeanDepths,
+      reference_mean_view_depth_radius_ratios: referenceMeanDepths,
+      bounding_box_center_offset_ratio: boundsComparison.center_offset_ratio,
+      bounding_box_extent_ratios: boundsComparison.extent_ratios,
     },
     checks,
+    bounds: browserReport.bounds || null,
     views,
     artifacts: {
       report_json: reportPath,
@@ -417,6 +637,32 @@ function buildReport({ browserReport, candidate, reference, outputDir, htmlPath,
       output_dir: outputDir,
     },
   };
+}
+
+function compareBounds(bounds) {
+  const candidate = bounds?.candidate;
+  const reference = bounds?.reference;
+  if (!candidate || !reference) {
+    return { center_offset_ratio: null, extent_ratios: [] };
+  }
+  const referenceDiagonal = Math.hypot(reference.size.x, reference.size.y, reference.size.z);
+  const centerOffset = Math.hypot(
+    candidate.center.x - reference.center.x,
+    candidate.center.y - reference.center.y,
+    candidate.center.z - reference.center.z,
+  );
+  const extentRatios = ["x", "y", "z"].map((axis) => {
+    const denominator = reference.size[axis];
+    return denominator > 0 ? candidate.size[axis] / denominator : null;
+  }).filter(isFiniteNumber);
+  return {
+    center_offset_ratio: referenceDiagonal > 0 ? centerOffset / referenceDiagonal : null,
+    extent_ratios: extentRatios,
+  };
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function augmentVisualReport(visualReportPath, browserReport) {
@@ -444,11 +690,26 @@ function augmentVisualReport(visualReportPath, browserReport) {
   payload.summary = {
     ...(payload.summary || {}),
     browser_rendered_visual_proof: browserReport.summary.all_passed,
+    spatial_proof_ready: browserReport.summary.spatial_proof_ready,
+  };
+  payload.comparison_scope = {
+    kind: "shared-camera-browser-render",
+    spatial_proof: browserReport.summary.spatial_proof_ready,
+    viewer_render_proof: browserReport.summary.rendered_visual_ready,
+    texture_registration_proof: browserReport.summary.rendered_visual_ready,
+    reason: browserReport.summary.all_passed
+      ? "Candidate and reference passed shared-camera bounds, silhouette, and rendered-color checks."
+      : "Shared-camera browser render checks did not all pass.",
   };
   if (browserReport.summary.all_passed && Array.isArray(payload.deferred_parity_boundaries)) {
     payload.deferred_parity_boundaries = payload.deferred_parity_boundaries.filter(
-      (item) => item !== "not_browser_rendered_visual_proof"
+      (item) => item !== "not_spatial_rendered_visual_proof"
     );
+  } else if (
+    Array.isArray(payload.deferred_parity_boundaries)
+    && !payload.deferred_parity_boundaries.includes("not_spatial_rendered_visual_proof")
+  ) {
+    payload.deferred_parity_boundaries.push("not_spatial_rendered_visual_proof");
   }
   writeJson(visualReportPath, payload);
 }
@@ -470,19 +731,19 @@ function augmentArtifactManifest(manifestPath, browserReport) {
 }
 
 function reportHtmlShell() {
-  return "<!doctype html><title>mlx-spatialkit browser render report</title><p>Report is being generated.</p>";
+  return "<!doctype html><title>mlx-spatial SpatialKit browser render report</title><p>Report is being generated.</p>";
 }
 
 function reportHtml(report) {
   const status = report.summary.all_passed ? "PASS" : "FAIL";
   const rows = report.views.map((view) => {
-    return `<tr><td>${escapeHtml(view.name)}</td><td>${view.candidate.visible_pixel_count}</td><td>${view.reference.visible_pixel_count}</td><td>${Number(view.visible_pixel_ratio).toFixed(4)}</td></tr>`;
+    return `<tr><td>${escapeHtml(view.name)}</td><td>${view.candidate.visible_pixel_count}</td><td>${view.reference.visible_pixel_count}</td><td>${formatMetric(view.visible_pixel_ratio)}</td><td>${formatMetric(view.silhouette_iou)}</td><td>${formatMetric(view.shared_visible_depth_mae_radius_ratio)}</td><td>${formatMetric(view.shared_visible_rgb_mae)}</td><td>${formatMetric(view.shared_visible_orientation_invariant_normal_mae)}</td></tr>`;
   }).join("\n");
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>mlx-spatialkit browser render report</title>
+  <title>mlx-spatial SpatialKit browser render report</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: #111; }
     main { max-width: 1100px; margin: 0 auto; }
@@ -494,12 +755,12 @@ function reportHtml(report) {
 </head>
 <body>
 <main>
-  <h1>mlx-spatialkit Browser Render Proof: ${status}</h1>
+  <h1>mlx-spatial SpatialKit Browser Render Proof: ${status}</h1>
   <p>Candidate: <code>${escapeHtml(report.candidate)}</code></p>
   <p>Reference: <code>${escapeHtml(report.reference)}</code></p>
   <img src="${escapeHtml(path.basename(report.artifacts.comparison_png))}" alt="candidate and reference browser render comparison">
   <table>
-    <thead><tr><th>view</th><th>candidate visible px</th><th>reference visible px</th><th>ratio</th></tr></thead>
+    <thead><tr><th>view</th><th>candidate visible px</th><th>reference visible px</th><th>visible ratio</th><th>silhouette IoU</th><th>depth MAE / radius</th><th>RGB MAE</th><th>orientation-invariant normal MAE</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
   <p>Machine report: <a href="${escapeHtml(path.basename(report.artifacts.report_json))}">browser_render_report.json</a></p>
@@ -507,6 +768,10 @@ function reportHtml(report) {
 </body>
 </html>
 `;
+}
+
+function formatMetric(value) {
+  return Number.isFinite(value) ? Number(value).toFixed(4) : "n/a";
 }
 
 function writeJson(filePath, payload) {

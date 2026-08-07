@@ -11,6 +11,7 @@ from plyfile import PlyData
 from safetensors.numpy import save_file
 
 from mlx_spatial.lito import main as lito_main
+from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ def test_pyproject_exposes_lito_script_entry():
 
 def test_cli_validate_returns_zero_on_valid_weights(tmp_path, capsys):
     root = _write_valid_weights(tmp_path / "weights")
+    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
 
     assert lito_main(["validate", str(root)]) == 0
     output = capsys.readouterr().out
@@ -288,6 +290,13 @@ def _write_valid_weights(root: Path) -> Path:
         root / "image_to_3d" / "lito_dit_rgba.safetensors",
     )
     return root
+
+
+def _write_trellis_runtime_assets(root: Path) -> None:
+    for relative_path in LITO_TRELLIS_REQUIRED_FILES:
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
 
 
 def _write_synthetic_image(path: Path) -> Path:

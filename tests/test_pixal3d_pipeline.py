@@ -1004,7 +1004,7 @@ def test_pixal3d_pipeline_uses_optional_spatialkit_export_backend(tmp_path, monk
     assert result.trace.metadata["artifact_paths"][-1] == tmp_path / "out" / "spatialkit-diagnostics.json"
 
 
-def test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing(tmp_path, monkeypatch):
+def test_pixal3d_pipeline_falls_back_when_integrated_spatialkit_import_fails(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"
     _write_pixal3d_test_rgba(image)
@@ -1016,7 +1016,7 @@ def test_pixal3d_pipeline_falls_back_when_optional_spatialkit_is_missing(tmp_pat
     monkeypatch.setattr(
         pixal3d_inference,
         "_load_spatialkit_exporter",
-        lambda: (None, "mlx_spatialkit is not importable; falling back to internal Pixal3D GLB export"),
+        lambda: (None, "mlx_spatial.spatialkit import failed; falling back to internal Pixal3D GLB export"),
     )
 
     result = Pixal3DInferencePipeline(root).generate(

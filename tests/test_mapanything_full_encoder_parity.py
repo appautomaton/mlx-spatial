@@ -21,8 +21,6 @@ from mlx_spatial.mapanything_preprocess import preprocess_mapanything_images
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REFERENCE = Path("/tmp/mapanything-desk-scene-reference.npz")
-
 pytestmark = pytest.mark.skipif(
     os.environ.get(MAPANYTHING_TORCH_PARITY_ENV) != "1",
     reason="opt-in MapAnything Torch reference parity",
@@ -30,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_mapanything_full_encoder_matches_desk_scene_reference():
-    reference_path = Path(os.environ.get("MAPANYTHING_SCENE_REFERENCE", str(DEFAULT_REFERENCE)))
+    reference_path = _reference_path()
     if not reference_path.is_file():
         pytest.fail(
             f"missing scene reference bundle: {reference_path}; run "
@@ -71,3 +69,13 @@ def test_mapanything_full_encoder_matches_desk_scene_reference():
     assert reference.metadata["torch_hub_disabled"] is True
     assert reference.metadata["runtime_depends_on_torch"] is False
     assert report.passed, mapanything_parity_report_to_dict(report)
+
+
+def _reference_path() -> Path:
+    value = os.environ.get("MAPANYTHING_SCENE_REFERENCE")
+    if not value:
+        pytest.fail(
+            "set MAPANYTHING_SCENE_REFERENCE to a parity bundle under the task-specific "
+            "MLX_SPATIAL_TEST_SCRATCH root"
+        )
+    return Path(value)

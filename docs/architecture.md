@@ -12,6 +12,29 @@
 
 These modules should remain model-neutral unless a pipeline contract requires otherwise.
 
+## SpatialKit Boundary
+
+`mlx_spatial.spatialkit` is an integrated namespace inside the one
+`mlx-spatial` distribution, not a separately published package. Its native
+sources live under `native/spatialkit/` and its Python orchestration lives under
+`src/mlx_spatial/spatialkit/`.
+
+The Python boundary is split by responsibility: `export.py` orchestrates the
+conversion, `pixal3d_quality.py` owns measured verdicts and parity gates,
+`pixal3d_reporting.py` owns fixture lineage and report summaries, and
+`xatlas.py` owns global, clustered, and spatially partitioned xatlas behavior.
+
+SpatialKit owns decoded-field mesh extraction, mesh cleanup and diagnostics,
+experimental single-layer QEM conversion, UV generation, Metal PBR texture
+baking, and GLB writing. Dense QEM arithmetic and conflict selection use MLX
+custom Metal kernels; irregular topology rebuilds use deterministic native C++
+multicore code. CUDA implementations are architecture references only and are
+never runtime dependencies on Apple Silicon.
+
+The Pixal3D inference pipeline may opt into this namespace, but SpatialKit
+experiments do not change model inference or the default GLB exporter until the
+recorded quality, runtime, RSS, swap, and visual gates pass.
+
 ## SAM3D Boundary
 
 Entry point: `mlx_spatial.sam3d:main`, exposed as `mlx-spatial-sam3d`.
@@ -159,8 +182,8 @@ Add a script only when it is reusable, has argparse help, writes under `outputs/
 
 The package can inspect, validate, convert, and run local model assets, but the source distribution and wheel must not include:
 
-- `.agent/`, `.codex/`, `.claude/`
+- `.agent/`, `.antigravitycli/`, `.claude/`, `.codex/`, `.opencode/`
 - `weights/`, `inputs/`, `outputs/`, `vendors/`
-- `.venv/`, caches, build outputs, generated probes
+- `.venv/`, caches, `build/`, `*.egg-info/`, generated probes
 
 The artifact checker in `scripts/packaging/check_release_artifacts.py` enforces this release boundary.

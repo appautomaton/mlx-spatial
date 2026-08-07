@@ -8,6 +8,7 @@ from mlx_spatial.checkpoint import inspect_checkpoint
 from mlx_spatial.lito_assets import (
     LITO_DEFAULT_CHECKPOINTS,
     LITO_REPO_ID,
+    LITO_TRELLIS_REQUIRED_FILES,
     convert,
     download_command,
     inspect,
@@ -33,15 +34,33 @@ def _write_lito_fixture(root):
 
 
 def test_validate_layout_passes_on_downloaded_weights(tmp_path):
-    _write_lito_fixture(tmp_path)
+    root = tmp_path / "lito-research-mlx"
+    _write_lito_fixture(root)
+    _write_trellis_fixture(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
 
-    validation = validate(tmp_path)
+    validation = validate(root)
 
     assert validation.ready
     assert validation.missing == ()
     assert validation.present == (
         "tokenizer/lito_new.safetensors",
         "image_to_3d/lito_dit_rgba.safetensors",
+        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json",
+        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+    )
+
+
+def test_validate_reports_missing_trellis_runtime_dependency(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "lito-research-mlx"
+    _write_lito_fixture(root)
+
+    validation = validate(root)
+
+    assert not validation.ready
+    assert validation.missing == (
+        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json",
+        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
     )
 
 
@@ -54,6 +73,13 @@ def test_inspect_lists_expected_tensors(tmp_path):
     assert infos[0].name == "velocity_estimator.blocks.0.weight"
     assert infos[0].shape == (1,)
     assert infos[0].source.endswith("image_to_3d/lito_dit_rgba.safetensors")
+
+
+def _write_trellis_fixture(root):
+    for relative_path in LITO_TRELLIS_REQUIRED_FILES:
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
 
 
 def test_download_command_prints_cdn_invocation_when_hf_has_no_repo():

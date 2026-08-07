@@ -60,10 +60,10 @@ The SAM3D conversion audit compares converted tensors against the original check
 Use the repository script for a stable user-facing command:
 
 ```bash
-python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
+uv run python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
   --mask inputs/sam3d/living-room/mask-3.png \
   --output-dir outputs/sam3d/living-room-script
-python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
+uv run python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
 ```
 
 Equivalent package CLI:
@@ -110,7 +110,7 @@ outputs/sam3d/<run>/trace.json
 The trace records completed stages, selected mask, sparse-structure occupancy and geometry metrics, Gaussian count, Gaussian xyz ranges, and opacity quality. Inspect it with:
 
 ```bash
-python scripts/sam3d/inspect_trace.py outputs/sam3d/<run>/trace.json
+uv run python scripts/sam3d/inspect_trace.py outputs/sam3d/<run>/trace.json
 ```
 
 ## Quality Gates

@@ -21,8 +21,6 @@ from mlx_spatial.mapanything_parity import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REFERENCE = Path("/tmp/mapanything-desk-scene-reference.npz")
-
 pytestmark = pytest.mark.skipif(
     os.environ.get(MAPANYTHING_TORCH_PARITY_ENV) != "1",
     reason="opt-in MapAnything Torch reference parity",
@@ -30,13 +28,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_mapanything_fusion_and_heads_match_desk_scene_reference():
-    reference_path = Path(os.environ.get("MAPANYTHING_SCENE_REFERENCE", str(DEFAULT_REFERENCE)))
+    reference_path = _reference_path()
     if not reference_path.is_file():
         pytest.fail(
             f"missing scene reference bundle: {reference_path}; run "
             "tools/mapanything_dump_torch_scene_reference.py first"
         )
-
     model_root = ROOT / "weights/map-anything"
     if not (model_root / "model.safetensors").is_file():
         pytest.skip("local MapAnything weights are absent")
@@ -123,3 +120,13 @@ def test_mapanything_fusion_and_heads_match_desk_scene_reference():
     assert reference.metadata["runtime_depends_on_torch"] is False
     assert output.trace["dense_output_type"] == "raydirs+depth+confidence+mask"
     assert report.passed, mapanything_parity_report_to_dict(report)
+
+
+def _reference_path() -> Path:
+    value = os.environ.get("MAPANYTHING_SCENE_REFERENCE")
+    if not value:
+        pytest.fail(
+            "set MAPANYTHING_SCENE_REFERENCE to a parity bundle under the task-specific "
+            "MLX_SPATIAL_TEST_SCRATCH root"
+        )
+    return Path(value)

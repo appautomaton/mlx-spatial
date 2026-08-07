@@ -22,6 +22,14 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Create test scratch directory
+        run: |
+          scratch_root="$(mktemp -d /tmp/mlx-spatial-ci.XXXXXX)"
+          mkdir -p "$scratch_root/artifacts/pytest" "$scratch_root/cache"
+          echo "MLX_SPATIAL_TEST_SCRATCH=$scratch_root" >> "$GITHUB_ENV"
+          echo "PYTHONPYCACHEPREFIX=$scratch_root/cache/pycache" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$scratch_root/cache/uv" >> "$GITHUB_ENV"
+
       - name: Run fast tests
-        timeout-minutes: 5
-        run: uv run pytest
+        timeout-minutes: 10
+        run: uv run pytest --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"

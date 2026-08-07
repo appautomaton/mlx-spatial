@@ -24,7 +24,7 @@ mlx-spatial is an [App Automaton](https://appautomaton.github.io) project. The `
 | **MapAnything** | multi-view scene bundle | related scene views | scene `.npz` (depth, cameras, world points) | ✅ Stable |
 | **Pixal3D** | projection-conditioned image → 3D | object-centric RGB/RGBA | trace + NPZ artifacts, textured GLB | 🚧 In development |
 
-**Status:** ✅ Stable = checkpoint-backed, release-ready path · 🚧 In development = partially wired; API and outputs may change.
+**Status:** ✅ Stable = checkpoint-backed, release-ready path · 🚧 In development = checkpoint-backed but not yet release-ready; API and defaults may change.
 
 Pipeline notes:
 
@@ -33,12 +33,12 @@ Pipeline notes:
 - **HY-WorldMirror** — release path covers `camera,depth,normal,points`. The optional Gaussian head is not release-ready.
 - **LiTo** — outputs a Gaussian-splat PLY (not a mesh); open it in a 3DGS-aware viewer.
 - **MapAnything** — outputs a scene `.npz` tensor bundle (not a mesh or splat); uses public `facebook/map-anything` weights.
-- **Pixal3D** — projection-conditioned path being wired into MLX; see [docs/pixal3d.md](docs/pixal3d.md) for the current boundary.
+- **Pixal3D** — checkpoint-backed MLX inference exists; native export defaults and the production-equivalence gate remain in development. See [docs/pixal3d.md](docs/pixal3d.md).
 
 ## Requirements
 
 - Python 3.13
-- Apple Silicon (recommended)
+- Apple Silicon Mac
 - MLX — installed as a package dependency
 - Model weights — downloaded separately into `weights/` (see [Model weights](#model-weights))
 
@@ -54,7 +54,10 @@ Local development from this repo:
 
 ```bash
 uv sync
-uv run pytest -q
+export MLX_SPATIAL_TEST_SCRATCH="$(mktemp -d /tmp/mlx-spatial-test.XXXXXX)"
+mkdir -p "$MLX_SPATIAL_TEST_SCRATCH"/{artifacts,cache}
+export PYTHONPYCACHEPREFIX="$MLX_SPATIAL_TEST_SCRATCH/cache/pycache"
+uv run pytest -q --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"
 ```
 
 ## Command-line tools
@@ -95,6 +98,10 @@ uv run hf download appautomaton/sam-3d-objects-mlx --local-dir weights/sam-3d-ob
 uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
 
 uv run hf download appautomaton/lito-research-mlx --local-dir weights/lito-research-mlx
+uv run hf download microsoft/TRELLIS-image-large \
+  ckpts/ss_dec_conv3d_16l8_fp16.json \
+  ckpts/ss_dec_conv3d_16l8_fp16.safetensors \
+  --local-dir weights/trellis2/microsoft/TRELLIS-image-large
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 
@@ -129,7 +136,7 @@ The examples below use the `scripts/` wrappers. Most pipelines also emit a `trac
 Provide an image and the exact object mask you want reconstructed:
 
 ```bash
-python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
+uv run python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
   --mask inputs/sam3d/living-room/mask-3.png \
   --output-dir outputs/sam3d/living-room-script
 ```
@@ -137,7 +144,7 @@ python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
 Output: `gaussians.ply`, `trace.json`. Inspect the trace with:
 
 ```bash
-python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
+uv run python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.json
 ```
 
 ### TRELLIS.2 — textured GLB
@@ -145,7 +152,7 @@ python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-script/trace.jso
 Use an object-centric image. RGBA images use their alpha channel directly; RGB images use RMBG to estimate the foreground.
 
 ```bash
-python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \
+uv run python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \
   --output-dir outputs/trellis2/cup-of-tea-script
 ```
 
@@ -158,7 +165,7 @@ Defaults are quality-oriented for Apple Silicon: 512 pipeline, model-config samp
 Provide a scene image or a directory of scene frames. This pipeline does not take an object mask.
 
 ```bash
-python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \
+uv run python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \
   --output-dir outputs/hyworld2/kidsroom-scene-script
 ```
 
@@ -171,7 +178,7 @@ Uses the verified release path (real Tencent safetensors, `large` memory profile
 Use an object-centric image, ideally with an alpha mask.
 
 ```bash
-python scripts/lito/generate.py inputs/lito/sample.png \
+uv run python scripts/lito/generate.py inputs/lito/sample.png \
   --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
   --memory-profile balanced \
@@ -187,7 +194,7 @@ LiTo writes a Gaussian-splat PLY, not a mesh. Use a 3DGS-aware viewer such as KI
 Provide a directory of related scene views. The Desk example is a two-image scene.
 
 ```bash
-python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
+uv run python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
   --output-dir outputs/mapanything/desk-script
 ```
 
@@ -200,7 +207,7 @@ Uses the upstream image-only inference settings: `fixed_mapping` preprocessing, 
 By default Pixal3D derives camera parameters from the converted MLX MoGe root; pass `--manual-fov 0.2` only when you want the explicit override.
 
 ```bash
-python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
+uv run python scripts/pixal3d/generate.py vendors/Pixal3D/assets/images/0_img.png \
   --root weights/pixal3d \
   --dino-root weights/dinov3-vitl16-pretrain-lvd1689m \
   --moge-root weights/sam-3d-objects-mlx/moge \
@@ -246,13 +253,15 @@ vendors/           ignored upstream checkouts
 Build and inspect the artifacts before publishing:
 
 ```bash
-uv run pytest -q
-rm -rf dist
-uv build
-python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-*.tar.gz \
-  dist/mlx_spatial-*-py3-none-any.whl
-python scripts/packaging/check_release_artifacts.py --git-hygiene
+release_tmp="$(mktemp -d /tmp/mlx-spatial-release.XXXXXX)"
+mkdir -p "$release_tmp"/{artifacts/pytest,cache/pycache,dist}
+export PYTHONPYCACHEPREFIX="$release_tmp/cache/pycache"
+uv run pytest -q --basetemp "$release_tmp/artifacts/pytest"
+uv build --out-dir "$release_tmp/dist"
+uv run python scripts/packaging/check_release_artifacts.py \
+  "$release_tmp"/dist/mlx_spatial-*.tar.gz \
+  "$release_tmp"/dist/mlx_spatial-*-py3-none-any.whl
+uv run python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
 The build must exclude local weights, generated outputs, inputs, vendor checkouts, caches, and agent state. Publishing is handled by the trusted-publishing workflow in `.github/workflows/workflow.yaml` — do not publish from local shell credentials.

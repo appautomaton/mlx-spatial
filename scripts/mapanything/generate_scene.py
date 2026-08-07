@@ -18,7 +18,7 @@ Recommended settings:
     postprocessing with masks and edge masks.
 
 Example:
-    python scripts/mapanything/generate_scene.py inputs/map-anything/desk \\
+    uv run python scripts/mapanything/generate_scene.py inputs/map-anything/desk \\
       --output-dir outputs/mapanything/desk-script
 """
 

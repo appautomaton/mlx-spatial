@@ -38,7 +38,7 @@ upstream model license and access terms.
 Use the repository script for the recommended path:
 
 ```bash
-python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
+uv run python scripts/mapanything/generate_scene.py inputs/map-anything/desk \
   --output-dir outputs/mapanything/desk-script
 ```
 
@@ -117,8 +117,12 @@ Dev-only Torch reference capture is guarded by:
 MAPANYTHING_TORCH_REF=1 uv run --group torch-ref \
   python tools/mapanything_dump_torch_scene_reference.py \
   weights/map-anything inputs/map-anything/desk \
-  --output /tmp/mapanything-desk-scene-reference.npz
+  --output "$MLX_SPATIAL_TEST_SCRATCH/inputs/mapanything-desk-scene-reference.npz"
 ```
+
+Set `MAPANYTHING_SCENE_REFERENCE` to that file before running the opt-in parity
+tests. Create `MLX_SPATIAL_TEST_SCRATCH` as described in `development.md`; do
+not use a shared fixed `/tmp` filename.
 
 Runtime generation does not require that command.
 
@@ -128,5 +132,6 @@ The supported MapAnything artifact is not a mesh and not a Gaussian Splat PLY.
 A colored point cloud can be derived from `world_points`, `images`, and `masks`
 for inspection, but that is a viewer/export step outside the runtime contract.
 
-Temporary HTML or PLY viewers under `/tmp` are useful for visual checks. They
-should not be treated as the formal package output.
+Temporary HTML or PLY viewers under
+`$MLX_SPATIAL_TEST_SCRATCH/artifacts/mapanything-viewer/` are useful for visual
+checks. They should not be treated as the formal package output.

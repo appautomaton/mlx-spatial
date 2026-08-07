@@ -13,7 +13,7 @@ Production defaults:
     smoke tests where broken-looking geometry is acceptable.
 
 Example:
-    python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \\
+    uv run python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \\
       --output-dir outputs/trellis2/cup-of-tea-script
 """
 

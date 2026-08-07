@@ -30,8 +30,10 @@ This bundle is for users who want masked single-image object reconstruction on a
 Install `mlx-spatial`:
 
 ```bash
-pip install mlx-spatial
+pip install mlx-spatial==0.0.3
 ```
+
+This model card targets `mlx-spatial` 0.0.3.
 
 Download this model bundle:
 
@@ -161,6 +163,8 @@ This bundle is based on Meta's SAM 3D Objects release and includes a converted M
 - MoGe dependency: included as converted `moge/model.safetensors`
 
 The original SAM 3D Objects checkpoints and code are licensed by Meta under the SAM License. The included MoGe dependency follows its own upstream license and terms.
+
+License and gated source access last checked: 2026-08-06.
 
 This repository is not an official Meta or MoGe release. Users are responsible for complying with the upstream SAM 3D Objects and MoGe license, access, and use requirements.
 

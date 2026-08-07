@@ -477,8 +477,12 @@ def _depth_to_world_points(
         for frame_index in range(frames):
             z = depth[batch_index, frame_index]
             intr = intrinsics[batch_index, frame_index]
-            x = (u_grid - intr[0, 2]) * z / intr[0, 0]
-            y = (v_grid - intr[1, 2]) * z / intr[1, 1]
+            # Fixture and model depths may contain non-finite background values.
+            # Preserve them for the downstream finite-splat filter without
+            # emitting per-pixel NumPy warnings during projection.
+            with np.errstate(invalid="ignore"):
+                x = (u_grid - intr[0, 2]) * z / intr[0, 0]
+                y = (v_grid - intr[1, 2]) * z / intr[1, 1]
             camera_points = np.stack((x, y, z), axis=-1)
             pose = c2w[batch_index, frame_index]
             output[batch_index, frame_index] = camera_points @ pose[:3, :3].T + pose[:3, 3]

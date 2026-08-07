@@ -17,7 +17,7 @@ Recommended settings:
     Use safe only for lower-memory debug runs; large is for capacity probes.
 
 Example:
-    python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \\
+    uv run python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \\
       --mask inputs/sam3d/living-room/mask-3.png \\
       --output-dir outputs/sam3d/living-room-script
 """

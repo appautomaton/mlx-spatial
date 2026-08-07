@@ -11,21 +11,22 @@ Required state:
 - License metadata points at top-level `LICENSE`.
 - Repository URL points at `https://github.com/appautomaton/mlx-spatial`.
 - Package CLIs are present for SAM3D, TRELLIS.2, HY-World-2.0, LiTo, MapAnything, and Pixal3D.
-- Hatch build config excludes local assets, vendors, caches, generated outputs, and agent state.
+- scikit-build-core builds the integrated C++/Metal extension and excludes local assets, vendors, caches, generated outputs, and agent state.
 
 ## Preflight
 
 ```bash
-uv run pytest -q
-rm -rf dist
-uv build
-python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-*.tar.gz \
-  dist/mlx_spatial-*-py3-none-any.whl
-python scripts/packaging/check_release_artifacts.py --git-hygiene
+release_tmp="$(mktemp -d /tmp/mlx-spatial-release.XXXXXX)"
+export UV_CACHE_DIR="$release_tmp/cache/uv"
+mkdir -p "$UV_CACHE_DIR" "$release_tmp/artifacts/pytest" "$release_tmp/dist"
+export PYTHONPYCACHEPREFIX="$release_tmp/cache/pycache"
+uv run pytest -q --basetemp "$release_tmp/artifacts/pytest"
+uv build --out-dir "$release_tmp/dist"
+uv run python scripts/packaging/check_release_artifacts.py \
+  "$release_tmp"/dist/mlx_spatial-*.tar.gz \
+  "$release_tmp"/dist/mlx_spatial-*.whl
+uv run python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
-
-Use `UV_CACHE_DIR=/tmp/mlx-spatial-uv-cache` if the default home cache is not writable in a sandboxed session.
 
 Smoke checks:
 
@@ -36,21 +37,23 @@ uv run mlx-spatial-hyworld2 --help
 uv run mlx-spatial-lito --help
 uv run mlx-spatial-mapanything --help
 uv run mlx-spatial-pixal3d --help
-python scripts/sam3d/reconstruct.py --help
-python scripts/trellis2/generate_textured.py --help
-python scripts/hyworld2/generate_scene.py --help
-python scripts/lito/generate.py --help
-python scripts/mapanything/generate_scene.py --help
-python scripts/pixal3d/generate.py --help
+uv run python -c "from mlx_spatial.spatialkit import backend_info; print(backend_info())"
+uv run python scripts/sam3d/reconstruct.py --help
+uv run python scripts/trellis2/generate_textured.py --help
+uv run python scripts/hyworld2/generate_scene.py --help
+uv run python scripts/lito/generate.py --help
+uv run python scripts/mapanything/generate_scene.py --help
+uv run python scripts/pixal3d/generate.py --help
 ```
 
 When local gated weights are available, run one documented SAM3D reconstruction and inspect the trace:
 
 ```bash
-python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
+uv run python scripts/sam3d/reconstruct.py inputs/sam3d/living-room/image.png \
   --mask inputs/sam3d/living-room/mask-3.png \
-  --output-dir outputs/sam3d/living-room-release-smoke
-python scripts/sam3d/inspect_trace.py outputs/sam3d/living-room-release-smoke/trace.json
+  --output-dir "$release_tmp/outputs/sam3d/living-room-release-smoke"
+uv run python scripts/sam3d/inspect_trace.py \
+  "$release_tmp/outputs/sam3d/living-room-release-smoke/trace.json"
 ```
 
 If gated weights are not available, record that this smoke was skipped and include the structured blocker.
@@ -61,9 +64,13 @@ The sdist and wheel must exclude:
 
 ```text
 .agent/
+.antigravitycli/
 .claude/
 .codex/
+.opencode/
 .venv/
+build/
+*.egg-info/
 weights/
 inputs/
 outputs/

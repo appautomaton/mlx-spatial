@@ -13,11 +13,14 @@ from pathlib import Path
 
 BLOCKED_PATH_PARTS = {
     ".agent",
+    ".antigravitycli",
     ".claude",
     ".codex",
+    ".opencode",
     ".pytest_cache",
     ".ruff_cache",
     ".venv",
+    "build",
     "dist",
     "inputs",
     "outputs",
@@ -27,8 +30,9 @@ BLOCKED_PATH_PARTS = {
 }
 
 BLOCKED_SUFFIXES = {".pyc", ".pyo", ".DS_Store"}
+BLOCKED_COMPONENT_SUFFIXES = {".egg-info"}
 
-GIT_HYGIENE_BLOCKED_PATH_PARTS = BLOCKED_PATH_PARTS - {".agent", ".claude", ".codex"}
+GIT_HYGIENE_BLOCKED_PATH_PARTS = BLOCKED_PATH_PARTS
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,8 +77,39 @@ def _check_artifact(path: Path) -> list[str]:
         blocked = BLOCKED_PATH_PARTS.intersection(parts)
         if blocked:
             errors.append(f"{path}: blocked path component {sorted(blocked)} in {name}")
+        blocked_suffix_parts = [
+            part for part in parts if any(part.endswith(suffix) for suffix in BLOCKED_COMPONENT_SUFFIXES)
+        ]
+        if blocked_suffix_parts:
+            errors.append(f"{path}: blocked path component {blocked_suffix_parts} in {name}")
         if any(normalized.endswith(suffix) for suffix in BLOCKED_SUFFIXES):
             errors.append(f"{path}: blocked generated file {name}")
+        if normalized.startswith("mlx_spatialkit/") or "/mlx_spatialkit/" in normalized:
+            errors.append(f"{path}: obsolete standalone mlx_spatialkit package path {name}")
+    if path.suffix == ".whl":
+        required_suffixes = (
+            "mlx_spatial/spatialkit/__init__.py",
+            "mlx_spatial/spatialkit/texture_bake.metal",
+        )
+        for suffix in required_suffixes:
+            if not any(name.replace("\\", "/").endswith(suffix) for name in names):
+                errors.append(f"{path}: missing integrated SpatialKit resource {suffix}")
+        if not any(
+            name.replace("\\", "/").startswith("mlx_spatial/spatialkit/_native")
+            and name.endswith(".so")
+            for name in names
+        ):
+            errors.append(f"{path}: missing integrated SpatialKit native extension")
+    elif path.name.endswith(".tar.gz"):
+        required_suffixes = (
+            "/CMakeLists.txt",
+            "/native/spatialkit/cpp/bindings.cpp",
+            "/native/spatialkit/metal/kernels/texture_bake.metal",
+            "/src/mlx_spatial/spatialkit/__init__.py",
+        )
+        for suffix in required_suffixes:
+            if not any(name.replace("\\", "/").endswith(suffix) for name in names):
+                errors.append(f"{path}: missing integrated SpatialKit source {suffix}")
     return errors
 
 
@@ -101,7 +136,11 @@ def _check_git_hygiene() -> list[str]:
         normalized = path.replace("\\", "/")
         parts = [part for part in normalized.split("/") if part]
         blocked = GIT_HYGIENE_BLOCKED_PATH_PARTS.intersection(parts)
+        if normalized == ".agent/work" or normalized.startswith(".agent/work/"):
+            blocked.discard(".agent")
         if blocked:
+            errors.append(f"git status includes generated/local path {path}")
+        if any(part.endswith(suffix) for part in parts for suffix in BLOCKED_COMPONENT_SUFFIXES):
             errors.append(f"git status includes generated/local path {path}")
         if any(normalized.endswith(suffix) for suffix in BLOCKED_SUFFIXES):
             errors.append(f"git status includes generated file {path}")

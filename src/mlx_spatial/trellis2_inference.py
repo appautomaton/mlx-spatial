@@ -68,7 +68,7 @@ TRELLIS2_SHAPE_MAX_NUM_TOKENS = 49_152
 TRELLIS2_SHAPE_SEED = 42
 TRELLIS2_TEXTURE_SIZE = 1024
 
-Trellis2StageStatus = Literal["ready", "blocked", "unimplemented"]
+Trellis2StageStatus = Literal["ready", "blocked", "available"]
 
 TRELLIS2_INFERENCE_STAGES = (
     "input-image",
@@ -143,7 +143,7 @@ class Trellis2TexturedGenerationResult:
 
 
 class Trellis2InferencePipeline:
-    """Inference-only TRELLIS.2 pipeline attempt that stops at missing MLX compute."""
+    """Inference-only TRELLIS.2 pipeline with lightweight readiness probes."""
 
     stages = TRELLIS2_INFERENCE_STAGES
 
@@ -181,17 +181,15 @@ class Trellis2InferencePipeline:
             )
         )
 
-        blocker = _unimplemented_blocker("image-preprocessing-background")
         for stage in TRELLIS2_INFERENCE_STAGES[3:]:
             reports.append(
                 Trellis2StageReport(
                     stage=stage,
-                    status="unimplemented",
-                    detail="MLX compute stage is not implemented",
-                    blocker=_unimplemented_blocker(stage),
+                    status="available",
+                    detail="implemented; execution is not attempted by dry_run",
                 )
             )
-        return Trellis2ReadinessReport(root=self.root, ready=False, stages=tuple(reports), blocker=blocker)
+        return Trellis2ReadinessReport(root=self.root, ready=True, stages=tuple(reports))
 
     def attempt(self, image_path: str | Path, *, load_probes: bool = False) -> Trellis2AttemptReport:
         image = Path(image_path)
@@ -223,7 +221,7 @@ class Trellis2InferencePipeline:
                         root=self.root,
                         image_path=image,
                         completed_stages=tuple(completed),
-                        blocker=_unimplemented_blocker("image-conditioning"),
+                        blocker=_not_executed_blocker("image-conditioning"),
                     )
                 return Trellis2AttemptReport(
                     root=self.root,
@@ -1950,7 +1948,7 @@ def _missing_assets_blocker(missing: tuple[str, ...]) -> Trellis2InferenceBlocke
 
 def _preprocess_blocker(blocker: Trellis2PreprocessBlocker | None) -> Trellis2InferenceBlocker:
     if blocker is None:
-        return _unimplemented_blocker("image-preprocessing-background")
+        return _not_executed_blocker("image-preprocessing-background")
     return Trellis2InferenceBlocker(
         stage=blocker.stage,
         operation=blocker.operation,
@@ -1962,7 +1960,7 @@ def _preprocess_blocker(blocker: Trellis2PreprocessBlocker | None) -> Trellis2In
 
 def _forward_blocker(blocker: Trellis2InferenceBlocker | None) -> Trellis2ForwardBlocker:
     if blocker is None:
-        blocker = _unimplemented_blocker("image-conditioning")
+        blocker = _not_executed_blocker("image-conditioning")
     return Trellis2ForwardBlocker(
         stage=blocker.stage,
         operation=blocker.operation,
@@ -2015,7 +2013,7 @@ def _decode_resolution(pipeline_type: str) -> int:
     raise ValueError(f"unsupported decode pipeline type: {pipeline_type}")
 
 
-def _unimplemented_blocker(stage: str) -> Trellis2InferenceBlocker:
+def _not_executed_blocker(stage: str) -> Trellis2InferenceBlocker:
     references = {
         "image-preprocessing-background": "vendors/TRELLIS.2/trellis2/pipelines/trellis2_image_to_3d.py:127-162",
         "image-conditioning": "vendors/TRELLIS.2/trellis2/pipelines/trellis2_image_to_3d.py:164-186",
@@ -2040,6 +2038,6 @@ def _unimplemented_blocker(stage: str) -> Trellis2InferenceBlocker:
         stage=stage,
         operation=operations.get(stage, "MLX compute stage"),
         reference=references.get(stage, ".agent/work/trellis-e2e-inference-attempt/FLOW.md"),
-        reason="stage is traced but not implemented in MLX",
-        next_slice=f"implement {stage} for TRELLIS.2 inference",
+        reason="stage is implemented but was not executed by this lightweight attempt",
+        next_slice="use attempt_forward_trace or a generation command to execute the remaining stages",
     )

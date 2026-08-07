@@ -56,14 +56,14 @@ estimate the foreground alpha, so validate `weights/rmbg2/` before RGB runs.
 Recommended textured GLB script:
 
 ```bash
-python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \
+uv run python scripts/trellis2/generate_textured.py inputs/trellis2/cup-of-tea.jpg \
   --output-dir outputs/trellis2/cup-of-tea-script
 ```
 
 Shape-only OBJ script:
 
 ```bash
-python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg \
+uv run python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg \
   --output-dir outputs/trellis2/cup-of-tea-shape-script
 ```
 
@@ -71,6 +71,12 @@ The script defaults are quality-oriented for Apple Silicon: 512 pipeline,
 model-config SLat sampler steps, 1024 texture for GLB, 200k GLB face target,
 global xatlas unwrap, and kdtree texture baking. Do not pass `--slat-steps` for
 quality runs. Low step counts are only for explicit smoke tests.
+
+The shared MLX geometry layer includes a narrow-band dual-contour remesh
+primitive, but TRELLIS.2 export does not yet select it as an integrated
+postprocess stage. Current GLB output uses the documented cleanup,
+simplification, xatlas, and texture-bake path; do not interpret the shared
+primitive alone as remeshing parity with upstream cuMesh.
 
 ## Outputs
 

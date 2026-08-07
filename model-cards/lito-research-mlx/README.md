@@ -27,14 +27,20 @@ This bundle is for researchers who want a practical Mac-native LiTo inference pa
 Install `mlx-spatial`:
 
 ```bash
-pip install mlx-spatial
+pip install mlx-spatial==0.0.3
 ```
+
+This model card targets `mlx-spatial` 0.0.3.
 
 Download this model bundle:
 
 ```bash
 hf download appautomaton/lito-research-mlx \
   --local-dir weights/lito-research-mlx
+hf download microsoft/TRELLIS-image-large \
+  ckpts/ss_dec_conv3d_16l8_fp16.json \
+  ckpts/ss_dec_conv3d_16l8_fp16.safetensors \
+  --local-dir weights/trellis2/microsoft/TRELLIS-image-large
 ```
 
 Validate the local layout:
@@ -50,7 +56,7 @@ Generate a Gaussian-splat PLY:
 mlx-spatial-lito generate inputs/lito/sample.png \
   --weights-root weights/lito-research-mlx \
   --output outputs/lito/sample.ply \
-  --memory-profile safe \
+  --memory-profile balanced \
   --print-metrics
 ```
 
@@ -72,7 +78,18 @@ tokenizer/conversion_metadata/lito_new.yaml
 image_to_3d/conversion_metadata/lito_dit_rgba.yaml
 ```
 
-End-to-end LiTo generation in `mlx-spatial` also needs the TRELLIS sparse-structure decoder weights from the separate TRELLIS.2 setup. Those TRELLIS.2 weights are not included in this LiTo bundle.
+End-to-end LiTo generation also needs these two files from the separate
+`microsoft/TRELLIS-image-large` repository:
+
+```text
+weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json
+weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors
+```
+
+They are not part of the newer `microsoft/TRELLIS.2-4B` bundle and are not
+included in this LiTo repository. `mlx-spatial-lito validate` checks both the
+LiTo checkpoints and this runtime decoder dependency; `inspect` reads only the
+LiTo safetensors.
 
 ## Best For
 
@@ -111,6 +128,8 @@ This bundle is based on Apple's LiTo research release:
 - Apple model license: https://github.com/apple/ml-lito/blob/main/LICENSE_MODEL
 
 Apple's LiTo model weights are released under the Apple Machine Learning Research Model License Agreement. Use is limited to non-commercial scientific research and academic development activities. Commercial product use is not permitted.
+
+License and source access last checked: 2026-08-06.
 
 This repository is not an Apple release and is not endorsed by Apple. Redistribution of this converted bundle must keep Apple's license terms, attribution notice, and modification disclosure.
 

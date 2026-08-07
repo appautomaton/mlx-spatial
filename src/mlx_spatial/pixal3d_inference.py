@@ -1,11 +1,11 @@
-"""Pixal3D inference orchestration skeleton."""
+"""Pixal3D inference orchestration."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -92,12 +92,9 @@ PIXAL3D_DEFAULT_NAF_COORDINATE_CHUNK_SIZE = 8192
 PIXAL3D_DEFAULT_MOGE_ROOT = SAM3D_MOGE_DEFAULT_ROOT
 PIXAL3D_DEFAULT_MOGE_MEMORY_PROFILE = "balanced"
 
-Pixal3DStageStatus = Literal["ready", "blocked", "unimplemented"]
-
-
 @dataclass(frozen=True)
 class Pixal3DInferenceBlocker:
-    """Structured blocker returned before unsupported Pixal3D compute/export boundaries."""
+    """Structured blocker returned when a Pixal3D compute or export stage cannot continue."""
 
     stage: str
     operation: str
@@ -138,7 +135,7 @@ class Pixal3DGenerationResult:
 
 
 class Pixal3DInferencePipeline:
-    """Pixal3D runtime skeleton that validates setup before MLX model execution."""
+    """Checkpoint-backed Pixal3D MLX inference and export pipeline."""
 
     def __init__(self, root: str | Path = PIXAL3D_DEFAULT_ROOT):
         self.root = Path(root)
@@ -1998,7 +1995,7 @@ class Pixal3DInferencePipeline:
                             max_num_tokens,
                             output_path,
                             "mesh-export",
-                            "export decoded Pixal3D NPZ artifacts through mlx-spatialkit",
+                            "export decoded Pixal3D NPZ artifacts through integrated mlx_spatial.spatialkit",
                             str(error),
                             {
                                 **shape_decode_shape,
@@ -2047,7 +2044,9 @@ class Pixal3DInferencePipeline:
                         "missing_texel_count": int(texture_bake_stats.get("missing_texel_count", 0)),
                         "out_of_grid_texel_count": int(texture_bake_stats.get("out_of_grid_texel_count", 0)),
                         "source_projection_used": False,
-                        "source_projection_detail": "mlx-spatialkit export uses decoded NPZ artifacts directly",
+                        "source_projection_detail": (
+                            "integrated mlx_spatial.spatialkit export uses decoded NPZ artifacts directly"
+                        ),
                     }
                     completed.append("mesh-export")
                     completed.append("artifact:textured_glb")
@@ -2309,9 +2308,9 @@ def _validate_pixal3d_export_guards(
 
 def _load_spatialkit_exporter() -> tuple[Any | None, str | None]:
     try:
-        from mlx_spatialkit import export_pixal3d_glb
+        from .spatialkit import export_pixal3d_glb
     except ImportError as error:
-        return None, f"mlx_spatialkit is not importable; falling back to internal Pixal3D GLB export: {error}"
+        return None, f"mlx_spatial.spatialkit is not importable; falling back to internal Pixal3D GLB export: {error}"
     return export_pixal3d_glb, None
 
 

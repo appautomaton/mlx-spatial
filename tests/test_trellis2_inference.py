@@ -228,12 +228,12 @@ def test_blocker_structure_has_required_fields():
     assert blocker.next_slice == "implement image conditioning"
 
 
-def test_dry_run_validates_fake_assets_and_reports_unimplemented_stage(tmp_path):
+def test_dry_run_validates_fake_assets_and_reports_available_stages(tmp_path):
     _write_trellis2_root(tmp_path)
 
     report = Trellis2InferencePipeline(tmp_path).dry_run()
 
-    assert not report.ready
+    assert report.ready
     assert [stage.stage for stage in report.stages[:3]] == [
         "asset-config-validation",
         "checkpoint-probe-readiness",
@@ -241,10 +241,9 @@ def test_dry_run_validates_fake_assets_and_reports_unimplemented_stage(tmp_path)
     ]
     assert report.stages[0].status == "ready"
     assert report.stages[1].status == "ready"
-    assert report.stages[2].status == "unimplemented"
-    assert report.blocker is not None
-    assert report.blocker.stage == "image-preprocessing-background"
-    assert "trellis2_image_to_3d.py:127-162" in report.blocker.reference
+    assert report.stages[2].status == "available"
+    assert report.stages[2].blocker is None
+    assert report.blocker is None
 
 
 def test_dry_run_can_load_fake_weight_probes(tmp_path):

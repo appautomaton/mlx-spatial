@@ -7,7 +7,8 @@ import pytest
 
 from mlx_spatial.ovoxel import flatten_coordinates
 
-LOCAL_PYTORCH = Path("/Users/ac/dev/ai/ai-frameworks/pytorch")
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL_PYTORCH = Path(os.environ.get("MLX_SPATIAL_TORCH_ROOT", str(ROOT / "vendors/pytorch")))
 
 pytestmark = pytest.mark.torch_parity
 

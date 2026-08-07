@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     name: Build release artifacts
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     permissions:
       contents: read
     steps:
@@ -20,6 +20,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
 
       - name: Build package
         run: |
@@ -30,7 +32,12 @@ jobs:
         run: |
           python scripts/packaging/check_release_artifacts.py \
             dist/mlx_spatial-*.tar.gz \
-            dist/mlx_spatial-*-py3-none-any.whl
+            dist/mlx_spatial-*.whl
+
+      - name: Smoke-test integrated native backend
+        run: >-
+          uv run python -c
+          "from mlx_spatial.spatialkit import backend_info; info = backend_info(); assert info['native']; print(info)"
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7

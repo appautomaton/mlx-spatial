@@ -1,6 +1,9 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = [
+    "nanobind>=2.9",
+    "scikit-build-core>=1.0",
+]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "mlx-spatial"
@@ -20,13 +23,13 @@ classifiers = [
 ]
 dependencies = [
     "fast-simplification>=0.1.13",
-    "mlx",
+    "mlx>=0.32.0,<0.33",
     "numpy",
     "pillow>=12.2.0",
     "pyyaml>=6.0",
     "safetensors",
     "scipy>=1.17.1",
-    "xatlas>=0.0.11",
+    "xatlas==0.0.11",
 ]
 
 [dependency-groups]
@@ -65,15 +68,24 @@ mlx-spatial-lito = "mlx_spatial.lito:main"
 mlx-spatial-mapanything = "mlx_spatial.mapanything:main"
 mlx-spatial-pixal3d = "mlx_spatial.pixal3d:main"
 
-[tool.hatch.build.targets.wheel]
+[tool.scikit-build]
+minimum-version = "1.0"
+
+[tool.scikit-build.cmake.define]
+CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
+
+[tool.scikit-build.wheel]
 packages = ["src/mlx_spatial"]
 
-[tool.hatch.build.targets.sdist]
+[tool.scikit-build.sdist]
+inclusion-mode = "explicit"
 include = [
     "/.github",
+    "/CMakeLists.txt",
     "/LICENSE",
     "/README.md",
     "/docs",
+    "/native/**",
     "/pyproject.toml",
     "/scripts",
     "/src",
@@ -82,21 +94,30 @@ include = [
 ]
 exclude = [
     "/.agent",
+    "/.antigravitycli",
     "/.claude",
     "/.codex",
+    "/.opencode",
     "/.pytest_cache",
     "/.ruff_cache",
     "/.venv",
+    "/build",
     "/dist",
     "/inputs",
     "/outputs",
+    "/packages",
     "/vendors",
     "/weights",
+    "/**/*.egg-info",
+    "/**/.DS_Store",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "**/*.pyo",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not heavy'"
+addopts = "-m 'not heavy' -p no:cacheprovider"
 markers = [
     "heavy: opt-in tests that load real weights, require Metal, or use large tensors",
     "torch_parity: optional parity checks against the local PyTorch checkout",

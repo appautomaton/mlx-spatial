@@ -17,7 +17,7 @@ Production defaults:
     directly for development probes until that export path is production-ready.
 
 Example:
-    python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \\
+    uv run python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \\
       --output-dir outputs/hyworld2/kidsroom-scene-script
 """
 

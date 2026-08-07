@@ -20,7 +20,7 @@ Smoke/debug:
     framework probes. That path does not produce checkpoint-backed LiTo output.
 
 Example:
-    python scripts/lito/generate.py inputs/lito/sample.png \\
+    uv run python scripts/lito/generate.py inputs/lito/sample.png \\
       --output outputs/lito/sample.ply
 """
 

@@ -20,6 +20,8 @@ LITO_REPO_ID = "apple/ml-lito"
 LITO_CDN_BASE_URL = "https://ml-site.cdn-apple.com/models/lito"
 LITO_RAW_DEFAULT_ROOT = "weights/lito-raw"
 LITO_DEFAULT_ROOT = "weights/lito-research-mlx"
+LITO_TRELLIS_REPO_ID = "microsoft/TRELLIS-image-large"
+LITO_TRELLIS_DEFAULT_ROOT = "weights/trellis2/microsoft/TRELLIS-image-large"
 LITO_COMPONENT_GROUPS = (
     "tokenizer",
     "image_conditioner",
@@ -29,6 +31,10 @@ LITO_COMPONENT_GROUPS = (
 LITO_DEFAULT_CHECKPOINTS = (
     ("tokenizer", "lito_new.ckpt", "tokenizer/lito_new.safetensors"),
     ("image_to_3d", "lito_dit_rgba.ckpt", "image_to_3d/lito_dit_rgba.safetensors"),
+)
+LITO_TRELLIS_REQUIRED_FILES = (
+    "ckpts/ss_dec_conv3d_16l8_fp16.json",
+    "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
 )
 LITO_MODEL_LICENSE = "Apple Machine Learning Research Model License Agreement"
 LITO_SAMPLE_LICENSE = "CC BY-NC-ND 4.0"
@@ -40,6 +46,7 @@ class LitoAssetValidation:
 
     root: Path
     checkpoint_paths: tuple[Path, ...]
+    runtime_dependency_paths: tuple[Path, ...]
     present: tuple[str, ...]
     missing: tuple[str, ...]
 
@@ -48,15 +55,23 @@ class LitoAssetValidation:
         return not self.missing
 
 
-def validate(root: str | Path = LITO_DEFAULT_ROOT) -> LitoAssetValidation:
-    """Validate a converted LiTo checkpoint root without loading tensors."""
+def validate(
+    root: str | Path = LITO_DEFAULT_ROOT,
+    *,
+    include_runtime_dependencies: bool = True,
+) -> LitoAssetValidation:
+    """Validate a LiTo root and, by default, all checkpoint-backed runtime assets."""
 
     root_path = Path(root)
     checkpoint_paths = tuple(root_path / relative_path for _, _, relative_path in LITO_DEFAULT_CHECKPOINTS)
+    runtime_dependency_paths: tuple[Path, ...] = ()
+    if include_runtime_dependencies:
+        trellis_root = _resolve_validation_trellis_root(root_path)
+        runtime_dependency_paths = tuple(trellis_root / relative_path for relative_path in LITO_TRELLIS_REQUIRED_FILES)
     present: list[str] = []
     missing: list[str] = []
-    for path in checkpoint_paths:
-        relative = _relative_report_path(root_path, path)
+    for path in (*checkpoint_paths, *runtime_dependency_paths):
+        relative = _runtime_report_path(root_path, path)
         if path.is_file():
             present.append(relative)
         else:
@@ -65,6 +80,7 @@ def validate(root: str | Path = LITO_DEFAULT_ROOT) -> LitoAssetValidation:
     return LitoAssetValidation(
         root=root_path,
         checkpoint_paths=checkpoint_paths,
+        runtime_dependency_paths=runtime_dependency_paths,
         present=tuple(present),
         missing=tuple(missing),
     )
@@ -80,7 +96,7 @@ def inspect(
     if limit <= 0:
         raise ValueError("limit must be positive")
 
-    validation = validate(root)
+    validation = validate(root, include_runtime_dependencies=False)
     if not validation.ready:
         raise FileNotFoundError(f"missing LiTo checkpoint assets: {', '.join(validation.missing)}")
 
@@ -247,6 +263,38 @@ def _convert_with_torch_fallback(source: Path, output: Path, *, converter_error:
 def _relative_report_path(root: Path, path: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def lito_trellis_root_candidates(root: str | Path = LITO_DEFAULT_ROOT) -> tuple[Path, ...]:
+    """Return the supported TRELLIS decoder roots for a LiTo weights root."""
+
+    root_path = Path(root)
+    candidates = (
+        root_path.parent / "trellis2" / "microsoft" / "TRELLIS-image-large",
+        Path(LITO_TRELLIS_DEFAULT_ROOT),
+    )
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return tuple(unique)
+
+
+def _resolve_validation_trellis_root(root: Path) -> Path:
+    candidates = lito_trellis_root_candidates(root)
+    for candidate in candidates:
+        if all((candidate / relative_path).is_file() for relative_path in LITO_TRELLIS_REQUIRED_FILES):
+            return candidate
+    return candidates[0]
+
+
+def _runtime_report_path(root: Path, path: Path) -> str:
+    if path in tuple(root / relative_path for _, _, relative_path in LITO_DEFAULT_CHECKPOINTS):
+        return _relative_report_path(root, path)
+    try:
+        return path.relative_to(root.parent).as_posix()
     except ValueError:
         return path.as_posix()
 

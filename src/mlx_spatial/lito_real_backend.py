@@ -18,6 +18,8 @@ import mlx.nn as nn
 import numpy as np
 from safetensors import safe_open
 
+from .lito_assets import LITO_TRELLIS_REQUIRED_FILES, lito_trellis_root_candidates
+
 
 _DIT_CHECKPOINT = Path("image_to_3d/lito_dit_rgba.safetensors")
 _TOKENIZER_CHECKPOINT = Path("tokenizer/lito_new.safetensors")
@@ -26,8 +28,8 @@ _DIT_SOURCE_PREFIX = "velocity_estimator."
 _PATCH_ENCODER_PREFIX = "patch_encoder."
 _GS_PREFIX = "gs_decoder."
 _VOXEL_PREFIX = "voxel_decoder."
-_TRELLIS_SS_DECODER_CONFIG = Path("ckpts/ss_dec_conv3d_16l8_fp16.json")
-_TRELLIS_SS_DECODER_CHECKPOINT = Path("ckpts/ss_dec_conv3d_16l8_fp16.safetensors")
+_TRELLIS_SS_DECODER_CONFIG = Path(LITO_TRELLIS_REQUIRED_FILES[0])
+_TRELLIS_SS_DECODER_CHECKPOINT = Path(LITO_TRELLIS_REQUIRED_FILES[1])
 _LITO_DINO_IMAGE_MEAN = (0.485, 0.456, 0.406)
 _LITO_DINO_IMAGE_STD = (0.229, 0.224, 0.225)
 _LITO_REAL_MAX_INIT_COORDS_BY_PROFILE = {
@@ -2607,10 +2609,7 @@ def _validate_request(request: LitoRealGenerateRequest) -> None:
 
 
 def _resolve_lito_trellis_root(config: LitoRealBackendConfig) -> Path:
-    candidates = [
-        config.weights_root.parent / "trellis2" / "microsoft" / "TRELLIS-image-large",
-        Path("weights/trellis2/microsoft/TRELLIS-image-large"),
-    ]
+    candidates = lito_trellis_root_candidates(config.weights_root)
     for candidate in candidates:
         if (candidate / _TRELLIS_SS_DECODER_CHECKPOINT).is_file() and (candidate / _TRELLIS_SS_DECODER_CONFIG).is_file():
             return candidate

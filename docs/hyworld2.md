@@ -46,14 +46,14 @@ overlap. A single image can run, but it gives the model less geometric evidence.
 Recommended script path:
 
 ```bash
-python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \
+uv run python scripts/hyworld2/generate_scene.py inputs/sam3d/kidsroom/image.png \
   --output-dir outputs/hyworld2/kidsroom-scene-script
 ```
 
 For a frame directory:
 
 ```bash
-python scripts/hyworld2/generate_scene.py inputs/hyworld2/small-room-8 \
+uv run python scripts/hyworld2/generate_scene.py inputs/hyworld2/small-room-8 \
   --memory-profile balanced \
   --output-dir outputs/hyworld2/small-room-8-balanced
 ```

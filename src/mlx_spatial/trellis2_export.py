@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import importlib.util
 import json
 import math
-import os
 import struct
 import time
 from dataclasses import dataclass
@@ -287,9 +285,9 @@ def trellis2_postprocess_parity_audit() -> tuple[Trellis2PostprocessParityItem, 
         Trellis2PostprocessParityItem(
             stage="remeshing",
             official="cumesh.remeshing.remesh_narrow_band_dc with BVH project-back",
-            mlx_spatial="not implemented",
-            parity="missing",
-            next_action="defer parity until a local cumesh reference mesh is available",
+            mlx_spatial="narrow-band dual-contour remesh primitive in ovoxel.py; not integrated into TRELLIS.2 export",
+            parity="partial",
+            next_action="integrate the local remesh path and compare it with a cumesh reference mesh",
         ),
         Trellis2PostprocessParityItem(
             stage="UV unwrap",
@@ -708,36 +706,36 @@ def unwrap_trellis2_mesh_xatlas_with_stats(
         )
     resolved_chunks = _resolve_xatlas_parallel_chunks(int(faces.shape[0]), parallel_chunks)
     start = time.perf_counter()
-    if resolved_chunks <= 1:
-        unwrapped_vertices, unwrapped_faces, unwrapped_uvs, stats = _xatlas_parametrize_arrays(
-            vertices,
-            faces,
-            backend="xatlas-global",
-            chunks=1,
-            chunk_faces=(int(faces.shape[0]),),
-            elapsed_seconds=0.0,
-        )
-    else:
-        unwrapped_vertices, unwrapped_faces, unwrapped_uvs, stats = _xatlas_parametrize_spatial_chunks(
-            vertices,
-            faces,
-            chunks=resolved_chunks,
-        )
+    from .spatialkit.xatlas import unwrap_xatlas_spatial
+
+    generic_result = unwrap_xatlas_spatial(vertices, faces, chunks=resolved_chunks)
     elapsed = time.perf_counter() - start
+    generic_stats = generic_result.stats
     stats = Trellis2XAtlasUnwrapStats(
-        backend=stats.backend,
-        input_vertices=stats.input_vertices,
-        input_faces=stats.input_faces,
-        output_vertices=stats.output_vertices,
-        output_faces=stats.output_faces,
+        backend=str(generic_stats["backend"]),
+        input_vertices=int(generic_stats["source_vertices"]),
+        input_faces=int(generic_stats["source_faces"]),
+        output_vertices=int(generic_stats["output_vertices"]),
+        output_faces=int(generic_stats["output_faces"]),
         elapsed_seconds=elapsed,
-        chunks=stats.chunks,
-        chunk_faces=stats.chunk_faces,
-        chart_count=stats.chart_count,
-        atlas_width=stats.atlas_width,
-        atlas_height=stats.atlas_height,
-        utilization=stats.utilization,
+        chunks=int(generic_stats["chunks"]),
+        chunk_faces=tuple(int(value) for value in generic_stats["chunk_faces"]),
+        chart_count=int(generic_stats["chart_count"]),
+        atlas_width=(
+            int(generic_stats["atlas_width"])
+            if generic_stats["atlas_width"] is not None
+            else None
+        ),
+        atlas_height=(
+            int(generic_stats["atlas_height"])
+            if generic_stats["atlas_height"] is not None
+            else None
+        ),
+        utilization=float(generic_stats["atlas_utilization"]),
     )
+    unwrapped_vertices = generic_result.vertices
+    unwrapped_faces = generic_result.faces
+    unwrapped_uvs = generic_result.uvs
     if unwrapped_uvs.shape != (unwrapped_vertices.shape[0], 2):
         raise ValueError(
             f"xatlas returned UV shape {unwrapped_uvs.shape}, expected ({unwrapped_vertices.shape[0]}, 2)"
@@ -751,157 +749,14 @@ def unwrap_trellis2_mesh_xatlas_with_stats(
 
 
 def _resolve_xatlas_parallel_chunks(face_count: int, requested_chunks: int) -> int:
-    if requested_chunks > 0:
-        return min(int(requested_chunks), max(face_count, 1))
-    if face_count <= TRELLIS2_XATLAS_PARALLEL_FACE_TARGET:
-        return 1
-    cpu_count = max(1, os.cpu_count() or 1)
-    face_chunks = int(math.ceil(face_count / TRELLIS2_XATLAS_PARALLEL_FACE_TARGET))
-    return max(1, min(face_chunks, cpu_count, TRELLIS2_XATLAS_MAX_AUTO_PARALLEL_CHUNKS))
+    from .spatialkit.xatlas import resolve_xatlas_parallel_chunks
 
-
-def _xatlas_parametrize_arrays(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    backend: str,
-    chunks: int,
-    chunk_faces: tuple[int, ...],
-    elapsed_seconds: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, Trellis2XAtlasUnwrapStats]:
-    import xatlas
-
-    atlas = xatlas.Atlas()
-    atlas.add_mesh(
-        np.ascontiguousarray(vertices.astype(np.float32, copy=False)),
-        np.ascontiguousarray(faces.astype(np.uint32, copy=False)),
+    return resolve_xatlas_parallel_chunks(
+        face_count,
+        requested_chunks,
+        face_target=TRELLIS2_XATLAS_PARALLEL_FACE_TARGET,
+        max_auto_chunks=TRELLIS2_XATLAS_MAX_AUTO_PARALLEL_CHUNKS,
     )
-    atlas.generate(xatlas.ChartOptions(), xatlas.PackOptions(), False)
-    vmapping, indices, uvs = atlas.get_mesh(0)
-    out_vertices = vertices[np.asarray(vmapping, dtype=np.int64)]
-    out_faces = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
-    out_uvs = np.asarray(uvs, dtype=np.float32)
-    stats = Trellis2XAtlasUnwrapStats(
-        backend=backend,
-        input_vertices=int(vertices.shape[0]),
-        input_faces=int(faces.shape[0]),
-        output_vertices=int(out_vertices.shape[0]),
-        output_faces=int(out_faces.shape[0]),
-        elapsed_seconds=float(elapsed_seconds),
-        chunks=int(chunks),
-        chunk_faces=chunk_faces,
-        chart_count=int(atlas.chart_count),
-        atlas_width=int(atlas.width),
-        atlas_height=int(atlas.height),
-        utilization=float(atlas.utilization),
-    )
-    return out_vertices, out_faces, out_uvs, stats
-
-
-def _xatlas_parametrize_spatial_chunks(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    chunks: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, Trellis2XAtlasUnwrapStats]:
-    face_partitions = _partition_faces_for_parallel_xatlas(vertices, faces, chunks)
-    chunk_inputs = []
-    for face_indices in face_partitions:
-        local_vertices, local_faces = _submesh_for_faces(vertices, faces[face_indices])
-        chunk_inputs.append((local_vertices, local_faces))
-
-    def unwrap_chunk(item: tuple[np.ndarray, np.ndarray]):
-        local_vertices, local_faces = item
-        out_vertices, out_faces, out_uvs, stats = _xatlas_parametrize_arrays(
-            local_vertices,
-            local_faces,
-            backend="xatlas-parallel-chunk",
-            chunks=1,
-            chunk_faces=(int(local_faces.shape[0]),),
-            elapsed_seconds=0.0,
-        )
-        return out_vertices, out_faces, out_uvs, stats
-
-    max_workers = min(len(chunk_inputs), max(1, os.cpu_count() or 1))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="xatlas") as executor:
-        chunk_results = list(executor.map(unwrap_chunk, chunk_inputs))
-
-    packed_vertices: list[np.ndarray] = []
-    packed_faces: list[np.ndarray] = []
-    packed_uvs: list[np.ndarray] = []
-    vertex_offset = 0
-    cols = int(math.ceil(math.sqrt(len(chunk_results))))
-    rows = int(math.ceil(len(chunk_results) / cols))
-    tile_padding = 0.02
-    for chunk_index, (chunk_vertices, chunk_faces, chunk_uvs, _stats) in enumerate(chunk_results):
-        row = chunk_index // cols
-        col = chunk_index % cols
-        normalized_uvs = _normalize_chunk_uvs(chunk_uvs)
-        normalized_uvs = tile_padding + normalized_uvs * (1.0 - 2.0 * tile_padding)
-        normalized_uvs[:, 0] = (col + normalized_uvs[:, 0]) / cols
-        normalized_uvs[:, 1] = (row + normalized_uvs[:, 1]) / rows
-        packed_vertices.append(chunk_vertices.astype(np.float32, copy=False))
-        packed_faces.append(chunk_faces.astype(np.int64, copy=False) + vertex_offset)
-        packed_uvs.append(normalized_uvs.astype(np.float32, copy=False))
-        vertex_offset += int(chunk_vertices.shape[0])
-
-    out_vertices = np.concatenate(packed_vertices, axis=0)
-    out_faces = np.concatenate(packed_faces, axis=0)
-    out_uvs = np.concatenate(packed_uvs, axis=0)
-    chart_counts = []
-    utilizations = []
-    for _chunk_vertices, _chunk_faces, _chunk_uvs, chunk_stats in chunk_results:
-        if chunk_stats.chart_count is not None:
-            chart_counts.append(chunk_stats.chart_count)
-        if chunk_stats.utilization is not None:
-            utilizations.append(chunk_stats.utilization)
-    stats = Trellis2XAtlasUnwrapStats(
-        backend="xatlas-parallel-spatial",
-        input_vertices=int(vertices.shape[0]),
-        input_faces=int(faces.shape[0]),
-        output_vertices=int(out_vertices.shape[0]),
-        output_faces=int(out_faces.shape[0]),
-        elapsed_seconds=0.0,
-        chunks=len(chunk_results),
-        chunk_faces=tuple(int(local_faces.shape[0]) for _local_vertices, local_faces in chunk_inputs),
-        chart_count=int(sum(chart_counts)) if chart_counts else None,
-        atlas_width=None,
-        atlas_height=None,
-        utilization=float(np.mean(utilizations)) if utilizations else None,
-    )
-    return out_vertices, out_faces, out_uvs, stats
-
-
-def _partition_faces_for_parallel_xatlas(vertices: np.ndarray, faces: np.ndarray, chunks: int) -> list[np.ndarray]:
-    centroids = vertices[faces].mean(axis=1)
-    partitions = [np.arange(faces.shape[0], dtype=np.int64)]
-    while len(partitions) < chunks:
-        split_index = max(range(len(partitions)), key=lambda index: partitions[index].shape[0])
-        face_indices = partitions.pop(split_index)
-        if face_indices.shape[0] <= 1:
-            partitions.append(face_indices)
-            break
-        spans = np.ptp(centroids[face_indices], axis=0)
-        axis = int(np.argmax(spans))
-        order = face_indices[np.argsort(centroids[face_indices, axis], kind="mergesort")]
-        midpoint = order.shape[0] // 2
-        partitions.append(order[:midpoint])
-        partitions.append(order[midpoint:])
-    return [partition for partition in partitions if partition.size]
-
-
-def _submesh_for_faces(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    unique_vertices, inverse = np.unique(faces.reshape(-1), return_inverse=True)
-    return vertices[unique_vertices].astype(np.float32, copy=False), inverse.reshape(-1, 3).astype(np.int64, copy=False)
-
-
-def _normalize_chunk_uvs(uvs: np.ndarray) -> np.ndarray:
-    normalized = np.asarray(uvs, dtype=np.float32).copy()
-    uv_min = normalized.min(axis=0)
-    uv_max = normalized.max(axis=0)
-    span = np.maximum(uv_max - uv_min, 1e-6)
-    normalized = (normalized - uv_min) / span
-    return np.clip(normalized, 0.0, 1.0)
 
 
 def bake_trellis2_texture_fields(

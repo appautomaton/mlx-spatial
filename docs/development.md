@@ -4,30 +4,35 @@
 
 ```bash
 uv sync
-uv run pytest -q
+export MLX_SPATIAL_TEST_SCRATCH="$(mktemp -d /tmp/mlx-spatial-test.XXXXXX)"
+mkdir -p "$MLX_SPATIAL_TEST_SCRATCH"/{inputs,outputs,artifacts,logs,cache}
+export PYTHONPYCACHEPREFIX="$MLX_SPATIAL_TEST_SCRATCH/cache/pycache"
+uv run pytest -q --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"
 ```
 
-Use Python 3.11+ on Apple Silicon with MLX installed through the project dependencies.
+The unified `mlx-spatial` package requires Python 3.13 on an Apple Silicon Mac.
+Its integrated SpatialKit extension is built as part of the same distribution.
 
 ## Targeted Checks
 
 SAM3D-focused checks:
 
 ```bash
-uv run pytest tests/test_sam3d*.py -q
-python scripts/sam3d/reconstruct.py --help
-python scripts/sam3d/inspect_trace.py --help
+uv run pytest tests/test_sam3d*.py -q \
+  --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest-sam3d"
+uv run python scripts/sam3d/reconstruct.py --help
+uv run python scripts/sam3d/inspect_trace.py --help
 ```
 
 Package checks:
 
 ```bash
-rm -rf dist
-uv build
-python scripts/packaging/check_release_artifacts.py \
-  dist/mlx_spatial-*.tar.gz \
-  dist/mlx_spatial-*-py3-none-any.whl
-python scripts/packaging/check_release_artifacts.py --git-hygiene
+release_tmp="$(mktemp -d /tmp/mlx-spatial-release.XXXXXX)"
+uv build --out-dir "$release_tmp/dist"
+uv run python scripts/packaging/check_release_artifacts.py \
+  "$release_tmp"/dist/mlx_spatial-*.tar.gz \
+  "$release_tmp"/dist/mlx_spatial-*.whl
+uv run python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
 CLI smoke checks:
@@ -53,6 +58,24 @@ vendors/
 ```
 
 Tests should pass without downloading gated weights unless they are explicitly marked as optional parity or local-inference checks. Runtime commands that need weights should fail with structured blockers instead of fabricating outputs.
+
+## Temporary Test And Audit Data
+
+Create one task-specific directory for any check that writes files. If setup
+already created `MLX_SPATIAL_TEST_SCRATCH`, reuse it:
+
+```bash
+export MLX_SPATIAL_TEST_SCRATCH="$(mktemp -d /tmp/mlx-spatial-test.XXXXXX)"
+mkdir -p "$MLX_SPATIAL_TEST_SCRATCH"/{inputs,outputs,artifacts,logs,cache}
+export PYTHONPYCACHEPREFIX="$MLX_SPATIAL_TEST_SCRATCH/cache/pycache"
+uv run pytest --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"
+```
+
+Keep generated fixtures, parity bundles, browser dependencies, logs, caches,
+and model outputs below that root. `outputs/` in the repository is reserved for
+user-requested inference results, not test or audit scratch data. Preserve the
+temporary root only when its artifacts are needed for diagnosis; otherwise
+remove it after recording the relevant result.
 
 ## Editing Constraints
 
@@ -84,7 +107,9 @@ Reference parity work belongs in targeted tests or dev-only scripts. It should r
 - shape mismatches
 - max absolute difference
 
-Store heavy audit outputs with ignored model bundles unless the file is small and intentionally part of docs.
+Store heavy audit outputs under `MLX_SPATIAL_TEST_SCRATCH`. Commit only small,
+portable fixtures that are intentionally part of the test or documentation
+contract; committed metadata must not contain developer-machine absolute paths.
 
 ## Worktree Hygiene
 
@@ -92,7 +117,7 @@ This repo often has local generated files and experimental model outputs. Before
 
 ```bash
 git status --short
-python scripts/packaging/check_release_artifacts.py --git-hygiene
+uv run python scripts/packaging/check_release_artifacts.py --git-hygiene
 ```
 
 Separate release-readiness changes from unrelated pipeline implementation changes. Do not revert unrelated dirty files unless that is the explicit task.
