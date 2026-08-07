@@ -5,6 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml/badge.svg)](https://github.com/appautomaton/mlx-spatial/actions/workflows/test.yaml)
 
+**[Website](https://appautomaton.renocrypt.com/mlx-spatial/)** ·
+[PyPI](https://pypi.org/project/mlx-spatial/) ·
+[Weights](https://huggingface.co/appautomaton) ·
+[Architecture](docs/architecture.md)
+
 **MLX-native 3D and spatial inference for Apple Silicon.** Run modern 3D reconstruction and image-to-3D pipelines locally on [MLX](https://github.com/ml-explore/mlx).
 
 `mlx-spatial` keeps model weights out of the wheel, validates the assets you download, and exposes one clear command path per pipeline that produces inspectable outputs.
