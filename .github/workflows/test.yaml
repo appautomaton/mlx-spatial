@@ -15,12 +15,19 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
+      # setup-uv stopped publishing major tags at v8, deliberately: pinning to
+      # @v9 would be the supply-chain hole they closed. prune-cache is set
+      # explicitly because v9 flipped its default to false, which grows the
+      # Actions cache rather than trimming it.
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
+          prune-cache: true
 
       - name: Create test scratch directory
         run: |
