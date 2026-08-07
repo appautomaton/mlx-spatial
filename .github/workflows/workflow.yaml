@@ -16,12 +16,19 @@ jobs:
       contents: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
+      # setup-uv stopped publishing major tags at v8, deliberately: pinning to
+      # @v9 would be the supply-chain hole they closed. prune-cache is set
+      # explicitly because v9 flipped its default to false, which grows the
+      # Actions cache rather than trimming it.
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
+          prune-cache: true
 
       - name: Build package
         run: |
@@ -40,7 +47,7 @@ jobs:
           "from mlx_spatial.spatialkit import backend_info; info = backend_info(); assert info['native']; print(info)"
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: mlx-spatial-dist
           path: dist/*
@@ -58,10 +65,13 @@ jobs:
       id-token: write
     steps:
       - name: Download package artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           name: mlx-spatial-dist
           path: dist
 
+      # PyPA suggests the floating release/v1 tag. This job is the one place in
+      # the repository that holds an OIDC id-token, so it pins an exact release
+      # instead: a compromised upstream tag here could publish as us.
       - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.14.2
