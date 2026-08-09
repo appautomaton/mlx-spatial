@@ -68,15 +68,15 @@ uv run python scripts/trellis2/generate_shape.py inputs/trellis2/cup-of-tea.jpg 
 ```
 
 The script defaults are quality-oriented for Apple Silicon: 512 pipeline,
-model-config SLat sampler steps, 1024 texture, 200k GLB face target, clustered
-xatlas, MLX QEM simplification, and Metal PBR texture baking. Do not pass
+model-config SLat sampler steps, 1024 texture, 200k GLB face target, native
+reference UV unwrap, MLX QEM simplification, and Metal PBR texture baking. Do not pass
 `--slat-steps` for quality runs. Low step counts are only for explicit smoke
 tests.
 
 The textured pipeline writes decoded O-Voxel shape/PBR NPZ artifacts, releases
 inference tensors, and calls the same integrated SpatialKit exporter as
 Pixal3D. The current production policy uses the narrow-band remesh, MLX QEM,
-clustered xatlas, Telea postprocessing, and Metal texture stages. The remesh is
+native reference UV unwrap, Telea postprocessing, and Metal texture stages. The remesh is
 an Apple-native behavior approximation, not a claim of numerical parity with
 upstream cuMesh.
 
@@ -112,7 +112,7 @@ task-specific system temporary directory.
 `trace.json` records the selected route, completed stages, outputs, and any
 blocker stage, operation, reference, and reason. The script also prints the
 effective settings before generation, including pipeline type, sampler steps,
-token limits, texture size, face target, and xatlas chunk count. Stage timings
+token limits, texture size, and face target. Stage timings
 are independent durations rather than cumulative timestamps.
 
 ## Export Caveat

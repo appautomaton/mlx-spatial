@@ -11,7 +11,7 @@ from mlx_spatial.pixal3d_assets import (
     read_pixal3d_pipeline_config,
     validate_pixal3d_assets,
 )
-from pixal3d_fixtures import write_fake_pixal3d_root
+from tests.pixal3d_fixtures import write_fake_pixal3d_root
 
 
 def test_validate_pixal3d_assets_reports_missing_and_ready(tmp_path):

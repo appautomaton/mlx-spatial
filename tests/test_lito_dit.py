@@ -5,7 +5,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import pytest
-from safetensors.mlx import load_file
+from tests.safetensors_test_utils import load_mlx_file
 
 from mlx_spatial import lito_dit
 from mlx_spatial.lito_dit import (
@@ -24,7 +24,7 @@ SOFT_MEMORY_LIMIT_GB = 90.0
 
 
 def _fixture(name):
-    return load_file(FIXTURE_ROOT / name)
+    return load_mlx_file(FIXTURE_ROOT / name)
 
 
 def _dit_input():

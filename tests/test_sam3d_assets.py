@@ -1,9 +1,11 @@
 import tomllib
-import types
 
 import mlx.core as mx
-from safetensors.mlx import save_file
+import numpy as np
+from tests.safetensors_test_utils import save_file
+from tests.safetensors_test_utils import write_torch_zip_checkpoint
 
+from mlx_spatial.checkpoint import inspect_checkpoint
 from mlx_spatial.sam3d_assets import (
     SAM3D_OBJECTS_REPO_ID,
     convert_sam3d_assets_to_safetensors,
@@ -59,8 +61,8 @@ def test_sam3d_runtime_dependencies_exclude_torch_cuda_and_hf_runtime_clients():
         assert forbidden not in runtime_dependencies
     assert "pyyaml" in runtime_dependencies
     assert "huggingface-hub" in dev_dependencies
-    assert "pt-safe-loader" in dev_dependencies
-    assert "pt-safe-loader" not in runtime_dependencies
+    assert "pt-safe-loader" not in dev_dependencies
+    assert "safetensors" not in runtime_dependencies
 
 
 def test_validate_sam3d_assets_reports_missing_pipeline(tmp_path):
@@ -117,35 +119,18 @@ def test_inspect_sam3d_model_assets_accepts_complete_fake_fixture(tmp_path):
 
 def test_convert_sam3d_assets_rewrites_pipeline_to_safetensors_without_metadata_collision(
     tmp_path,
-    monkeypatch,
 ):
     _write_sam3d_fixture(tmp_path)
     source_checkpoint = tmp_path / "ckpts" / "ss_decoder.ckpt"
-    source_checkpoint.write_bytes(b"fake torch zip")
+    write_torch_zip_checkpoint(
+        source_checkpoint,
+        {"converted.weight": np.array([2.0], dtype=np.float16)},
+    )
     pipeline = (tmp_path / "pipeline.yaml").read_text(encoding="utf-8")
     (tmp_path / "pipeline.yaml").write_text(
         pipeline.replace("ckpts/ss_decoder.safetensors", "ckpts/ss_decoder.ckpt"),
         encoding="utf-8",
     )
-
-    class FakePtCheckpoint:
-        @classmethod
-        def load(cls, path, **kwargs):
-            assert path.endswith("ss_decoder.ckpt")
-            assert kwargs["max_archive_bytes"] == 16 * 1024**3
-            return cls()
-
-        def export(self, *, format, dir):
-            assert format == "safetensors"
-            output_dir = tmp_path / "fake-export"
-            output_dir.mkdir(exist_ok=True)
-            weights_path = output_dir / "ss_decoder.safetensors"
-            metadata_path = output_dir / "ss_decoder.yaml"
-            save_file({"converted.weight": mx.array([2.0], dtype=mx.float32)}, weights_path)
-            metadata_path.write_text("source_sha256: fake-sha\n", encoding="utf-8")
-            return {"weights_path": str(weights_path), "metadata_path": str(metadata_path)}
-
-    monkeypatch.setitem(__import__("sys").modules, "pt_loader", types.SimpleNamespace(PtCheckpoint=FakePtCheckpoint))
 
     result = convert_sam3d_assets_to_safetensors(tmp_path, output_root=tmp_path / "converted")
 
@@ -154,6 +139,7 @@ def test_convert_sam3d_assets_rewrites_pipeline_to_safetensors_without_metadata_
     assert "ckpts/ss_decoder.safetensors" in converted_pipeline
     assert "ckpts/ss_decoder.ckpt" not in converted_pipeline
     assert (tmp_path / "converted" / "ckpts" / "ss_decoder.safetensors").is_file()
+    assert inspect_checkpoint(tmp_path / "converted" / "ckpts" / "ss_decoder.safetensors")[0].dtype == "F16"
     assert (tmp_path / "converted" / "ckpts" / "conversion_metadata" / "ss_decoder.yaml").is_file()
     assert (tmp_path / "converted" / "configs" / "ss_decoder.yaml").read_text(encoding="utf-8") == "_target_: fixture\n"
 

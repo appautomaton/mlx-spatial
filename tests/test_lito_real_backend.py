@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
-from safetensors.numpy import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.lito import LitoInferencePipeline
 from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES

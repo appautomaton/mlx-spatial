@@ -34,7 +34,7 @@ def test_export_ovoxel_glb_applies_one_production_policy(tmp_path: Path) -> None
             "target_faces": 200_000,
             "quality_preset": "reference-target",
             "grid_size": 512,
-            "uv_backend": "xatlas-clustered",
+            "uv_backend": "xatlas-equivalent-native",
             "remesh": True,
             "remesh_resolution": 512,
             "simplify_backend": "mlx-qem",

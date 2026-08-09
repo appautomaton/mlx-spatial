@@ -92,11 +92,7 @@ The native implementation currently includes:
 - experimental single-layer native QEM and MLX/Metal batched-QEM pipelines,
   with deterministic multicore native topology rebuilds
 - paired-triangle face atlas and native chart UV candidates
-- real pinned-xatlas `xatlas-global` and CuMesh-style `xatlas-clustered` paths
-- the shared `xatlas-parallel-spatial` experiment available to TRELLIS.2,
-  SAM3D, and direct SpatialKit exports; its diagnostics report artificial
-  spatial-partition cut edges
-- a separate measured `xatlas-equivalent-native` implementation using native
+- a measured `xatlas-equivalent-native` implementation using native
   chart growth, LSCM, and shelf packing
 - Metal UV rasterization and PBR texture baking
 - trilinear source projection with bounded fallback
@@ -113,7 +109,7 @@ result = export_decoded_ovoxel_glb(
     quality_preset="reference-target",
     remesh=False,
     simplify_backend="single-layer-mlx-qem",
-    uv_backend="xatlas-clustered",
+    uv_backend="xatlas-equivalent-native",
     texture_postprocess="telea",
 )
 ```
@@ -125,13 +121,9 @@ plain `qem` option still requires narrow-band remesh plus nonmanifold repair,
 but that UDF path is retained as a behavior control because it creates a double
 cover. Neither experimental QEM path is selected by default.
 
-Real xatlas output and `xatlas-equivalent-native` have different correctness
-contracts. The native-equivalent path promises zero flipped/overlapping UV
-faces. Real xatlas may mirror complete charts and may record a small overlap
-count with reference `padding=0`; its gate therefore checks the pinned xatlas
-version, chart/utilization ratios, overlap ratio, affected surface area, and UV
-surface coverage. Diagnostics record all measurements; backend names alone do
-not clear the gates.
+The native-equivalent path promises zero flipped/overlapping UV faces and is
+measured against committed upstream reference anchors. Diagnostics record the
+measured chart, utilization, stretch, overlap, and surface-coverage signals.
 
 ## Apple Silicon Execution
 
@@ -159,11 +151,6 @@ appearance, and runtime evidence:
   2.04 to 1.02 voxels as remesh resolution increases from 256 to 512 to 1024.
   Large full-mesh maxima come from five minor source components, not holes in
   the watertight main component.
-- Four-way `xatlas-parallel-spatial` is valid but not a speed winner. It takes
-  2.79 seconds versus 1.20 seconds for `xatlas-clustered` on the 48k-face
-  violin asset, and 11.52 seconds versus 1.74 seconds on the 212k-face main
-  asset. It also introduces 941 and 2,999 spatial partition cuts,
-  respectively. It remains an explicit compatibility/experiment path.
 - A separate 6.16M-token car cache produces a 195,028-face r1024 clustered
   GLB with zero degenerate, duplicate, boundary, nonmanifold-edge, and
   nonmanifold-vertex counts. Four float32-scale boundary-loop centers require
@@ -173,7 +160,7 @@ appearance, and runtime evidence:
 - The violin/main comparison runs peak below 4.4 GiB RSS. The larger car r1024
   run takes 75.25 seconds and peaks at 14.95 GiB RSS. All runs record zero swap
   growth. MLX QEM and Metal texture stages use the Apple GPU; irregular
-  topology and xatlas stages remain CPU work by design.
+  topology and native UV stages remain CPU work by design.
 
 These results support the current SpatialKit integration, but they do not
 establish upstream production equivalence. The UDF path is still an offset
@@ -237,7 +224,7 @@ uv run python scripts/spatialkit/export_cached_ovoxel.py \
   --quality-preset reference-target \
   --target-faces 200000 \
   --grid-size 1536 \
-  --uv-backend xatlas-clustered \
+  --uv-backend xatlas-equivalent-native \
   --remesh --remesh-resolution 1536 \
   --simplify-backend mlx-qem \
   --texture-postprocess telea \

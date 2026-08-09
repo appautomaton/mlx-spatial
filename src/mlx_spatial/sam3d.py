@@ -24,7 +24,7 @@ from .sam3d_export import (
     SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
     SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES,
     SAM3D_GLB_DEFAULT_TARGET_FACES,
-    SAM3D_XATLAS_FACE_GUARD,
+    SAM3D_UV_FACE_GUARD,
 )
 from .sam3d_inference import (
     SAM3D_DEFAULT_SS_CFG_INTERVAL,
@@ -114,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     reconstruct_parser.add_argument("--glb-texture-size", type=int, default=1024)
     reconstruct_parser.add_argument("--glb-gaussian-k", type=int, default=8)
     reconstruct_parser.add_argument("--glb-texel-chunk-size", type=int, default=262_144)
-    reconstruct_parser.add_argument("--glb-xatlas-face-guard", type=int, default=SAM3D_XATLAS_FACE_GUARD)
+    reconstruct_parser.add_argument("--glb-uv-face-guard", type=int, default=SAM3D_UV_FACE_GUARD)
     reconstruct_parser.add_argument("--trace-output")
 
     args = parser.parse_args(argv)
@@ -235,7 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 glb_texture_size=args.glb_texture_size,
                 glb_gaussian_k=args.glb_gaussian_k,
                 glb_texel_chunk_size=args.glb_texel_chunk_size,
-                glb_xatlas_face_guard=args.glb_xatlas_face_guard,
+                glb_uv_face_guard=args.glb_uv_face_guard,
             )
         except ValueError as error:
             print("blocker_stage=argument-validation")

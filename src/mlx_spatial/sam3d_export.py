@@ -17,7 +17,7 @@ from .ovoxel import FlexibleDualGridMesh, MeshHoleFillStats, fill_flexible_dual_
 
 SAM3D_SH_C0 = 0.28209479177387814
 SAM3D_GLB_DEFAULT_TARGET_FACES = 300_000
-SAM3D_XATLAS_FACE_GUARD = 400_000
+SAM3D_UV_FACE_GUARD = 400_000
 SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES = 256
 SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION = 5e-4
 
@@ -128,7 +128,7 @@ class Sam3dGaussianTextureBakeStats:
     raw_coverage_ratio: float
     final_coverage_ratio: float
     unwrap_backend: str
-    xatlas_face_guard: int
+    uv_face_guard: int
     unwrap_seconds: float | None
     unwrap_chunks: int
     unwrap_chart_count: int | None
@@ -469,8 +469,7 @@ def bake_sam3d_gaussian_texture_for_glb(
     texture_size: int = 1024,
     k_neighbors: int = 8,
     texel_chunk_size: int = 262_144,
-    xatlas_face_guard: int = SAM3D_XATLAS_FACE_GUARD,
-    xatlas_parallel_chunks: int = 0,
+    uv_face_guard: int = SAM3D_UV_FACE_GUARD,
 ) -> Sam3dGaussianTextureBakeResult:
     """Bake SAM3D Gaussian DC colors onto a cleaned preview mesh."""
 
@@ -480,30 +479,21 @@ def bake_sam3d_gaussian_texture_for_glb(
         raise ValueError(f"k_neighbors must be positive, got {k_neighbors}")
     if texel_chunk_size <= 0:
         raise ValueError(f"texel_chunk_size must be positive, got {texel_chunk_size}")
-    if xatlas_face_guard <= 0:
-        raise ValueError(f"xatlas_face_guard must be positive, got {xatlas_face_guard}")
-    if xatlas_parallel_chunks < 0:
-        raise ValueError(f"xatlas_parallel_chunks must be non-negative, got {xatlas_parallel_chunks}")
+    if uv_face_guard <= 0:
+        raise ValueError(f"uv_face_guard must be positive, got {uv_face_guard}")
 
     start = time.perf_counter()
     vertices, faces, normals = _mesh_arrays_for_texture_bake(mesh)
-    if faces.shape[0] > xatlas_face_guard:
+    if faces.shape[0] > uv_face_guard:
         raise ValueError(
-            f"xatlas unwrap face count {faces.shape[0]} exceeds guard {xatlas_face_guard}; "
+            f"UV unwrap face count {faces.shape[0]} exceeds guard {uv_face_guard}; "
             "simplify the GLB mesh before UV unwrapping"
         )
 
-    from .spatialkit.uv import make_xatlas_uvs
-    from .spatialkit.xatlas import resolve_xatlas_parallel_chunks
+    from .spatialkit.uv import make_reference_uvs
 
-    resolved_chunks = resolve_xatlas_parallel_chunks(
-        int(faces.shape[0]),
-        xatlas_parallel_chunks,
-        face_target=50_000,
-        max_auto_chunks=8,
-    )
     unwrap_started = time.perf_counter()
-    unwrap = make_xatlas_uvs(vertices, faces, parallel_chunks=resolved_chunks)
+    unwrap = make_reference_uvs(vertices, faces, texture_resolution=texture_size)
     unwrap_elapsed = time.perf_counter() - unwrap_started
     atlas_vertices = unwrap.vertices.astype(np.float32, copy=False)
     atlas_faces = unwrap.faces.astype(np.int64, copy=False)
@@ -561,17 +551,17 @@ def bake_sam3d_gaussian_texture_for_glb(
             raw_coverage_ratio=raw_coverage_ratio,
             final_coverage_ratio=float(np.count_nonzero(final_mask) / final_mask.size),
             unwrap_backend=str(unwrap.stats["backend"]),
-            xatlas_face_guard=int(xatlas_face_guard),
+            uv_face_guard=int(uv_face_guard),
             unwrap_seconds=float(unwrap_elapsed),
-            unwrap_chunks=int(resolved_chunks),
+            unwrap_chunks=1,
             unwrap_chart_count=(
                 int(unwrap.stats["chart_count"])
                 if unwrap.stats.get("chart_count") is not None
                 else None
             ),
             unwrap_utilization=(
-                float(unwrap.stats["atlas_utilization"])
-                if unwrap.stats.get("atlas_utilization") is not None
+                float(unwrap.stats["uv_bbox_utilization"])
+                if unwrap.stats.get("uv_bbox_utilization") is not None
                 else None
             ),
             elapsed_seconds=float(elapsed),

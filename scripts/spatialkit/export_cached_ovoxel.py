@@ -27,16 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
             "face-atlas",
             "native-chart",
             "xatlas-equivalent-native",
-            "xatlas-global",
-            "xatlas-clustered",
-            "xatlas-parallel-spatial",
         ),
         default="face-atlas",
-    )
-    parser.add_argument(
-        "--xatlas-parallel-chunks",
-        type=int,
-        help="spatial xatlas chunk count; required only by xatlas-parallel-spatial",
     )
     parser.add_argument("--remesh", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--remesh-resolution", type=int)
@@ -77,15 +69,6 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("max_swap_growth_gib must be non-negative")
     if args.terminate_grace_sec <= 0:
         raise ValueError("terminate_grace_sec must be positive")
-    if args.uv_backend == "xatlas-parallel-spatial":
-        if args.xatlas_parallel_chunks is None or args.xatlas_parallel_chunks <= 1:
-            raise ValueError(
-                "xatlas-parallel-spatial requires --xatlas-parallel-chunks greater than one"
-            )
-    elif args.xatlas_parallel_chunks is not None:
-        raise ValueError(
-            "--xatlas-parallel-chunks only applies to --uv-backend xatlas-parallel-spatial"
-        )
 
 
 def _run_worker(args: argparse.Namespace) -> int:
@@ -99,7 +82,6 @@ def _run_worker(args: argparse.Namespace) -> int:
         quality_preset=args.quality_preset,
         grid_size=args.grid_size,
         uv_backend=args.uv_backend,
-        xatlas_parallel_chunks=args.xatlas_parallel_chunks,
         remesh=args.remesh,
         remesh_resolution=args.remesh_resolution,
         remesh_repair_nonmanifold=args.remesh_repair_nonmanifold,

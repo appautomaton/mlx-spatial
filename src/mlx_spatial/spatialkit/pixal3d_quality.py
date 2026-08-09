@@ -20,11 +20,6 @@ PIXAL3D_CHART_UV_SURFACE_VISIBLE_MIN = 0.50
 PIXAL3D_FACE_ATLAS_TILE_PADDING = 0.08
 PIXAL3D_NATIVE_CHART_TILE_PADDING = 0.001
 PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN = 0.95
-PIXAL3D_XATLAS_CHART_COUNT_RATIO_MIN = 0.80
-PIXAL3D_XATLAS_CHART_COUNT_RATIO_MAX = 1.25
-PIXAL3D_XATLAS_MAX_OVERLAP_FACE_RATIO = 0.01
-PIXAL3D_XATLAS_MAX_UNASSIGNED_SURFACE_RATIO = 1.0e-5
-PIXAL3D_XATLAS_MAX_DEGENERATE_SURFACE_RATIO = 1.0e-5
 
 def _normalize_quality_preset(value: str) -> str:
     preset = str(value).strip().lower().replace("_", "-")
@@ -41,14 +36,10 @@ def _resolve_pixal3d_uv_backend(value: str) -> str:
         "face-atlas",
         "native-chart",
         "xatlas-equivalent-native",
-        "xatlas-global",
-        "xatlas-clustered",
-        "xatlas-parallel-spatial",
     ):
         return backend
     raise ValueError(
-        "uv_backend must be 'face-atlas', 'native-chart', 'xatlas-equivalent-native', "
-        "'xatlas-global', 'xatlas-clustered', or 'xatlas-parallel-spatial'"
+        "uv_backend must be 'face-atlas', 'native-chart', or 'xatlas-equivalent-native'"
     )
 
 
@@ -62,9 +53,7 @@ def _resolve_chart_angle_degrees(value: float) -> float:
 def _resolve_tile_padding(value: float | None, uv_backend: str) -> tuple[float, str]:
     backend = _resolve_pixal3d_uv_backend(uv_backend)
     if value is None:
-        if backend == "xatlas-parallel-spatial":
-            return 0.02, "backend_default:xatlas-parallel-spatial"
-        if backend in ("xatlas-equivalent-native", "xatlas-global", "xatlas-clustered"):
+        if backend == "xatlas-equivalent-native":
             # The reference unwrap packs with texel gaps (xatlas PackOptions
             # bilinear gutter), not a fractional tile padding.
             return 0.0, f"backend_default:{backend}"
@@ -253,30 +242,12 @@ def _pixal3d_reference_stage_contract(
         simplifier_quality == "production"
         and ("qem" in simplifier_algorithm or "edge-collapse" in simplifier_algorithm)
     )
-    actual_xatlas_backend = uv_backend in {
-        "xatlas-global",
-        "xatlas-clustered",
-        "xatlas-parallel-spatial",
-    }
-    if actual_xatlas_backend:
-        unwrap_reference = bool(
-            _actual_xatlas_parity_summary(
-                reference,
-                uv_stats,
-                texture_stats,
-                uv_backend,
-            )["parity_ready"]
-        )
-    else:
-        # The native xatlas-equivalent path has stronger invariants than raw
-        # xatlas: its own parameterizer normalizes chart orientation and its
-        # packer promises zero positive-area overlap.
-        unwrap_reference = (
-            uv_backend == "xatlas-equivalent-native"
-            and _maybe_int(uv_stats.get("uv_overlap_count")) == 0
-            and _maybe_int(uv_stats.get("uv_flipped_count")) == 0
-            and _maybe_int(uv_stats.get("lscm_unconverged_count")) == 0
-        )
+    unwrap_reference = (
+        uv_backend == "xatlas-equivalent-native"
+        and _maybe_int(uv_stats.get("uv_overlap_count")) == 0
+        and _maybe_int(uv_stats.get("uv_flipped_count")) == 0
+        and _maybe_int(uv_stats.get("lscm_unconverged_count")) == 0
+    )
     raster_reference = bool(texture_stats.get("uv_raster_interpolate_reference"))
     projection_reference = source_projection_used is True
 
@@ -428,7 +399,7 @@ def _pixal3d_reference_stage_contract(
             spatialkit_backend={
                 "uv_backend": uv_backend,
                 "chart_cluster_normal_policy": uv_stats.get("chart_cluster_normal_policy"),
-                "requires_xatlas_dependency": actual_xatlas_backend,
+                "requires_xatlas_dependency": False,
             },
             required="measured xatlas/CuMesh behavior-compatible unwrap",
             detail=(
@@ -923,8 +894,6 @@ def _xatlas_chart_parity_summary(
     deferred_boundary = "not_xatlas_chart_parity"
     if uv_backend == "xatlas-equivalent-native":
         return _reference_unwrap_parity_summary(reference, uv_stats, uv_backend)
-    if uv_backend in {"xatlas-global", "xatlas-clustered", "xatlas-parallel-spatial"}:
-        return _actual_xatlas_parity_summary(reference, uv_stats, texture_stats, uv_backend)
     if uv_backend != "native-chart":
         return {
             "status": "not_requested",
@@ -1085,196 +1054,6 @@ def _xatlas_chart_parity_summary(
             "uv_surface_occupancy_ratio_gap_to_equivalence_target": utilization_equivalence_gap,
             "equivalence_target_ratio": PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN,
         },
-        "checks": checks,
-    }
-
-
-def _actual_xatlas_parity_summary(
-    reference: dict[str, Any] | None,
-    uv_stats: dict[str, Any],
-    texture_stats: dict[str, Any],
-    uv_backend: str,
-) -> dict[str, Any]:
-    """Measure real xatlas output without applying native-packer invariants.
-
-    xatlas can mirror complete charts and, with its reference padding of zero,
-    can report a small number of positive-area overlap pairs. The committed
-    xatlas 0.0.11 oracle records both behaviors, so correctness is bounded by
-    reference ratios and affected surface area instead of a false zero-count
-    requirement.
-    """
-
-    uv_stats_backend = str(uv_stats.get("backend", "unknown"))
-    reference_backend = str(reference.get("unwrap_backend", "")) if reference is not None else ""
-    reference_chart_count = _maybe_int(reference.get("unwrap_chart_count")) if reference is not None else None
-    reference_utilization = _maybe_float(reference.get("unwrap_utilization")) if reference is not None else None
-    chart_count = _maybe_int(uv_stats.get("chart_count"))
-    utilization = _maybe_float(uv_stats.get("atlas_utilization"))
-    face_count = _maybe_int(uv_stats.get("source_faces"))
-    overlap_count = _maybe_int(uv_stats.get("uv_overlap_count"))
-    flipped_count = _maybe_int(uv_stats.get("uv_flipped_count"))
-    unassigned_surface_ratio = _maybe_float(uv_stats.get("unassigned_surface_area_ratio"))
-    degenerate_surface_ratio = _maybe_float(uv_stats.get("uv_degenerate_surface_area_ratio"))
-    surface_exact_coverage = _maybe_float(texture_stats.get("uv_surface_exact_coverage_ratio"))
-    chart_count_ratio = (
-        float(chart_count) / float(reference_chart_count)
-        if chart_count is not None and reference_chart_count not in (None, 0)
-        else None
-    )
-    utilization_ratio = (
-        float(utilization) / float(reference_utilization)
-        if utilization is not None and reference_utilization not in (None, 0.0)
-        else None
-    )
-    overlap_face_ratio = (
-        float(overlap_count) / float(face_count)
-        if overlap_count is not None and face_count not in (None, 0)
-        else None
-    )
-    flipped_face_ratio = (
-        float(flipped_count) / float(face_count)
-        if flipped_count is not None and face_count not in (None, 0)
-        else None
-    )
-    partition_shared_edges = _maybe_int(uv_stats.get("spatial_partition_shared_edge_count"))
-    partition_cut_edges = _maybe_int(uv_stats.get("spatial_partition_cut_edge_count"))
-    partition_cut_ratio = _maybe_float(uv_stats.get("spatial_partition_cut_edge_ratio"))
-    partition_cuts_reported = (
-        uv_backend != "xatlas-parallel-spatial"
-        or (
-            partition_shared_edges is not None
-            and partition_cut_edges is not None
-            and partition_cut_ratio is not None
-            and 0 <= partition_cut_edges <= partition_shared_edges
-            and 0.0 <= partition_cut_ratio <= 1.0
-        )
-    )
-    checks = {
-        "actual_xatlas_backend": {
-            "passed": uv_stats_backend == uv_backend,
-            "actual": uv_stats_backend,
-            "required": uv_backend,
-        },
-        "reference_xatlas_backend": {
-            "passed": reference_backend.startswith("xatlas"),
-            "actual": reference_backend or None,
-            "required": "xatlas*",
-        },
-        "reference_xatlas_version": {
-            "passed": str(uv_stats.get("xatlas_version", "")) == "0.0.11",
-            "actual": uv_stats.get("xatlas_version"),
-            "required": "0.0.11 (committed oracle version)",
-        },
-        "chart_count_ratio": {
-            "passed": chart_count_ratio is not None
-            and PIXAL3D_XATLAS_CHART_COUNT_RATIO_MIN <= chart_count_ratio <= PIXAL3D_XATLAS_CHART_COUNT_RATIO_MAX,
-            "actual": chart_count_ratio,
-            "required_min": PIXAL3D_XATLAS_CHART_COUNT_RATIO_MIN,
-            "required_max": PIXAL3D_XATLAS_CHART_COUNT_RATIO_MAX,
-        },
-        "atlas_utilization_ratio": {
-            "passed": utilization_ratio is not None
-            and utilization_ratio >= PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN,
-            "actual": utilization_ratio,
-            "required_min": PIXAL3D_XATLAS_UTILIZATION_EQUIVALENCE_MIN,
-        },
-        "bounded_overlap_ratio": {
-            "passed": overlap_face_ratio is not None
-            and overlap_face_ratio <= PIXAL3D_XATLAS_MAX_OVERLAP_FACE_RATIO,
-            "actual": overlap_face_ratio,
-            "required_max": PIXAL3D_XATLAS_MAX_OVERLAP_FACE_RATIO,
-        },
-        "bounded_unassigned_surface": {
-            "passed": unassigned_surface_ratio is not None
-            and unassigned_surface_ratio <= PIXAL3D_XATLAS_MAX_UNASSIGNED_SURFACE_RATIO,
-            "actual": unassigned_surface_ratio,
-            "required_max": PIXAL3D_XATLAS_MAX_UNASSIGNED_SURFACE_RATIO,
-        },
-        "bounded_degenerate_surface": {
-            "passed": degenerate_surface_ratio is not None
-            and degenerate_surface_ratio <= PIXAL3D_XATLAS_MAX_DEGENERATE_SURFACE_RATIO,
-            "actual": degenerate_surface_ratio,
-            "required_max": PIXAL3D_XATLAS_MAX_DEGENERATE_SURFACE_RATIO,
-        },
-        "uv_surface_exact_coverage": {
-            "passed": surface_exact_coverage is not None and surface_exact_coverage >= 0.999,
-            "actual": surface_exact_coverage,
-            "required_min": 0.999,
-        },
-        "mirrored_faces_reported": {
-            "passed": flipped_face_ratio is not None and 0.0 <= flipped_face_ratio <= 1.0,
-            "actual": flipped_face_ratio,
-            "required": "reported; complete chart mirroring is valid xatlas behavior",
-        },
-        "spatial_partition_cuts_reported": {
-            "passed": partition_cuts_reported,
-            "actual": {
-                "shared_edges": partition_shared_edges,
-                "cut_edges": partition_cut_edges,
-                "cut_edge_ratio": partition_cut_ratio,
-            },
-            "required": "measured for xatlas-parallel-spatial",
-        },
-    }
-    integrity_check_names = (
-        "actual_xatlas_backend",
-        "reference_xatlas_version",
-        "bounded_overlap_ratio",
-        "bounded_unassigned_surface",
-        "bounded_degenerate_surface",
-        "uv_surface_exact_coverage",
-        "mirrored_faces_reported",
-        "spatial_partition_cuts_reported",
-    )
-    layout_check_names = (
-        "reference_xatlas_backend",
-        "chart_count_ratio",
-        "atlas_utilization_ratio",
-    )
-    integrity_ready = all(bool(checks[name]["passed"]) for name in integrity_check_names)
-    layout_parity_ready = all(bool(checks[name]["passed"]) for name in layout_check_names)
-    parity_ready = integrity_ready and layout_parity_ready
-    if parity_ready:
-        status = "reference_xatlas_measured"
-        reason = "measured_reference_ratios"
-    elif integrity_ready:
-        status = "xatlas_integrity_ready_layout_differs"
-        reason = "valid_xatlas_output_with_reference_layout_difference"
-    else:
-        status = "xatlas_integrity_failed"
-        reason = "measured_xatlas_integrity_failed"
-    return {
-        "status": status,
-        "reason": reason,
-        "integrity_ready": integrity_ready,
-        "layout_parity_ready": layout_parity_ready,
-        "parity_ready": parity_ready,
-        "xatlas_chart_parity": parity_ready,
-        "deferred_boundary": None if parity_ready else "not_xatlas_chart_parity",
-        "requested_uv_backend": uv_backend,
-        "native": {
-            "uv_backend": uv_stats_backend,
-            "xatlas_version": uv_stats.get("xatlas_version"),
-            "chart_count": chart_count,
-            "atlas_utilization": utilization,
-            "spatial_partition_shared_edge_count": partition_shared_edges,
-            "spatial_partition_cut_edge_count": partition_cut_edges,
-            "spatial_partition_cut_edge_ratio": partition_cut_ratio,
-            "overlap_face_ratio": overlap_face_ratio,
-            "flipped_face_ratio": flipped_face_ratio,
-            "unassigned_surface_area_ratio": unassigned_surface_ratio,
-            "uv_degenerate_surface_area_ratio": degenerate_surface_ratio,
-        },
-        "reference": {
-            "unwrap_backend": reference_backend or None,
-            "unwrap_chart_count": reference_chart_count,
-            "unwrap_utilization": reference_utilization,
-        },
-        "ratios": {
-            "chart_count_ratio": chart_count_ratio,
-            "atlas_utilization_ratio": utilization_ratio,
-        },
-        "deficits": {},
         "checks": checks,
     }
 

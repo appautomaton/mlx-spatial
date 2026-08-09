@@ -2,7 +2,7 @@ import json
 
 import mlx.core as mx
 import pytest
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.trellis2_slat import (
     SLAT_BLOCK0_INSPECTION_NAMES,

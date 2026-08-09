@@ -3,7 +3,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 import pytest
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 import mlx_spatial
 from mlx_spatial.mapanything_model import (

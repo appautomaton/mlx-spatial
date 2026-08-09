@@ -5,7 +5,7 @@ import mlx.core as mx
 import numpy as np
 import pytest
 from PIL import Image
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.sam3d import main
 from mlx_spatial.sam3d_inference import (
@@ -587,7 +587,7 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
         texture_size,
         k_neighbors,
         texel_chunk_size,
-        xatlas_face_guard,
+        uv_face_guard,
     ):
         calls["texture_mesh_vertices"] = np.array(mesh.vertices, copy=True)
         calls["texture_mesh_faces"] = np.array(mesh.faces, copy=True)
@@ -595,7 +595,7 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
         calls["texture_size"] = int(texture_size)
         calls["texture_k_neighbors"] = int(k_neighbors)
         calls["texture_chunk_size"] = int(texel_chunk_size)
-        calls["texture_xatlas_face_guard"] = int(xatlas_face_guard)
+        calls["texture_uv_face_guard"] = int(uv_face_guard)
         return SimpleNamespace(
             vertices=np.asarray(mesh.vertices, dtype=np.float32),
             faces=np.asarray(mesh.faces, dtype=np.int32),
@@ -612,8 +612,8 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
                 "raster_texel_count": 4,
                 "raw_coverage_ratio": 1.0,
                 "final_coverage_ratio": 1.0,
-                "unwrap_backend": "xatlas",
-                "xatlas_face_guard": int(xatlas_face_guard),
+                "unwrap_backend": "xatlas-equivalent-native",
+                "uv_face_guard": int(uv_face_guard),
                 "unwrap_seconds": 0.0,
                 "unwrap_chunks": 1,
                 "unwrap_chart_count": 1,
@@ -704,7 +704,7 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     assert trace["metadata"]["glb_postprocess"]["target_faces"] == 300000
     assert trace["metadata"]["glb_postprocess"]["min_component_faces"] == 256
     assert trace["metadata"]["glb_postprocess"]["min_component_face_fraction"] == 0.0005
-    assert trace["metadata"]["glb_postprocess"]["xatlas_face_guard"] == 400000
+    assert trace["metadata"]["glb_postprocess"]["uv_face_guard"] == 400000
     assert trace["metadata"]["glb_export"]["face_count"] > 0
     assert trace["metadata"]["glb_export"]["has_normals"] is True
     assert trace["metadata"]["glb_export"]["has_texture"] is True
@@ -727,7 +727,7 @@ def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture
     assert calls["texture_size"] == 16
     assert calls["texture_k_neighbors"] == 4
     assert calls["texture_chunk_size"] == 8
-    assert calls["texture_xatlas_face_guard"] == 400000
+    assert calls["texture_uv_face_guard"] == 400000
     assert calls["ss_flow_cfg_strength"] == 2.0
     assert calls["ss_flow_rescale_t"] == 1.0
     assert calls["ss_flow_cfg_interval"] == (0.0, 250.0)

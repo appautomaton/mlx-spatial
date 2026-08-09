@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import shlex
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from safetensors import SafetensorError
-
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
+from .safetensors_io import save_safetensors
+from .torch_checkpoint import load_torch_zip_state_dict
 
 
 LITO_REPO_ID = "apple/ml-lito"
@@ -180,35 +178,21 @@ def _convert_one_checkpoint(
         inspect_checkpoint(output)
         return
 
-    try:
-        from pt_loader import PtCheckpoint  # type: ignore
-    except ModuleNotFoundError as error:
-        raise RuntimeError("pt-safe-loader is required for LiTo checkpoint conversion; run `uv sync --dev`") from error
-
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="mlx-spatial-lito-convert-") as tmp:
-        try:
-            checkpoint = PtCheckpoint.load(
-                str(source),
-                max_archive_bytes=max_archive_bytes,
-                max_tensor_bytes=max_tensor_bytes,
-            )
-            result = checkpoint.export(format="safetensors", dir=tmp)
-            produced_weights = Path(result["weights_path"])
-            if output.exists():
-                output.unlink()
-            shutil.move(str(produced_weights), output)
-
-            metadata_path = result.get("metadata_path")
-            if metadata_path is not None:
-                metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
-                metadata_output.parent.mkdir(parents=True, exist_ok=True)
-                if metadata_output.exists() and overwrite:
-                    metadata_output.unlink()
-                if not metadata_output.exists():
-                    shutil.move(str(metadata_path), metadata_output)
-        except Exception as error:
-            _convert_with_torch_fallback(source, output, converter_error=error)
+    arrays = load_torch_zip_state_dict(
+        source,
+        max_archive_bytes=max_archive_bytes,
+        max_tensor_bytes=max_tensor_bytes,
+    )
+    save_safetensors(output, arrays)
+    metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
+    metadata_output.parent.mkdir(parents=True, exist_ok=True)
+    metadata_output.write_text(
+        f"source: {source.as_posix()}\n"
+        "converter: mlx-spatial-restricted-torch-zip\n"
+        f"tensor_count: {len(arrays)}\n",
+        encoding="utf-8",
+    )
 
 
 def _copy_file(source: Path, output: Path, *, overwrite: bool) -> None:
@@ -217,47 +201,6 @@ def _copy_file(source: Path, output: Path, *, overwrite: bool) -> None:
         inspect_checkpoint(output)
         return
     shutil.copy2(source, output)
-
-
-def _convert_with_torch_fallback(source: Path, output: Path, *, converter_error: Exception) -> None:
-    try:
-        torch = importlib.import_module("torch")
-        save_torch_safetensors = importlib.import_module("safetensors.torch").save_file
-    except ModuleNotFoundError as error:
-        raise RuntimeError(
-            "pt-safe-loader could not parse this LiTo checkpoint and torch is not installed "
-            "for the dev-only conversion fallback"
-        ) from error
-
-    checkpoint = torch.load(str(source), map_location="cpu")
-    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state_dict"), dict):
-        raw_state = checkpoint["state_dict"]
-    elif isinstance(checkpoint, dict):
-        raw_state = checkpoint
-    else:
-        raise RuntimeError(f"unsupported LiTo torch checkpoint root: {type(checkpoint).__name__}") from converter_error
-
-    tensors = {
-        str(name): tensor.detach().cpu().clone().contiguous()
-        for name, tensor in raw_state.items()
-        if isinstance(tensor, torch.Tensor)
-    }
-    if not tensors:
-        raise RuntimeError("LiTo checkpoint did not contain tensor state_dict entries") from converter_error
-
-    if output.exists():
-        output.unlink()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    save_torch_safetensors(tensors, str(output))
-    metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
-    metadata_output.parent.mkdir(parents=True, exist_ok=True)
-    metadata_output.write_text(
-        f"source: {source.as_posix()}\n"
-        "converter: torch.load-map-location-cpu\n"
-        f"pt_safe_loader_error: {type(converter_error).__name__}: {converter_error}\n"
-        f"tensor_count: {len(tensors)}\n",
-        encoding="utf-8",
-    )
 
 
 def _relative_report_path(root: Path, path: Path) -> str:
@@ -325,7 +268,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 def _cmd_inspect(args: argparse.Namespace) -> int:
     try:
         infos = inspect(args.root, prefixes=args.prefix, limit=args.limit)
-    except (FileNotFoundError, SafetensorError, ValueError) as error:
+    except (FileNotFoundError, ValueError) as error:
         print(f"error={error}")
         return 1
     for info in infos:

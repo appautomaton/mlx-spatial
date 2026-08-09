@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from mlx_spatial.spatialkit import export_decoded_ovoxel_glb
 from mlx_spatial.spatialkit.export import _resolve_ovoxel_export_settings
 from mlx_spatial.spatialkit.quality import (
@@ -34,7 +32,7 @@ def test_model_without_reference_profile_reports_artifact_health_without_pixal3d
         {"coverage_ratio": 1.0},
         None,
         quality_preset="reference-target",
-        uv_stats={"backend": "xatlas-clustered"},
+        uv_stats={"backend": "xatlas-equivalent-native"},
     )
 
     assert summary["artifact_ready"] is True
@@ -49,23 +47,6 @@ def test_model_without_reference_profile_reports_artifact_health_without_pixal3d
     assert equivalence["blockers"] == ("model_reference_profile_unavailable",)
 
 
-def test_parallel_xatlas_chunks_are_scoped_to_the_parallel_backend(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="requires xatlas_parallel_chunks"):
-        export_decoded_ovoxel_glb(
-            tmp_path,
-            tmp_path / "model.glb",
-            uv_backend="xatlas-parallel-spatial",
-        )
-
-    with pytest.raises(ValueError, match="only applies"):
-        export_decoded_ovoxel_glb(
-            tmp_path,
-            tmp_path / "model.glb",
-            uv_backend="xatlas-clustered",
-            xatlas_parallel_chunks=4,
-        )
-
-
 def test_model_neutral_quality_warns_about_nonblocking_boundary_gaps() -> None:
     summary = summarize_ovoxel_export_quality(
         "trellis2",
@@ -78,7 +59,7 @@ def test_model_neutral_quality_warns_about_nonblocking_boundary_gaps() -> None:
         {"coverage_ratio": 1.0},
         None,
         quality_preset="reference-target",
-        uv_stats={"backend": "xatlas-clustered"},
+        uv_stats={"backend": "xatlas-equivalent-native"},
     )
 
     assert summary["artifact_ready"] is True

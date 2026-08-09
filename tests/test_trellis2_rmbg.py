@@ -1,5 +1,5 @@
 import mlx.core as mx
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 import mlx_spatial
 from mlx_spatial.trellis2_rmbg import (

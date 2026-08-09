@@ -1,6 +1,6 @@
 import numpy as np
 import mlx.core as mx
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.sam3d_ss import (
     Sam3dSSDecoderConfig,

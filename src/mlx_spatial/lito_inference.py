@@ -18,9 +18,8 @@ from typing import Any, Callable, Literal
 import mlx.core as mx
 import numpy as np
 from PIL import Image, ImageOps
-from safetensors import safe_open
-from safetensors.numpy import save_file as save_safetensors
 
+from .checkpoint import inspect_checkpoint
 from .lito_assets import LITO_DEFAULT_ROOT, validate as validate_lito_assets
 from .lito_condition import LitoCondition
 from .lito_dit import LITO_MEMORY_PROFILES as _DIT_MEMORY_PROFILES
@@ -37,6 +36,7 @@ from .lito_real_backend import (
     write_lito_gaussians_ply,
 )
 from .lito_tokenizer import LitoTokenizer
+from .safetensors_io import save_safetensors
 
 
 logger = logging.getLogger(__name__)
@@ -452,20 +452,19 @@ def _require_checkpoint_backed_assets(root: Path) -> LitoRealAssetSummary:
     sentinel_dtypes: dict[str, str] = {}
     for relative_path, required_keys in LITO_REAL_TENSOR_SENTINELS.items():
         path = root / relative_path
-        with safe_open(path, framework="np") as handle:
-            keys = set(handle.keys())
-            checkpoint_key_counts[relative_path] = len(keys)
-            missing = [key for key in required_keys if key not in keys]
-            if missing:
-                raise ValueError(
-                    f"LiTo checkpoint {path} is present but missing required real tensor keys: "
-                    f"{', '.join(missing)}"
-                )
-            for key in required_keys:
-                tensor_slice = handle.get_slice(key)
-                summary_key = f"{relative_path}:{key}"
-                sentinel_shapes[summary_key] = tuple(int(dim) for dim in tensor_slice.get_shape())
-                sentinel_dtypes[summary_key] = str(tensor_slice.get_dtype())
+        infos = inspect_checkpoint(path)
+        info_by_name = {info.name: info for info in infos}
+        checkpoint_key_counts[relative_path] = len(infos)
+        missing = [key for key in required_keys if key not in info_by_name]
+        if missing:
+            raise ValueError(
+                f"LiTo checkpoint {path} is present but missing required real tensor keys: "
+                f"{', '.join(missing)}"
+            )
+        for key in required_keys:
+            summary_key = f"{relative_path}:{key}"
+            sentinel_shapes[summary_key] = info_by_name[key].shape
+            sentinel_dtypes[summary_key] = info_by_name[key].dtype
     return LitoRealAssetSummary(
         root=root,
         checkpoint_key_counts=checkpoint_key_counts,
@@ -730,7 +729,7 @@ def _write_gaussians_safetensors(path: Path, gaussians: dict[str, np.ndarray]) -
         for key, value in gaussians.items()
         if key in {"xyz_w", "scaling", "quaternion", "opacity", "rgb_sh", "lf", "intrinsic", "H_c2w"}
     }
-    save_safetensors(tensors, str(path))
+    save_safetensors(path, tensors)
 
 
 def _write_gaussians_splat(path: Path, gaussians: dict[str, np.ndarray]) -> None:

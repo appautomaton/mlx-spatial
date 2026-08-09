@@ -1,5 +1,5 @@
 from PIL import Image
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 import mlx.core as mx
 
 import mlx_spatial

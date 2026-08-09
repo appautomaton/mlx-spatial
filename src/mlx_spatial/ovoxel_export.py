@@ -56,7 +56,7 @@ def export_ovoxel_glb(
         target_faces=target_faces,
         quality_preset="reference-target",
         grid_size=grid_size,
-        uv_backend="xatlas-clustered",
+        uv_backend="xatlas-equivalent-native",
         remesh=True,
         remesh_resolution=grid_size,
         simplify_backend="mlx-qem",

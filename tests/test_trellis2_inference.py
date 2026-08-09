@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 import mlx.core as mx
 import numpy as np
 from PIL import Image

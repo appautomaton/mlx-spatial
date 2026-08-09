@@ -1,7 +1,7 @@
 import tomllib
 
 import mlx.core as mx
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 import mlx_spatial
 from mlx_spatial.checkpoint import (
@@ -26,7 +26,7 @@ def test_base_dependencies_exclude_heavy_model_frameworks():
     config = tomllib.loads(open("pyproject.toml", "rb").read().decode())
     dependencies = "\n".join(config["project"]["dependencies"]).lower()
 
-    assert "safetensors" in dependencies
+    assert "safetensors" not in dependencies
     assert "torch" not in dependencies
     assert "transformers" not in dependencies
     assert "diffusers" not in dependencies

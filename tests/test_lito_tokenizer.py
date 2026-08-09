@@ -10,8 +10,8 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 import pytest
-from safetensors import safe_open
 
+from mlx_spatial.safetensors_io import load_mlx_safetensors
 from mlx_spatial.lito_tokenizer import LitoTokenizer
 
 
@@ -22,8 +22,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _load_safetensors(path: Path) -> dict[str, np.ndarray]:
-    with safe_open(path, framework="numpy") as handle:
-        return {name: handle.get_tensor(name) for name in handle.keys()}
+    return {name: np.asarray(tensor) for name, tensor in load_mlx_safetensors(path).items()}
 
 
 def _tokenizer_tolerances() -> tuple[float, float]:

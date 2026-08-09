@@ -16,9 +16,10 @@ from typing import Any, Iterable
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-from safetensors import safe_open
 
+from .checkpoint import inspect_checkpoint
 from .lito_assets import LITO_TRELLIS_REQUIRED_FILES, lito_trellis_root_candidates
+from .safetensors_io import load_mlx_safetensors
 
 
 _DIT_CHECKPOINT = Path("image_to_3d/lito_dit_rgba.safetensors")
@@ -532,14 +533,13 @@ def load_lito_dit_weight_arrays(
     source_prefix = _DIT_EMA_PREFIX if use_ema else _DIT_SOURCE_PREFIX
     requested = _normalize_name_filter(names)
     arrays: dict[str, np.ndarray] = {}
-    with safe_open(path, framework="np") as handle:
-        for source_key in handle.keys():
-            if not source_key.startswith(source_prefix):
-                continue
-            local_name = _remap_lito_dit_key(source_key[len(source_prefix) :])
-            if requested is not None and local_name not in requested:
-                continue
-            arrays[local_name] = handle.get_tensor(source_key).astype(dtype, copy=False)
+    for source_key, tensor in load_mlx_safetensors(path).items():
+        if not source_key.startswith(source_prefix):
+            continue
+        local_name = _remap_lito_dit_key(source_key[len(source_prefix) :])
+        if requested is not None and local_name not in requested:
+            continue
+        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
     _raise_missing_requested_names("DiT", requested, arrays)
     return arrays
 
@@ -556,14 +556,13 @@ def load_lito_patch_encoder_weight_arrays(
     path = root / _DIT_CHECKPOINT
     requested = _normalize_name_filter(names)
     arrays: dict[str, np.ndarray] = {}
-    with safe_open(path, framework="np") as handle:
-        for source_key in handle.keys():
-            if not source_key.startswith(_PATCH_ENCODER_PREFIX):
-                continue
-            local_name = source_key[len(_PATCH_ENCODER_PREFIX) :]
-            if requested is not None and local_name not in requested:
-                continue
-            arrays[local_name] = handle.get_tensor(source_key).astype(dtype, copy=False)
+    for source_key, tensor in load_mlx_safetensors(path).items():
+        if not source_key.startswith(_PATCH_ENCODER_PREFIX):
+            continue
+        local_name = source_key[len(_PATCH_ENCODER_PREFIX) :]
+        if requested is not None and local_name not in requested:
+            continue
+        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
     _raise_missing_requested_names("patch encoder", requested, arrays)
     return arrays
 
@@ -580,16 +579,14 @@ def load_lito_gaussian_decoder_weight_arrays(
     path = root / _TOKENIZER_CHECKPOINT
     requested = _normalize_name_filter(names)
     arrays: dict[str, np.ndarray] = {}
-    with safe_open(path, framework="np") as handle:
-        for source_key in handle.keys():
-            if not source_key.startswith(_GS_PREFIX):
+    for source_key, tensor in load_mlx_safetensors(path).items():
+        if not source_key.startswith(_GS_PREFIX):
+            continue
+        stripped = source_key[len(_GS_PREFIX) :]
+        for local_name, array in _remap_lito_gaussian_decoder_tensor(stripped, np.asarray(tensor)):
+            if requested is not None and local_name not in requested:
                 continue
-            stripped = source_key[len(_GS_PREFIX) :]
-            tensor = handle.get_tensor(source_key)
-            for local_name, array in _remap_lito_gaussian_decoder_tensor(stripped, tensor):
-                if requested is not None and local_name not in requested:
-                    continue
-                arrays[local_name] = array.astype(dtype, copy=False)
+            arrays[local_name] = array.astype(dtype, copy=False)
     _raise_missing_requested_names("Gaussian decoder", requested, arrays)
     return arrays
 
@@ -606,14 +603,13 @@ def load_lito_voxel_decoder_weight_arrays(
     path = root / _TOKENIZER_CHECKPOINT
     requested = _normalize_name_filter(names)
     arrays: dict[str, np.ndarray] = {}
-    with safe_open(path, framework="np") as handle:
-        for source_key in handle.keys():
-            if not source_key.startswith(_VOXEL_PREFIX):
-                continue
-            local_name = source_key[len(_VOXEL_PREFIX) :]
-            if requested is not None and local_name not in requested:
-                continue
-            arrays[local_name] = handle.get_tensor(source_key).astype(dtype, copy=False)
+    for source_key, tensor in load_mlx_safetensors(path).items():
+        if not source_key.startswith(_VOXEL_PREFIX):
+            continue
+        local_name = source_key[len(_VOXEL_PREFIX) :]
+        if requested is not None and local_name not in requested:
+            continue
+        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
     _raise_missing_requested_names("Voxel decoder", requested, arrays)
     return arrays
 
@@ -1401,14 +1397,7 @@ def write_lito_gaussians_ply(
 
 
 def _read_safetensor_headers(path: Path) -> dict[str, tuple[tuple[int, ...], str]]:
-    if not path.is_file():
-        raise FileNotFoundError(f"LiTo checkpoint not found: {path}")
-    headers: dict[str, tuple[tuple[int, ...], str]] = {}
-    with safe_open(path, framework="np") as handle:
-        for key in handle.keys():
-            tensor_slice = handle.get_slice(key)
-            headers[key] = (tuple(int(dim) for dim in tensor_slice.get_shape()), str(tensor_slice.get_dtype()))
-    return headers
+    return {info.name: (info.shape, info.dtype) for info in inspect_checkpoint(path)}
 
 
 def _normalize_name_filter(names: Iterable[str] | None) -> set[str] | None:

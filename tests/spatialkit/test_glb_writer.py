@@ -1012,7 +1012,7 @@ from mlx_spatial.spatialkit._native import (
     pack_uv_charts as _pack_uv_charts,
     parameterize_uv_charts as _parameterize_uv_charts,
 )
-from mlx_spatial.spatialkit.export import make_reference_uvs, make_xatlas_uvs
+from mlx_spatial.spatialkit.export import make_reference_uvs
 
 
 def _cube_mesh() -> tuple[np.ndarray, np.ndarray]:
@@ -1108,25 +1108,3 @@ def test_make_reference_uvs_deterministic() -> None:
     np.testing.assert_array_equal(first.uvs, second.uvs)
     np.testing.assert_array_equal(first.faces, second.faces)
     np.testing.assert_array_equal(first.vertices, second.vertices)
-
-
-@pytest.mark.parametrize("clustered", [False, True])
-def test_make_xatlas_uvs_contract(clustered: bool) -> None:
-    vertices, faces = _cube_mesh()
-    mesh = make_xatlas_uvs(vertices, faces, clustered=clustered)
-
-    assert mesh.faces.shape == faces.shape
-    np.testing.assert_allclose(mesh.vertices[mesh.faces], vertices[faces])
-    assert mesh.uvs.shape == (mesh.vertices.shape[0], 2)
-    assert (mesh.uvs >= 0.0).all() and (mesh.uvs <= 1.0).all()
-    assert mesh.stats["backend"] == ("xatlas-clustered" if clustered else "xatlas-global")
-    assert mesh.stats["output_faces"] == faces.shape[0]
-    assert mesh.stats["unassigned_face_count"] == 0
-    assert mesh.stats["unassigned_surface_area_ratio"] == 0.0
-    assert mesh.stats["uv_degenerate_surface_area_ratio"] == 0.0
-    assert mesh.stats["chart_count"] > 0
-    assert mesh.stats["atlas_utilization"] > 0.0
-    # Real xatlas may mirror complete charts; this is reference behavior and
-    # must not be confused with a failed native parameterization.
-    assert mesh.stats["uv_flipped_count"] > 0
-    assert mesh.stats["timings_sec"]

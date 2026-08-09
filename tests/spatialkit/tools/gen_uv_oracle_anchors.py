@@ -16,9 +16,9 @@ For both cached Pixal3D fixtures this script:
   3. Phase A again: computes UV quality metrics on the oracle output with
      mlx_spatial.spatialkit._native.uv_quality_metrics and writes the anchors JSON.
 
-Phase B uses its own pinned oracle environment even though xatlas is also a
-runtime dependency of the unified project. The project process does not import
-xatlas while it computes the independent native measurements.
+Phase B uses its own pinned oracle environment. xatlas is intentionally absent
+from the unified project environment; only this isolated reference generator
+imports it while producing independent native-parity measurements.
 
 Usage (from the repository root):
     uv run python tests/spatialkit/tools/gen_uv_oracle_anchors.py

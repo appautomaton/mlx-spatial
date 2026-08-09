@@ -58,7 +58,7 @@ uv run hf download facebook/dinov3-vitl16-pretrain-lvd1689m \
 Convert the upstream NAF checkpoint for the Torch-free runtime:
 
 ```bash
-uv run --group torch-ref python scripts/pixal3d/convert_naf.py \
+uv run python scripts/pixal3d/convert_naf.py \
   --output weights/naf/naf_release.safetensors
 ```
 
@@ -157,22 +157,15 @@ cache, then passes those files to SpatialKit. SpatialKit writes `model.glb` and
 extension cannot load, the pipeline records a structured blocker before model
 inference rather than falling back after expensive work.
 
-Current cached comparisons already reject one tempting optimization:
-`xatlas-parallel-spatial` preserves rendered appearance but is slower than
-`xatlas-clustered` on both the 48k-face violin and 212k-face main assets, while
-introducing explicit spatial partition cuts. It remains available for
-Trellis2/SAM3D compatibility and controlled experiments, not as a Pixal3D
-default candidate.
+SpatialKit now uses the native `xatlas-equivalent-native` implementation for
+the reference-target UV path. The older Python xatlas backends were removed.
 
 For direct decoded-NPZ experiments, `export_decoded_ovoxel_glb` exposes these
 lower-level controls:
 
 - `simplify_backend="single-layer-qem"` with `remesh=False`
 - `simplify_backend="single-layer-mlx-qem"` with `remesh=False`
-- `uv_backend="xatlas-global"` or `uv_backend="xatlas-clustered"`
-- `uv_backend="xatlas-parallel-spatial"` with an explicit
-  `xatlas_parallel_chunks` value greater than one for measured experiments
-- `uv_backend="xatlas-equivalent-native"` for the separate native behavior port
+- `uv_backend="xatlas-equivalent-native"` for the native reference behavior port
 - `texture_postprocess="telea"`
 - `quality_preset="reference-target"`
 

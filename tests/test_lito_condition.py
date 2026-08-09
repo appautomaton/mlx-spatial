@@ -8,7 +8,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
-from safetensors.numpy import load_file
+from tests.safetensors_test_utils import load_file
 
 from mlx_spatial.lito_condition import (
     LITO_CONDITION_ATOL,

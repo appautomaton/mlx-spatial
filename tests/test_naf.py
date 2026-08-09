@@ -2,7 +2,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.naf import (
     NAF_WEIGHTS_FILENAME,

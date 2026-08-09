@@ -2,7 +2,7 @@ import json
 
 import mlx.core as mx
 import numpy as np
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.trellis2_slat import (
     SLatFlowConfig,

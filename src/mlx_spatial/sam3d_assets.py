@@ -3,21 +3,15 @@
 from __future__ import annotations
 
 import json
-import pickle
 import shutil
-import tempfile
-import zipfile
-from collections import OrderedDict
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import numpy as np
-from safetensors import SafetensorError
-from safetensors.numpy import save_file as save_numpy_safetensors
-
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
+from .safetensors_io import save_safetensors
+from .torch_checkpoint import load_torch_zip_state_dict
 
 
 SAM3D_OBJECTS_REPO_ID = "facebook/sam-3d-objects"
@@ -329,7 +323,7 @@ def inspect_sam3d_model_assets(
 
     try:
         checkpoints = tuple(_inspect_checkpoint_path(item) for item in checkpoint_paths)
-    except (SafetensorError, OSError, ValueError) as error:
+    except (OSError, ValueError) as error:
         return Sam3dPipelineInspection(
             validation=validation,
             config=config,
@@ -530,24 +524,6 @@ def convert_sam3d_assets_to_safetensors(
             ),
         )
 
-    try:
-        from pt_loader import PtCheckpoint  # type: ignore
-    except ModuleNotFoundError as error:
-        validation = validate_sam3d_assets(target_root)
-        return Sam3dConversionResult(
-            source_root=source_root,
-            output_root=target_root,
-            output_pipeline_path=None,
-            items=(),
-            validation=validation,
-            blocker=Sam3dAssetBlocker(
-                stage="checkpoint-conversion",
-                operation="convert PyTorch zip checkpoints to safetensors without torch",
-                reason="pt-safe-loader is not installed; run `uv sync --dev` or `uv add --dev pt-safe-loader`",
-                metadata={"error": str(error)},
-            ),
-        )
-
     output_model_dir = _mirrored_model_dir(source_validation, target_root)
     output_model_dir.mkdir(parents=True, exist_ok=True)
     converted_raw = dict(config.raw)
@@ -577,7 +553,6 @@ def convert_sam3d_assets_to_safetensors(
                 output_path,
                 role=item.role,
                 overwrite=overwrite,
-                pt_checkpoint_cls=PtCheckpoint,
                 max_archive_bytes=max_archive_bytes,
                 max_tensor_bytes=max_tensor_bytes,
             )
@@ -638,18 +613,11 @@ def convert_torch_checkpoint_to_safetensors(
 ) -> Sam3dConversionItem:
     """Convert a standalone PyTorch zip checkpoint to safetensors without torch."""
 
-    try:
-        from pt_loader import PtCheckpoint  # type: ignore
-    except ModuleNotFoundError as error:
-        raise RuntimeError(
-            "pt-safe-loader is required for PyTorch checkpoint conversion; run `uv sync --dev`"
-        ) from error
     return _convert_or_copy_checkpoint(
         Path(source_path),
         Path(output_path),
         role=role,
         overwrite=overwrite,
-        pt_checkpoint_cls=PtCheckpoint,
         max_archive_bytes=max_archive_bytes,
         max_tensor_bytes=max_tensor_bytes,
     )
@@ -690,7 +658,6 @@ def _convert_or_copy_checkpoint(
     *,
     role: str,
     overwrite: bool,
-    pt_checkpoint_cls: object,
     max_archive_bytes: int | None,
     max_tensor_bytes: int | None,
 ) -> Sam3dConversionItem:
@@ -716,39 +683,20 @@ def _convert_or_copy_checkpoint(
         raise ValueError(f"unsupported SAM3D checkpoint conversion format: {source.suffix or '<none>'}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="mlx-spatial-sam3d-convert-") as tmp:
-        try:
-            checkpoint = pt_checkpoint_cls.load(  # type: ignore[attr-defined]
-                str(source),
-                max_archive_bytes=max_archive_bytes,
-                max_tensor_bytes=max_tensor_bytes,
-            )
-            result = checkpoint.export(format="safetensors", dir=tmp)
-            produced_weights = Path(result["weights_path"])
-            if output.exists():
-                output.unlink()
-            shutil.move(str(produced_weights), output)
-            metadata_path = result.get("metadata_path")
-            if metadata_path is not None:
-                metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
-                metadata_output.parent.mkdir(parents=True, exist_ok=True)
-                if metadata_output.exists() and overwrite:
-                    metadata_output.unlink()
-                if not metadata_output.exists():
-                    shutil.move(str(metadata_path), metadata_output)
-        except Exception:
-            arrays = _load_restricted_torch_zip_state_dict(source, max_archive_bytes=max_archive_bytes)
-            if output.exists():
-                output.unlink()
-            save_numpy_safetensors(arrays, output)
-            metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
-            metadata_output.parent.mkdir(parents=True, exist_ok=True)
-            metadata_output.write_text(
-                f"source_sha256: {_sha256_file(source)}\n"
-                "converter: mlx-spatial-restricted-torch-zip\n"
-                f"tensor_count: {len(arrays)}\n",
-                encoding="utf-8",
-            )
+    arrays = load_torch_zip_state_dict(
+        source,
+        max_archive_bytes=max_archive_bytes,
+        max_tensor_bytes=max_tensor_bytes,
+    )
+    save_safetensors(output, arrays)
+    metadata_output = output.parent / "conversion_metadata" / f"{output.stem}.yaml"
+    metadata_output.parent.mkdir(parents=True, exist_ok=True)
+    metadata_output.write_text(
+        f"source_sha256: {_sha256_file(source)}\n"
+        "converter: mlx-spatial-restricted-torch-zip\n"
+        f"tensor_count: {len(arrays)}\n",
+        encoding="utf-8",
+    )
     return Sam3dConversionItem(
         role=role,
         kind="checkpoint",
@@ -767,153 +715,6 @@ def _safe_source_sha256_from_metadata(path: Path) -> str | None:
         if line.startswith("source_sha256:"):
             return line.split(":", 1)[1].strip().strip("\"'")
     return None
-
-
-class _TorchStorageType:
-    def __init__(self, name: str):
-        self.name = name
-
-
-@dataclass(frozen=True)
-class _TorchStorageRef:
-    storage_type: _TorchStorageType
-    key: str
-    location: str
-    size: int
-
-
-@dataclass(frozen=True)
-class _TorchTensorRef:
-    storage: _TorchStorageRef
-    storage_offset: int
-    size: tuple[int, ...]
-    stride: tuple[int, ...]
-
-
-def _rebuild_tensor_v2(
-    storage: _TorchStorageRef,
-    storage_offset: int,
-    size: Sequence[int],
-    stride: Sequence[int],
-    requires_grad: bool,
-    backward_hooks: object,
-) -> _TorchTensorRef:
-    del requires_grad, backward_hooks
-    return _TorchTensorRef(
-        storage=storage,
-        storage_offset=int(storage_offset),
-        size=tuple(int(value) for value in size),
-        stride=tuple(int(value) for value in stride),
-    )
-
-
-class _RestrictedTorchZipUnpickler(pickle.Unpickler):
-    def find_class(self, module: str, name: str) -> object:
-        if module == "collections" and name == "OrderedDict":
-            return OrderedDict
-        if module == "torch._utils" and name == "_rebuild_tensor_v2":
-            return _rebuild_tensor_v2
-        if module == "torch" and name.endswith("Storage"):
-            return _TorchStorageType(name)
-        raise pickle.UnpicklingError(f"unsupported PyTorch checkpoint global: {module}.{name}")
-
-    def persistent_load(self, persistent_id: object) -> _TorchStorageRef:
-        if not isinstance(persistent_id, tuple) or len(persistent_id) < 5:
-            raise pickle.UnpicklingError(f"unsupported persistent id: {persistent_id!r}")
-        tag, storage_type, key, location, size = persistent_id[:5]
-        if tag != "storage" or not isinstance(storage_type, _TorchStorageType):
-            raise pickle.UnpicklingError(f"unsupported storage persistent id: {persistent_id!r}")
-        return _TorchStorageRef(
-            storage_type=storage_type,
-            key=str(key),
-            location=str(location),
-            size=int(size),
-        )
-
-
-_TORCH_STORAGE_DTYPES = {
-    "FloatStorage": np.dtype("<f4"),
-    "DoubleStorage": np.dtype("<f8"),
-    "HalfStorage": np.dtype("<f2"),
-    "LongStorage": np.dtype("<i8"),
-    "IntStorage": np.dtype("<i4"),
-    "ShortStorage": np.dtype("<i2"),
-    "CharStorage": np.dtype("<i1"),
-    "ByteStorage": np.dtype("<u1"),
-    "BoolStorage": np.dtype("?"),
-}
-
-
-def _load_restricted_torch_zip_state_dict(
-    source: Path,
-    *,
-    max_archive_bytes: int | None,
-) -> dict[str, np.ndarray]:
-    if max_archive_bytes is not None and source.stat().st_size > max_archive_bytes:
-        raise ValueError(f"archive is {source.stat().st_size} bytes, limit is {max_archive_bytes}")
-    with zipfile.ZipFile(source) as archive:
-        data_pkl = _torch_zip_data_pickle_name(archive)
-        prefix = data_pkl[: -len("/data.pkl")] if data_pkl.endswith("/data.pkl") else ""
-        root = _RestrictedTorchZipUnpickler(archive.open(data_pkl)).load()
-        state_dict = _extract_state_dict(root)
-        arrays: dict[str, np.ndarray] = {}
-        storage_cache: dict[tuple[str, str], np.ndarray] = {}
-        for key, tensor in state_dict.items():
-            if isinstance(tensor, _TorchTensorRef):
-                arrays[str(key)] = _tensor_ref_to_numpy(archive, prefix, tensor, storage_cache)
-        if not arrays:
-            raise ValueError("restricted PyTorch checkpoint parser found no tensor state_dict entries")
-        return arrays
-
-
-def _torch_zip_data_pickle_name(archive: zipfile.ZipFile) -> str:
-    candidates = sorted(name for name in archive.namelist() if name.endswith("data.pkl"))
-    if not candidates:
-        raise ValueError("PyTorch zip checkpoint does not contain data.pkl")
-    return candidates[0]
-
-
-def _extract_state_dict(root: object) -> OrderedDict[str, object] | dict[str, object]:
-    if isinstance(root, OrderedDict):
-        return root
-    if isinstance(root, dict):
-        state_dict = root.get("state_dict")
-        if isinstance(state_dict, OrderedDict | dict):
-            return state_dict
-        model = root.get("model")
-        if isinstance(model, OrderedDict | dict):
-            return model
-        if all(isinstance(value, _TorchTensorRef) for value in root.values()):
-            return root
-    raise ValueError(f"unsupported PyTorch checkpoint root object: {type(root).__name__}")
-
-
-def _tensor_ref_to_numpy(
-    archive: zipfile.ZipFile,
-    prefix: str,
-    tensor: _TorchTensorRef,
-    storage_cache: dict[tuple[str, str], np.ndarray],
-) -> np.ndarray:
-    dtype = _TORCH_STORAGE_DTYPES.get(tensor.storage.storage_type.name)
-    if dtype is None:
-        raise ValueError(f"unsupported PyTorch storage type: {tensor.storage.storage_type.name}")
-    cache_key = (tensor.storage.storage_type.name, tensor.storage.key)
-    if cache_key not in storage_cache:
-        member = f"{prefix}/data/{tensor.storage.key}" if prefix else f"data/{tensor.storage.key}"
-        raw = archive.read(member)
-        storage_cache[cache_key] = np.frombuffer(raw, dtype=dtype)
-    storage = storage_cache[cache_key]
-    offset = tensor.storage_offset
-    if not tensor.size:
-        return np.array(storage[offset], dtype=dtype)
-    byte_strides = tuple(stride * dtype.itemsize for stride in tensor.stride)
-    view = np.lib.stride_tricks.as_strided(
-        storage[offset:],
-        shape=tensor.size,
-        strides=byte_strides,
-        writeable=False,
-    )
-    return np.array(view, copy=True)
 
 
 def _sha256_file(path: Path) -> str:

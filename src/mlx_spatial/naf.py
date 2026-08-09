@@ -10,9 +10,9 @@ from typing import Mapping
 import mlx.core as mx
 import numpy as np
 from PIL import Image
-from safetensors.mlx import load_file
 
 from .model_assets import NAF_ASSETS, ModelAssetValidation, validate_model_assets
+from .safetensors_io import load_mlx_safetensors
 
 
 NAF_REPO_ID = "valeoai/NAF"
@@ -52,8 +52,6 @@ def naf_conversion_command(root: str | Path = NAF_DEFAULT_ROOT) -> tuple[str, ..
     return (
         "uv",
         "run",
-        "--group",
-        "torch-ref",
         "python",
         "scripts/pixal3d/convert_naf.py",
         "--output",
@@ -86,7 +84,7 @@ def load_naf_tensors(
     path = naf_weights_path(root_or_path)
     if not path.is_file():
         raise FileNotFoundError(f"converted NAF weights not found: {path}")
-    tensors = dict(load_file(str(path)))
+    tensors = load_mlx_safetensors(path)
     validate_naf_tensors(tensors, config=config)
     return tensors
 

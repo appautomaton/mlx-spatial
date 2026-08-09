@@ -1,7 +1,7 @@
 import json
 
 from mlx_spatial.pixal3d import main as pixal3d_main
-from pixal3d_fixtures import write_fake_pixal3d_root
+from tests.pixal3d_fixtures import write_fake_pixal3d_root
 
 
 def test_pixal3d_cli_download_command(capsys):

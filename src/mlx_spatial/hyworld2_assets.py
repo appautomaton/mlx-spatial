@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from safetensors import SafetensorError
-
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
 
 
@@ -311,7 +309,7 @@ def inspect_hyworld2_model_assets(
 
     try:
         infos = inspect_hyworld2_checkpoint(validation.model_dir)
-    except (SafetensorError, OSError, ValueError) as error:
+    except (OSError, ValueError) as error:
         return HyWorld2CheckpointInspection(
             validation=validation,
             config=config,

@@ -179,7 +179,7 @@ class Pixal3DInferencePipeline:
                 "exporter": "spatialkit",
                 "glb_diagnostics_path": str(glb_diagnostics_path) if glb_diagnostics_path is not None else None,
                 "quality_preset": "reference-target",
-                "uv_backend": "xatlas-clustered",
+                "uv_backend": "xatlas-equivalent-native",
                 "simplify_backend": "mlx-qem",
                 "remesh": True,
                 "texture_postprocess": "telea",

@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from safetensors import SafetensorError
-
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
 
 
@@ -268,7 +266,7 @@ def inspect_mapanything_model_assets(
 
     try:
         infos = inspect_mapanything_checkpoint(validation.root)
-    except (SafetensorError, OSError, ValueError) as error:
+    except (OSError, ValueError) as error:
         return MapAnythingCheckpointInspection(
             validation=validation,
             config=config,

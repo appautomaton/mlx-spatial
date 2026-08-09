@@ -49,7 +49,7 @@ from .sam3d_export import (
     SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACE_FRACTION,
     SAM3D_GLB_DEFAULT_MIN_COMPONENT_FACES,
     SAM3D_GLB_DEFAULT_TARGET_FACES,
-    SAM3D_XATLAS_FACE_GUARD,
+    SAM3D_UV_FACE_GUARD,
     bake_sam3d_gaussian_texture_for_glb,
     compute_sam3d_vertex_normals,
     postprocess_sam3d_mesh_for_glb,
@@ -168,7 +168,7 @@ class Sam3dInferencePipeline:
         glb_texture_size: int = 1024,
         glb_gaussian_k: int = 8,
         glb_texel_chunk_size: int = 262_144,
-        glb_xatlas_face_guard: int = SAM3D_XATLAS_FACE_GUARD,
+        glb_uv_face_guard: int = SAM3D_UV_FACE_GUARD,
     ) -> Sam3dGenerationResult:
         """Run the staged SAM3D path, blocking rather than faking unported model stages."""
 
@@ -219,8 +219,8 @@ class Sam3dInferencePipeline:
             raise ValueError(f"glb_gaussian_k must be positive, got {glb_gaussian_k}")
         if glb_texel_chunk_size <= 0:
             raise ValueError(f"glb_texel_chunk_size must be positive, got {glb_texel_chunk_size}")
-        if glb_xatlas_face_guard <= 0:
-            raise ValueError(f"glb_xatlas_face_guard must be positive, got {glb_xatlas_face_guard}")
+        if glb_uv_face_guard <= 0:
+            raise ValueError(f"glb_uv_face_guard must be positive, got {glb_uv_face_guard}")
         if glb_output is not None and glb_texture == "gaussian" and glb_postprocess != "cleaned":
             raise ValueError("SAM3D Gaussian textured GLB requires --glb-postprocess cleaned")
         reset_mlx_peak_memory()
@@ -253,7 +253,7 @@ class Sam3dInferencePipeline:
                 "texture_size": int(glb_texture_size),
                 "gaussian_k": int(glb_gaussian_k),
                 "texel_chunk_size": int(glb_texel_chunk_size),
-                "xatlas_face_guard": int(glb_xatlas_face_guard),
+                "uv_face_guard": int(glb_uv_face_guard),
             },
         }
         _record_mlx_memory(metadata, "start")
@@ -739,7 +739,7 @@ class Sam3dInferencePipeline:
                     texture_size=int(glb_texture_size),
                     k_neighbors=int(glb_gaussian_k),
                     texel_chunk_size=int(glb_texel_chunk_size),
-                    xatlas_face_guard=int(glb_xatlas_face_guard),
+                    uv_face_guard=int(glb_uv_face_guard),
                 )
                 glb_stats = write_sam3d_textured_glb(glb_output, baked_texture)
                 texture_metadata = _dataclass_to_plain_dict(baked_texture.stats)

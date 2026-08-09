@@ -17,7 +17,7 @@ from mlx_spatial.pixal3d_inference import (
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
 from mlx_spatial.sam3d_assets import Sam3dAssetBlocker
 from mlx_spatial.sam3d_moge import Sam3dMogePointmap, Sam3dMogeResult
-from pixal3d_fixtures import (
+from tests.pixal3d_fixtures import (
     write_fake_pixal3d_dinov3_root,
     write_fake_pixal3d_decode_root,
     write_fake_naf_root,
@@ -1088,7 +1088,7 @@ def _patch_pixal3d_export_fixtures(monkeypatch, *, export_failure: Exception | N
                 "stages": {
                     "extract_mesh": {"source_vertices": 4, "source_faces": 2},
                     "simplify_mesh": {"stats": {"final_faces": 2}},
-                    "uv": {"stats": {"backend": "xatlas-clustered"}},
+                    "uv": {"stats": {"backend": "xatlas-equivalent-native"}},
                     "texture_bake": {
                         "stats": {
                             "backend": "metal-face-atlas-nearest",

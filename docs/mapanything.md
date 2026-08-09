@@ -111,11 +111,12 @@ world_points
 It also writes `extrinsics`, derived from `camera_poses`, because many viewers
 and downstream geometry tools need world-to-camera matrices.
 
-Dev-only Torch reference capture is guarded by:
+Historical Torch reference capture requires a separately managed upstream
+environment; this project does not install its dependencies:
 
 ```bash
-MAPANYTHING_TORCH_REF=1 uv run --group torch-ref \
-  python tools/mapanything_dump_torch_scene_reference.py \
+MAPANYTHING_TORCH_REF=1 /path/to/reference-env/bin/python \
+  tools/mapanything_dump_torch_scene_reference.py \
   weights/map-anything inputs/map-anything/desk \
   --output "$MLX_SPATIAL_TEST_SCRATCH/inputs/mapanything-desk-scene-reference.npz"
 ```

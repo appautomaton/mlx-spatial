@@ -6,7 +6,7 @@ from mlx_spatial.pixal3d_inference import (
     Pixal3DInferencePipeline,
 )
 from mlx_spatial.pixal3d_projection import PIXAL3D_DEFAULT_NUM_REGISTER_TOKENS
-from pixal3d_fixtures import write_fake_pixal3d_root
+from tests.pixal3d_fixtures import write_fake_pixal3d_root
 
 
 def test_pixal3d_pipeline_reports_missing_input(tmp_path):

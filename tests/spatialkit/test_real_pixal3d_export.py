@@ -1332,9 +1332,9 @@ def test_export_pixal3d_uv_backend_settings_contract(tmp_path) -> None:
     assert _resolve_chart_angle_degrees(45.0) == 45.0
     assert _resolve_tile_padding(None, "face-atlas") == (0.08, "backend_default:face-atlas")
     assert _resolve_tile_padding(None, "native-chart") == (0.001, "backend_default:native-chart")
-    assert _resolve_tile_padding(None, "xatlas-parallel-spatial") == (
-        0.02,
-        "backend_default:xatlas-parallel-spatial",
+    assert _resolve_tile_padding(None, "xatlas-equivalent-native") == (
+        0.0,
+        "backend_default:xatlas-equivalent-native",
     )
     assert _resolve_tile_padding(0.07, "native-chart") == (0.07, "explicit")
 
@@ -2890,11 +2890,8 @@ def test_uv_backend_validator_accepts_reference_backend() -> None:
     assert _resolve_pixal3d_uv_backend("XATLAS_EQUIVALENT_NATIVE") == "xatlas-equivalent-native"
     assert _resolve_pixal3d_uv_backend("face-atlas") == "face-atlas"
     assert _resolve_pixal3d_uv_backend("native-chart") == "native-chart"
-    assert _resolve_pixal3d_uv_backend("xatlas-global") == "xatlas-global"
-    assert _resolve_pixal3d_uv_backend("xatlas-clustered") == "xatlas-clustered"
-    assert _resolve_pixal3d_uv_backend("xatlas-parallel-spatial") == "xatlas-parallel-spatial"
     with pytest.raises(ValueError):
-        _resolve_pixal3d_uv_backend("xatlas")  # Select global or clustered explicitly.
+        _resolve_pixal3d_uv_backend("xatlas-global")
     with pytest.raises(ValueError):
         _resolve_pixal3d_uv_backend("not-a-backend")
     # Reference backend packs with texel gaps; fractional tile padding is not
@@ -3007,55 +3004,6 @@ def test_reference_unwrap_parity_anti_gaming() -> None:
     low_utilization["uv_bbox_utilization"] = 0.1
     assert _xatlas_chart_parity_summary(
         None, low_utilization, {}, "xatlas-equivalent-native")["parity_ready"] is False
-
-
-def test_actual_xatlas_parity_uses_reference_ratios_and_surface_area() -> None:
-    reference = {
-        "unwrap_backend": "xatlas-parallel-spatial",
-        "unwrap_chart_count": 51_953,
-        "unwrap_utilization": 0.8309683442,
-    }
-    uv_stats = {
-        "backend": "xatlas-clustered",
-        "xatlas_version": "0.0.11",
-        "source_faces": 211_804,
-        "chart_count": 47_503,
-        "atlas_utilization": 0.8737294,
-        "uv_overlap_count": 487,
-        "uv_flipped_count": 104_578,
-        "unassigned_surface_area_ratio": 9.45e-7,
-        "uv_degenerate_surface_area_ratio": 9.45e-7,
-    }
-    texture_stats = {"uv_surface_exact_coverage_ratio": 1.0}
-
-    summary = _xatlas_chart_parity_summary(
-        reference, uv_stats, texture_stats, "xatlas-clustered"
-    )
-    assert summary["integrity_ready"] is True
-    assert summary["layout_parity_ready"] is True
-    assert summary["parity_ready"] is True
-    assert summary["deferred_boundary"] is None
-    assert summary["checks"]["mirrored_faces_reported"]["passed"] is True
-
-    uv_stats["unassigned_surface_area_ratio"] = 0.01
-    failed = _xatlas_chart_parity_summary(
-        reference, uv_stats, texture_stats, "xatlas-clustered"
-    )
-    assert failed["integrity_ready"] is False
-    assert failed["parity_ready"] is False
-    assert failed["deferred_boundary"] == "not_xatlas_chart_parity"
-    assert failed["checks"]["bounded_unassigned_surface"]["passed"] is False
-
-    uv_stats["unassigned_surface_area_ratio"] = 0.0
-    uv_stats["chart_count"] = 1_564
-    uv_stats["atlas_utilization"] = 0.6692724
-    topology_improved = _xatlas_chart_parity_summary(
-        reference, uv_stats, texture_stats, "xatlas-clustered"
-    )
-    assert topology_improved["status"] == "xatlas_integrity_ready_layout_differs"
-    assert topology_improved["integrity_ready"] is True
-    assert topology_improved["layout_parity_ready"] is False
-    assert topology_improved["parity_ready"] is False
 
 
 def test_reference_stage_contract_unwrap_gate_requires_measured_invariants() -> None:

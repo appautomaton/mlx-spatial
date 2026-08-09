@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from plyfile import PlyData
-from safetensors.numpy import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.lito import main as lito_main
 from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES

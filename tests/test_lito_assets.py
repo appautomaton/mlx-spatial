@@ -1,8 +1,6 @@
-import sys
-import types
-
 import numpy as np
-from safetensors.numpy import save_file
+from tests.safetensors_test_utils import save_file
+from tests.safetensors_test_utils import write_torch_zip_checkpoint
 
 from mlx_spatial.checkpoint import inspect_checkpoint
 from mlx_spatial.lito_assets import (
@@ -91,33 +89,19 @@ def test_download_command_prints_cdn_invocation_when_hf_has_no_repo():
     assert "lito_dit_rgba.ckpt" in command
     assert "weights/lito-raw" in command
 
-def test_convert_roundtrip_tensor_names_and_shapes(tmp_path, monkeypatch):
+def test_convert_roundtrip_tensor_names_and_shapes(tmp_path):
     source = tmp_path / "lito_new.ckpt"
-    source.write_bytes(b"fake checkpoint")
+    write_torch_zip_checkpoint(
+        source,
+        {"model.weight": np.array([[1.0, 2.0]], dtype=np.float16)},
+    )
     output_root = tmp_path / "converted"
     output = output_root / "lito_new.safetensors"
-
-    class FakePtCheckpoint:
-        @classmethod
-        def load(cls, path, **kwargs):
-            assert path.endswith("lito_new.ckpt")
-            assert kwargs["max_archive_bytes"] == 16 * 1024**3
-            assert kwargs["max_tensor_bytes"] == 16 * 1024**3
-            return cls()
-
-        def export(self, *, format, dir):
-            assert format == "safetensors"
-            weights = tmp_path / "exported.safetensors"
-            metadata = tmp_path / "exported.yaml"
-            save_file({"model.weight": np.array([[1.0, 2.0]], dtype=np.float32)}, weights)
-            metadata.write_text("source_sha256: fixture\n", encoding="utf-8")
-            return {"weights_path": str(weights), "metadata_path": str(metadata)}
-
-    monkeypatch.setitem(sys.modules, "pt_loader", types.SimpleNamespace(PtCheckpoint=FakePtCheckpoint))
 
     convert(source, output_root)
 
     infos = inspect_checkpoint(output)
     assert [info.name for info in infos] == ["model.weight"]
     assert infos[0].shape == (1, 2)
+    assert infos[0].dtype == "F16"
     assert (output.parent / "conversion_metadata" / "lito_new.yaml").is_file()

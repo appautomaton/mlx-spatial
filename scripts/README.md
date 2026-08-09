@@ -71,7 +71,7 @@ Defaults:
 - decoder token limit: `1000000`
 - textured GLB texture size: `1024`
 - textured GLB face target: `200000`
-- exporter: integrated SpatialKit (MLX QEM, clustered xatlas, Metal PBR bake)
+- exporter: integrated SpatialKit (MLX QEM, native reference UV unwrap, Metal PBR bake)
 
 Low-step commands are smoke checks, not representative quality runs. See
 `docs/trellis2.md` for the asset roots and validation commands.
@@ -175,8 +175,8 @@ implemented; that format is available only in the synthetic
 
 ## Maintainer Tools
 
-- `scripts/pixal3d/convert_naf.py`: dev-only NAF conversion with the
-  `torch-ref` dependency group.
+- `scripts/pixal3d/convert_naf.py`: one-time Torch-free NAF conversion through
+  the internal restricted checkpoint reader.
 - `scripts/sam3d/inspect_trace.py`: inspect SAM3D trace JSON.
 - `scripts/lito/inspect_quality.py`: inspect LiTo Gaussian PLY quality signals.
 - `scripts/lito/validate_fixtures.py`: validate small committed LiTo fixtures.

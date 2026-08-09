@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from safetensors import safe_open
+import mlx.core as mx
+
+from .safetensors_io import inspect_safetensors, load_mlx_safetensors
 
 
 @dataclass(frozen=True)
@@ -30,20 +32,16 @@ def inspect_checkpoint(
     checkpoint_path = _validate_checkpoint_path(path)
     exact_names, name_prefixes, has_filter = _normalize_filters(names, prefixes)
 
-    infos: list[CheckpointTensorInfo] = []
-    with safe_open(checkpoint_path, framework="mlx") as tensors:
-        for name in sorted(tensors.keys()):
-            if has_filter and not _matches_filter(name, exact_names, name_prefixes):
-                continue
-            tensor_slice = tensors.get_slice(name)
-            infos.append(
-                CheckpointTensorInfo(
-                    name=name,
-                    shape=tuple(tensor_slice.get_shape()),
-                    dtype=str(tensor_slice.get_dtype()),
-                    source=str(checkpoint_path),
-                )
-            )
+    infos = [
+        CheckpointTensorInfo(
+            name=info.name,
+            shape=info.shape,
+            dtype=info.dtype,
+            source=str(checkpoint_path),
+        )
+        for info in inspect_safetensors(checkpoint_path)
+        if not has_filter or _matches_filter(info.name, exact_names, name_prefixes)
+    ]
 
     if has_filter and not infos:
         raise ValueError("checkpoint filters matched no tensors")
@@ -58,50 +56,18 @@ def load_checkpoint_tensors(
 ) -> dict[str, mx.array]:
     """Load selected tensors from a local safetensors checkpoint as MLX arrays."""
 
-    import mlx.core as mx
-
     checkpoint_path = _validate_checkpoint_path(path)
     exact_names, name_prefixes, has_filter = _normalize_filters(names, prefixes)
     if not has_filter:
         raise ValueError("loading checkpoint tensors requires names or prefixes")
 
-    loaded: dict[str, mx.array] = {}
-    with safe_open(checkpoint_path, framework="mlx") as tensors:
-        for name in sorted(tensors.keys()):
-            if _matches_filter(name, exact_names, name_prefixes):
-                try:
-                    loaded[name] = tensors.get_tensor(name)
-                except TypeError as error:
-                    if "bfloat16" not in str(error):
-                        raise
-                    return _load_checkpoint_tensors_with_mlx_load(
-                        checkpoint_path,
-                        exact_names,
-                        name_prefixes,
-                    )
-
-    if not loaded:
-        raise ValueError("checkpoint filters matched no tensors")
-    if exact_names:
-        missing = sorted(exact_names.difference(loaded))
-        if missing:
-            raise ValueError(f"checkpoint is missing requested tensors: {missing}")
-    return loaded
-
-
-def _load_checkpoint_tensors_with_mlx_load(
-    checkpoint_path: Path,
-    exact_names: set[str],
-    prefixes: tuple[str, ...],
-) -> dict[str, mx.array]:
-    import mlx.core as mx
-
-    tensors = mx.load(str(checkpoint_path))
+    tensors = load_mlx_safetensors(checkpoint_path)
     loaded = {
         name: tensors[name]
         for name in sorted(tensors)
-        if _matches_filter(name, exact_names, prefixes)
+        if _matches_filter(name, exact_names, name_prefixes)
     }
+
     if not loaded:
         raise ValueError("checkpoint filters matched no tensors")
     if exact_names:

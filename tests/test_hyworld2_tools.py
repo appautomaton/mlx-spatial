@@ -1,7 +1,7 @@
 import tomllib
 
 import mlx.core as mx
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.hyworld2 import main
 from mlx_spatial.hyworld2_assets import (

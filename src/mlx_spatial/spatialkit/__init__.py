@@ -47,13 +47,7 @@ from .texture import (
     coverage_status_histogram,
     telea_inpaint,
 )
-from .uv import NativeUvMesh, make_face_atlas_uvs, make_native_chart_uvs, make_xatlas_uvs
-from .xatlas import (
-    XAtlasUvResult,
-    resolve_xatlas_parallel_chunks,
-    unwrap_xatlas,
-    unwrap_xatlas_spatial,
-)
+from .uv import NativeUvMesh, make_face_atlas_uvs, make_native_chart_uvs, make_reference_uvs
 
 __all__ = [
     "DecodedOVoxelInputs",
@@ -64,7 +58,6 @@ __all__ = [
     "OVoxelGlbExportResult",
     "Pixal3DDecodedInputs",
     "Pixal3DGlbExportResult",
-    "XAtlasUvResult",
     "COVERAGE_STATUS_LABELS",
     "backend_info",
     "bake_pbr_texture",
@@ -81,20 +74,17 @@ __all__ = [
     "load_pixal3d_decoded_npz",
     "make_face_atlas_uvs",
     "make_native_chart_uvs",
-    "make_xatlas_uvs",
+    "make_reference_uvs",
     "mesh_metrics",
     "metal_device_available",
     "parse_glb",
     "png_coverage",
     "point_to_mesh_distances",
     "repair_nonmanifold_mesh",
-    "resolve_xatlas_parallel_chunks",
     "sampled_surface_to_mesh_distance_metrics",
     "simplify_mesh",
     "simplify_mesh_mlx_parallel_qem",
     "unify_face_orientations",
-    "unwrap_xatlas",
-    "unwrap_xatlas_spatial",
     "telea_inpaint",
     "textured_glb_payload",
     "validate_decoded_ovoxel",

@@ -3,7 +3,7 @@ import tomllib
 from types import SimpleNamespace
 
 import mlx.core as mx
-from safetensors.mlx import save_file
+from tests.safetensors_test_utils import save_file
 
 import mlx_spatial
 import mlx_spatial.trellis2_inference as trellis2_inference

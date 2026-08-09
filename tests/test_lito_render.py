@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from safetensors.numpy import load_file
+from tests.safetensors_test_utils import load_file
 
 from mlx_spatial.lito_render import LitoRenderer
 

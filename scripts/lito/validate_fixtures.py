@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from safetensors import safe_open
+
+from mlx_spatial.checkpoint import inspect_checkpoint
 
 
 REQUIRED_GROUPS = ("tokenizer", "condition", "dit", "render")
@@ -72,15 +73,14 @@ def _resolve_fixture(root: Path, relative_path: str) -> Path:
 
 def _validate_safetensors(path: Path) -> FileReport:
     try:
-        with safe_open(path, framework="numpy") as tensors:
-            keys = list(tensors.keys())
-            if not keys:
-                raise ValueError("contains no tensors")
-            first = tensors.get_tensor(keys[0])
-            detail = f"{keys[0]} shape={list(first.shape)} dtype={first.dtype}"
+        infos = inspect_checkpoint(path)
+        if not infos:
+            raise ValueError("contains no tensors")
+        first = infos[0]
+        detail = f"{first.name} shape={list(first.shape)} dtype={first.dtype}"
     except Exception as error:
         raise ValueError(f"{path}: invalid safetensors fixture: {error}") from error
-    return FileReport(path=path, kind="safetensors", count=len(keys), detail=detail)
+    return FileReport(path=path, kind="safetensors", count=len(infos), detail=detail)
 
 
 def _validate_image(path: Path) -> FileReport:

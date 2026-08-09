@@ -14,7 +14,8 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from safetensors.numpy import save_file
+
+from mlx_spatial.safetensors_io import save_safetensors
 
 
 SEED_BASE = 20260523
@@ -47,7 +48,7 @@ def _rng(seed_offset: int) -> np.random.Generator:
 
 
 def _save(path: Path, tensors: dict[str, np.ndarray]) -> None:
-    save_file({name: np.ascontiguousarray(value) for name, value in tensors.items()}, path)
+    save_safetensors(path, {name: np.ascontiguousarray(value) for name, value in tensors.items()})
 
 
 def _tokenizer_fixture(root: Path, index: int) -> dict[str, Any]:

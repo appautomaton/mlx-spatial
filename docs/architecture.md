@@ -24,8 +24,8 @@ model-neutral decoded O-Voxel boundary, `export.py` orchestrates conversion,
 `uv.py` owns UV mesh generation, `glb.py` owns serialization, `quality.py`
 separates model-neutral artifact health from model-specific reference verdicts,
 `pixal3d_quality.py` owns measured verdicts and parity gates,
-`pixal3d_reporting.py` owns fixture lineage and report summaries, and
-`xatlas.py` owns global, clustered, and spatially partitioned xatlas behavior.
+`pixal3d_reporting.py` owns fixture lineage and report summaries. UV unwrap is
+implemented by native code; there is no Python xatlas runtime.
 
 SpatialKit owns decoded-field mesh extraction, mesh cleanup and diagnostics,
 experimental single-layer QEM conversion, UV generation, Metal PBR texture
@@ -152,9 +152,10 @@ Main modules:
 The MLX scene output intentionally uses clean top-level keys:
 `images`, `depth`, `confidence`, `masks`, `intrinsics`, `camera_poses`,
 `extrinsics`, and `world_points`. Torch reference captures from the vendored
-pipeline use `scene.*` prefixes for the same semantic tensors. Keep Torch,
-TorchVision, UniCeption, OpenCV, and vendor Python imports out of the runtime
-dependencies; they belong only to explicit `torch-ref` parity workflows.
+pipeline use `scene.*` prefixes for the same semantic tensors. Torch,
+TorchVision, UniCeption, OpenCV, and vendor Python imports are not part of this
+project environment. Any new upstream capture must run in a separate reference
+environment.
 
 ## Pixal3D Boundary
 

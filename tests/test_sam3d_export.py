@@ -2,7 +2,7 @@ import numpy as np
 
 from mlx_spatial.sam3d_export import (
     SAM3D_GAUSSIAN_PLY_FIELDS,
-    SAM3D_XATLAS_FACE_GUARD,
+    SAM3D_UV_FACE_GUARD,
     SAM3D_SH_C0,
     Sam3dGaussianTextureBakeResult,
     Sam3dGaussianTextureBakeStats,
@@ -381,13 +381,13 @@ def test_bake_sam3d_gaussian_texture_for_glb_produces_covered_texture():
     assert baked.stats.sampled_texel_count > 0
     assert baked.stats.raw_coverage_ratio > 0.0
     assert baked.stats.final_coverage_ratio == 1.0
-    assert baked.stats.xatlas_face_guard == SAM3D_XATLAS_FACE_GUARD
+    assert baked.stats.uv_face_guard == SAM3D_UV_FACE_GUARD
     assert baked.base_color_rgba.shape == (16, 16, 4)
     assert baked.base_color_rgba[..., :3].max() > baked.base_color_rgba[..., :3].min()
     assert baked.uvs.shape == (baked.vertices.shape[0], 2)
 
 
-def test_bake_sam3d_gaussian_texture_for_glb_respects_xatlas_face_guard():
+def test_bake_sam3d_gaussian_texture_for_glb_respects_uv_face_guard():
     mesh = postprocess_sam3d_mesh_for_glb(
         np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
         np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
@@ -408,12 +408,12 @@ def test_bake_sam3d_gaussian_texture_for_glb_respects_xatlas_face_guard():
             gaussian_opacity=opacity,
             gaussian_scale=scale,
             texture_size=4,
-            xatlas_face_guard=1,
+            uv_face_guard=1,
         )
     except ValueError as error:
         assert "exceeds guard" in str(error)
     else:
-        raise AssertionError("expected SAM3D texture bake to respect xatlas face guard")
+        raise AssertionError("expected SAM3D texture bake to respect UV face guard")
 
 
 def test_sam3d_textured_glb_payload_embeds_base_color_texture(tmp_path):
@@ -435,7 +435,7 @@ def test_sam3d_textured_glb_payload_embeds_base_color_texture(tmp_path):
             raw_coverage_ratio=1.0,
             final_coverage_ratio=1.0,
             unwrap_backend="fixture",
-            xatlas_face_guard=SAM3D_XATLAS_FACE_GUARD,
+            uv_face_guard=SAM3D_UV_FACE_GUARD,
             unwrap_seconds=0.0,
             unwrap_chunks=1,
             unwrap_chart_count=1,

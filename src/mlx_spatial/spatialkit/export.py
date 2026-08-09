@@ -82,7 +82,6 @@ from .uv import (
     make_face_atlas_uvs,
     make_native_chart_uvs,
     make_reference_uvs,
-    make_xatlas_uvs,
 )
 
 PIXAL3D_REFERENCE_TARGET_FACES = 212_542
@@ -111,7 +110,6 @@ def export_decoded_ovoxel_glb(
     grid_size: int | None = None,
     min_component_faces: int = 32,
     uv_backend: str = "face-atlas",
-    xatlas_parallel_chunks: int | None = None,
     chart_angle_degrees: float = 45.0,
     tile_padding: float | None = None,
     small_boundary_loop_fill_max_edges: int = OVOXEL_SMALL_BOUNDARY_LOOP_FILL_MAX_EDGES,
@@ -189,17 +187,6 @@ def export_decoded_ovoxel_glb(
             "the original FlexiDualGrid single-layer surface"
         )
     resolved_uv_backend = _resolve_ovoxel_uv_backend(uv_backend)
-    resolved_xatlas_parallel_chunks: int | None = None
-    if resolved_uv_backend == "xatlas-parallel-spatial":
-        if xatlas_parallel_chunks is None or xatlas_parallel_chunks <= 1:
-            raise ValueError(
-                "uv_backend='xatlas-parallel-spatial' requires xatlas_parallel_chunks > 1"
-            )
-        resolved_xatlas_parallel_chunks = int(xatlas_parallel_chunks)
-    elif xatlas_parallel_chunks is not None:
-        raise ValueError(
-            "xatlas_parallel_chunks only applies to uv_backend='xatlas-parallel-spatial'"
-        )
     resolved_chart_angle_degrees = _resolve_chart_angle_degrees(chart_angle_degrees)
     resolved_tile_padding, tile_padding_source = _resolve_tile_padding(tile_padding, resolved_uv_backend)
     glb_path, resolved_diagnostics_path = _resolve_ovoxel_export_paths(output, diagnostics_path)
@@ -232,7 +219,6 @@ def export_decoded_ovoxel_glb(
             "small_boundary_loop_fill_max_perimeter": resolved_small_boundary_loop_fill_max_perimeter,
             "requested_uv_backend": str(uv_backend),
             "uv_backend": resolved_uv_backend,
-            "xatlas_parallel_chunks": resolved_xatlas_parallel_chunks,
             "chart_angle_degrees": resolved_chart_angle_degrees,
             "tile_padding": resolved_tile_padding,
             "tile_padding_source": tile_padding_source,
@@ -869,17 +855,6 @@ def export_decoded_ovoxel_glb(
     diagnostics["stages"]["export_metrics"]["metrics"] = post_metrics
 
     def build_uv_mesh() -> NativeUvMesh:
-        if resolved_uv_backend == "xatlas-global":
-            return make_xatlas_uvs(simplified.vertices, simplified.faces, clustered=False)
-        if resolved_uv_backend == "xatlas-clustered":
-            return make_xatlas_uvs(simplified.vertices, simplified.faces, clustered=True)
-        if resolved_uv_backend == "xatlas-parallel-spatial":
-            return make_xatlas_uvs(
-                simplified.vertices,
-                simplified.faces,
-                parallel_chunks=resolved_xatlas_parallel_chunks or 1,
-                spatial_tile_padding=resolved_tile_padding,
-            )
         if resolved_uv_backend == "xatlas-equivalent-native":
             return make_reference_uvs(
                 simplified.vertices,
@@ -1010,7 +985,6 @@ def export_decoded_ovoxel_glb(
                 "quality_preset": resolved_quality_preset,
                 "uv_backend": resolved_uv_backend,
                 "uv_stats_backend": str(uv_mesh.stats.get("backend")),
-                "xatlas_parallel_chunks": resolved_xatlas_parallel_chunks,
                 "chart_angle_degrees": resolved_chart_angle_degrees,
                 "bake_backend": str(baked.stats.get("backend")),
                 "coverage_ratio": float(baked.stats.get("coverage_ratio", 0.0)),
@@ -1282,7 +1256,6 @@ __all__ = [
     "make_face_atlas_uvs",
     "make_native_chart_uvs",
     "make_reference_uvs",
-    "make_xatlas_uvs",
     "textured_glb_payload",
     "validate_decoded_ovoxel",
     "validate_pixal3d_decoded",
