@@ -116,8 +116,8 @@ user-facing subset shown by `uv run python scripts/lito/generate.py --help`.
 | --- | --- |
 | `--format {ply,splat,safetensors}` | Select output artifact format. Use `ply` for checkpoint-backed viewer output; checkpoint-backed `splat` export is not implemented. |
 | `--ply-storage {binary_little_endian,ascii}` | Select PLY storage. Use `binary_little_endian` for normal runs and `ascii` only for debugging or text diffs. |
-| `--memory-profile {safe,balanced,large}` | Select memory and init-coordinate defaults. |
-| `--max-init-coords-per-batch {profile,none,N}` | Package CLI only. Use profile cap, upstream-style full occupied cells, or an explicit cap. |
+| `--memory-profile {safe,balanced,large}` | Select source-contract smoke execution settings. Checkpoint-backed generation always preserves complete occupied-cell coverage. |
+| `--max-init-coords-per-batch N` | Package CLI only. Explicitly truncate occupied cells for debugging; omitted by default. |
 | `--num-steps N` | Sampling steps; default follows `LITO_RECOMMENDED_NUM_STEPS`. |
 | `--cfg-scale X` | Classifier-free guidance scale. |
 | `--seed N` | Make local sampling reproducible. |
@@ -126,7 +126,7 @@ user-facing subset shown by `uv run python scripts/lito/generate.py --help`.
 | `--print-metrics` | Print per-stage timing and MLX memory metrics. |
 | `--source-contract-smoke` | Use synthetic contract output instead of checkpoint-backed inference. |
 
-`--max-init-coords-per-batch none` can produce very large PLY files because each occupied init cell expands to many Gaussian splats. Keep those outputs under `outputs/lito/`.
+Complete LiTo output can produce large PLY files because each occupied init cell expands to 64 Gaussian splats. An explicit `--max-init-coords-per-batch N` trades away surface completeness and should not be used for quality output.
 
 ## Memory
 
@@ -134,9 +134,9 @@ Profiles:
 
 | Profile | Default behavior |
 | --- | --- |
-| `safe` | Conservative init-coordinate cap for lower-memory smoke and debugging runs. |
-| `balanced` | Practical default for high-memory Apple Silicon development systems. |
-| `large` | Higher-cap run path; use only when memory headroom is clear. |
+| `safe` | Small source-contract smoke workload. |
+| `balanced` | Default source-contract smoke workload. |
+| `large` | Larger source-contract smoke workload. |
 
 LiTo reports stage metrics when `--print-metrics` is set. If a run blocks because required assets are missing or memory safety limits are exceeded, keep the blocker message with the trace or issue report.
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import struct
 import time
 from dataclasses import dataclass, field
@@ -27,12 +28,10 @@ from .lito_dit import LitoDiT
 from .lito_render import LitoRenderer
 from .lito_real_backend import (
     LITO_DEFAULT_PLY_STORAGE,
-    LITO_INIT_COORD_CAP_PROFILE,
     LitoBackendUnavailable,
     LitoRealBackendConfig,
     create_lito_real_backend,
     normalize_lito_ply_storage,
-    resolve_lito_init_coord_cap,
     write_lito_gaussians_ply,
 )
 from .lito_tokenizer import LitoTokenizer
@@ -130,6 +129,15 @@ class LitoGenerationResult:
     metadata: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, dict[str, float]] = field(default_factory=dict)
 
+    @property
+    def gaussian_count(self) -> int:
+        """Return the number of exported Gaussians, including decoder expansion."""
+
+        xyz = self.gaussians["xyz_w"]
+        if xyz.ndim < 2 or int(xyz.shape[-1]) != 3:
+            raise ValueError(f"xyz_w must end in three coordinates, got {xyz.shape}")
+        return math.prod(int(size) for size in xyz.shape[:-1])
+
 
 @dataclass(frozen=True)
 class _PreprocessedImage:
@@ -147,7 +155,7 @@ class LitoInferencePipeline:
         weights_root: str | Path = LITO_DEFAULT_ROOT,
         *,
         memory_profile: str = LITO_DEFAULT_MEMORY_PROFILE,
-        max_init_coords_per_batch: int | str | None = LITO_INIT_COORD_CAP_PROFILE,
+        max_init_coords_per_batch: int | str | None = None,
         source_contract_smoke: bool = False,
     ) -> None:
         self.weights_root = Path(weights_root)
@@ -235,7 +243,6 @@ class LitoInferencePipeline:
             LitoRealBackendConfig(
                 weights_root=self.weights_root,
                 asset_summary=self.real_asset_summary,
-                memory_profile=self.memory_profile.name,
                 max_init_coords_per_batch=self.max_init_coords_per_batch,
                 raw_weights_root=_infer_raw_weights_root(self.weights_root),
                 allow_cuda=False,
@@ -416,25 +423,26 @@ def memory_profile_config(name: str) -> LitoMemoryProfile:
         raise ValueError(f"unknown LiTo memory profile: {name!r}") from error
 
 
-def normalize_lito_init_coord_cap(value: int | str | None) -> int | str | None:
+def normalize_lito_init_coord_cap(value: int | str | None) -> int | None:
     """Normalize a public LiTo init-coordinate cap override."""
 
     if value is None:
         return None
     if isinstance(value, str):
         token = value.strip().lower()
-        if token == LITO_INIT_COORD_CAP_PROFILE:
-            return LITO_INIT_COORD_CAP_PROFILE
         if token == "none":
             return None
         if token.isdecimal():
             value = int(token)
         else:
             raise ValueError(
-                "--max-init-coords-per-batch must be 'profile', 'none', or a positive integer, "
+                "--max-init-coords-per-batch must be 'none' or a positive integer, "
                 f"got {value!r}"
             )
-    return resolve_lito_init_coord_cap("safe", value)
+    max_cells = int(value)
+    if max_cells <= 0:
+        raise ValueError(f"--max-init-coords-per-batch must be positive, got {value!r}")
+    return max_cells
 
 
 def _require_checkpoint_backed_assets(root: Path) -> LitoRealAssetSummary:
@@ -788,11 +796,11 @@ def _collect_mx_arrays(value: Any, arrays: list[mx.array]) -> None:
 
 
 def _reset_peak_memory() -> None:
-    metal = getattr(mx, "metal", None)
-    if metal is None or not hasattr(metal, "reset_peak_memory"):
+    reset = getattr(mx, "reset_peak_memory", None)
+    if reset is None:
         return
     try:
-        metal.reset_peak_memory()
+        reset()
     except Exception:
         return
 
@@ -809,15 +817,12 @@ def _memory_gb(kind: str) -> float:
 
 
 def _memory_bytes(kind: str) -> int:
-    metal = getattr(mx, "metal", None)
-    if metal is None:
-        return 0
     method_name = {
         "active": "get_active_memory",
         "peak": "get_peak_memory",
         "cache": "get_cache_memory",
     }[kind]
-    method = getattr(metal, method_name, None)
+    method = getattr(mx, method_name, None)
     if method is None:
         return 0
     try:

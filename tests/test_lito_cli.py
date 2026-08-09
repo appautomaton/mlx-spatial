@@ -12,6 +12,7 @@ from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.lito import main as lito_main
 from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
+from mlx_spatial.lito_inference import LitoGenerationResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,7 +64,7 @@ def test_cli_generate_produces_ply(tmp_path, capsys):
     assert output.with_suffix(".safetensors").is_file()
 
 
-def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch):
+def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch, capsys):
     image = _write_synthetic_image(tmp_path / "input.png")
     output = tmp_path / "test.ply"
     observed: dict[str, object] = {}
@@ -74,7 +75,7 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
             weights_root,
             *,
             memory_profile,
-            max_init_coords_per_batch="profile",
+            max_init_coords_per_batch=None,
             source_contract_smoke=False,
         ):
             observed["weights_root"] = str(weights_root)
@@ -86,7 +87,11 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
             observed["image_path"] = str(image_path)
             observed["output_path"] = str(kwargs["output_path"])
             observed["ply_storage"] = kwargs["ply_storage"]
-            return type("Result", (), {"gaussians": {"xyz_w": np.zeros((1, 3), dtype=np.float32)}})()
+            return LitoGenerationResult(
+                gaussians={"xyz_w": np.zeros((2, 64, 3), dtype=np.float32)},
+                rendered_image=None,
+                output_path=Path(kwargs["output_path"]),
+            )
 
     monkeypatch.setattr("mlx_spatial.lito.LitoInferencePipeline", RecordingPipeline)
 
@@ -109,6 +114,7 @@ def test_cli_generate_honors_global_root_before_subcommand(tmp_path, monkeypatch
     )
 
     assert status == 0
+    assert "gaussians=128" in capsys.readouterr().out
     assert observed == {
         "weights_root": str(tmp_path / "global-weights"),
         "memory_profile": "safe",

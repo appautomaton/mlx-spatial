@@ -67,10 +67,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate_parser.add_argument("--render-size", type=int)
     generate_parser.add_argument(
         "--max-init-coords-per-batch",
-        default="profile",
-        metavar="{profile|none|N}",
+        default=None,
+        metavar="N",
         type=normalize_lito_init_coord_cap,
-        help="checkpoint-backed init-coordinate cap: profile default, none for upstream coverage, or integer N",
+        help="optional debug cap for occupied init cells; omitted by default to preserve complete output",
     )
     generate_parser.add_argument("--print-metrics", action="store_true")
     generate_parser.add_argument(
@@ -133,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"format={args.format}")
         if args.format == "ply" and not args.source_contract_smoke:
             print(f"ply_storage={args.ply_storage}")
-        print(f"gaussians={int(result.gaussians['xyz_w'].shape[0])}")
+        print(f"gaussians={result.gaussian_count}")
         if args.source_contract_smoke:
             print("mode=source-contract-smoke")
         if args.print_metrics:

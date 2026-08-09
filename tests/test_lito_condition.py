@@ -146,19 +146,19 @@ def _record_metrics(caplog, name: str, call):
 
 
 def _reset_peak_memory_if_available() -> None:
-    metal = getattr(mx, "metal", None)
-    if metal is not None and hasattr(metal, "reset_peak_memory"):
+    reset = getattr(mx, "reset_peak_memory", None)
+    if reset is not None:
         try:
-            metal.reset_peak_memory()
+            reset()
         except RuntimeError:
             return
 
 
 def _peak_memory_gb_or_zero() -> float:
-    metal = getattr(mx, "metal", None)
-    if metal is None or not hasattr(metal, "get_peak_memory"):
+    get_peak_memory = getattr(mx, "get_peak_memory", None)
+    if get_peak_memory is None:
         return 0.0
     try:
-        return metal.get_peak_memory() / (1024**3)
+        return get_peak_memory() / (1024**3)
     except RuntimeError:
         return 0.0

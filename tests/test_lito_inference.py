@@ -47,6 +47,7 @@ def test_full_pipeline_runs_on_sample_input(tmp_path):
     assert output.with_suffix(".safetensors").is_file()
     assert result.output_path == output
     assert result.gaussians["xyz_w"].shape == (64, 3)
+    assert result.gaussian_count == 64
     assert result.rendered_image is not None
     assert result.metadata["pipeline"] == "lito-source-contract-smoke"
 

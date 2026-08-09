@@ -33,12 +33,6 @@ _TRELLIS_SS_DECODER_CONFIG = Path(LITO_TRELLIS_REQUIRED_FILES[0])
 _TRELLIS_SS_DECODER_CHECKPOINT = Path(LITO_TRELLIS_REQUIRED_FILES[1])
 _LITO_DINO_IMAGE_MEAN = (0.485, 0.456, 0.406)
 _LITO_DINO_IMAGE_STD = (0.229, 0.224, 0.225)
-_LITO_REAL_MAX_INIT_COORDS_BY_PROFILE = {
-    "safe": 512,
-    "balanced": 2048,
-    "large": 8192,
-}
-LITO_INIT_COORD_CAP_PROFILE = "profile"
 LITO_PLY_STORAGES = ("binary_little_endian", "ascii")
 LITO_DEFAULT_PLY_STORAGE = "binary_little_endian"
 
@@ -49,8 +43,7 @@ class LitoRealBackendConfig:
 
     weights_root: Path
     asset_summary: Any
-    memory_profile: str
-    max_init_coords_per_batch: int | str | None = LITO_INIT_COORD_CAP_PROFILE
+    max_init_coords_per_batch: int | None = None
     raw_weights_root: Path | None = None
     allow_cuda: bool = False
     mlx_compute_dtype: str = "float16"
@@ -449,14 +442,10 @@ class DirectMlxLitoBackend:
         """Decode sampled LiTo latent tokens through voxel/TRELLIS and Gaussian Perceiver."""
 
         trellis_root = _resolve_lito_trellis_root(self.config)
-        max_cells = resolve_lito_init_coord_cap(
-            self.config.memory_profile,
-            self.config.max_init_coords_per_batch,
-        )
         init = self.decode_init_coords_from_latents(
             latent_tokens,
             trellis_root=trellis_root,
-            max_cells_per_batch=max_cells,
+            max_cells_per_batch=self.config.max_init_coords_per_batch,
         )
         init_coord = init["init_coord"]
         q_seq_lens = init["q_seq_lens"]
@@ -2606,40 +2595,6 @@ def _resolve_lito_trellis_root(config: LitoRealBackendConfig) -> Path:
     raise LitoBackendUnavailable(f"TRELLIS sparse-structure decoder weights are required for LiTo init coords; searched {searched}")
 
 
-def _max_init_coords_for_memory_profile(memory_profile: str) -> int:
-    try:
-        return _LITO_REAL_MAX_INIT_COORDS_BY_PROFILE[memory_profile]
-    except KeyError as error:
-        allowed = ", ".join(sorted(_LITO_REAL_MAX_INIT_COORDS_BY_PROFILE))
-        raise ValueError(f"unsupported LiTo memory profile {memory_profile!r}; expected one of {allowed}") from error
-
-
-def resolve_lito_init_coord_cap(
-    memory_profile: str,
-    cap: int | str | None = LITO_INIT_COORD_CAP_PROFILE,
-) -> int | None:
-    """Resolve profile, no-cap, or explicit integer mode for LiTo init-coordinate generation."""
-
-    if cap == LITO_INIT_COORD_CAP_PROFILE:
-        return _max_init_coords_for_memory_profile(memory_profile)
-    if cap is None:
-        return None
-    if isinstance(cap, str):
-        if cap.lower() == "none":
-            return None
-        if cap.isdecimal():
-            cap = int(cap)
-        else:
-            raise ValueError(
-                "max_init_coords_per_batch must be 'profile', 'none', or a positive integer, "
-                f"got {cap!r}"
-            )
-    max_cells = int(cap)
-    if max_cells <= 0:
-        raise ValueError(f"max_init_coords_per_batch must be positive, got {cap!r}")
-    return max_cells
-
-
 def _as_numpy(value: Any, name: str) -> np.ndarray:
     if hasattr(value, "detach") and callable(value.detach):
         value = value.detach()
@@ -2697,7 +2652,6 @@ def _sh_degree_from_coeff_count(coeffs: int) -> int:
 __all__ = [
     "DirectMlxLitoBackend",
     "LITO_DEFAULT_PLY_STORAGE",
-    "LITO_INIT_COORD_CAP_PROFILE",
     "LITO_PLY_STORAGES",
     "LitoBackendUnavailable",
     "LitoGaussianDecoderProfile",
@@ -2722,7 +2676,6 @@ __all__ = [
     "normalize_lito_gs_dict",
     "normalize_lito_ply_storage",
     "occ_grid_to_lito_init_coord",
-    "resolve_lito_init_coord_cap",
     "run_lito_patch_encoder_condition_tokens",
     "run_lito_gaussian_perceiver_all_blocks_with_local_voxel_self_attention",
     "run_lito_gaussian_perceiver_block0_cross_only",

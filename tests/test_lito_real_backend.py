@@ -54,7 +54,6 @@ def test_create_lito_real_backend_rejects_cuda_request_before_architecture_load(
     config = backend.LitoRealBackendConfig(
         weights_root=weights_root,
         asset_summary=_asset_summary(weights_root),
-        memory_profile="safe",
         allow_cuda=True,
     )
 
@@ -234,7 +233,6 @@ def test_direct_backend_exposes_local_weight_loader_and_decode_helpers(tmp_path)
         backend.LitoRealBackendConfig(
             weights_root=root,
             asset_summary=None,
-            memory_profile="safe",
         ),
         architecture=None,
     )
@@ -490,9 +488,7 @@ def test_occ_grid_to_lito_init_coord_no_cap_preserves_all_occupied_cells():
 @pytest.mark.parametrize(
     ("override", "expected"),
     [
-        ("profile", 512),
         (None, None),
-        ("none", None),
         (7, 7),
     ],
 )
@@ -502,7 +498,6 @@ def test_decode_sampled_latents_resolves_init_coord_cap_override(tmp_path, monke
     config = backend.LitoRealBackendConfig(
         weights_root=tmp_path / "weights",
         asset_summary=None,
-        memory_profile="safe",
         max_init_coords_per_batch=override,
     )
     instance = backend.DirectMlxLitoBackend(config, architecture=None)
@@ -1115,7 +1110,6 @@ def test_checkpoint_generate_failure_leaves_no_output_after_backend_creation_fai
 
     def unavailable(config):
         observed["weights_root"] = config.weights_root
-        observed["memory_profile"] = config.memory_profile
         observed["max_init_coords_per_batch"] = config.max_init_coords_per_batch
         observed["allow_cuda"] = config.allow_cuda
         observed["asset_summary"] = config.asset_summary
@@ -1137,8 +1131,7 @@ def test_checkpoint_generate_failure_leaves_no_output_after_backend_creation_fai
         )
 
     assert observed["weights_root"] == weights_root
-    assert observed["memory_profile"] == "safe"
-    assert observed["max_init_coords_per_batch"] == "profile"
+    assert observed["max_init_coords_per_batch"] is None
     assert observed["allow_cuda"] is False
     assert not output.exists()
     assert not output.with_suffix(".safetensors").exists()

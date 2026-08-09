@@ -56,36 +56,36 @@ def _record_metrics(caplog, name, call):
 
 
 def _reset_peak_memory_if_available():
-    metal = getattr(mx, "metal", None)
-    if metal is not None and hasattr(metal, "reset_peak_memory"):
-        metal.reset_peak_memory()
+    reset = getattr(mx, "reset_peak_memory", None)
+    if reset is not None:
+        reset()
 
 
 def _peak_memory_gb_or_zero():
-    metal = getattr(mx, "metal", None)
-    if metal is None or not hasattr(metal, "get_peak_memory"):
+    get_peak_memory = getattr(mx, "get_peak_memory", None)
+    if get_peak_memory is None:
         return 0.0
     try:
-        return metal.get_peak_memory() / (1024**3)
+        return get_peak_memory() / (1024**3)
     except RuntimeError:
         return 0.0
 
 
 def _require_metal_memory_api():
     metal = getattr(mx, "metal", None)
-    required = ("is_available", "reset_peak_memory", "get_peak_memory", "get_active_memory")
-    if metal is None or any(not hasattr(metal, name) for name in required):
+    required = ("reset_peak_memory", "get_peak_memory", "get_active_memory")
+    if metal is None or not hasattr(metal, "is_available") or any(not hasattr(mx, name) for name in required):
         pytest.skip("MLX metal memory APIs are unavailable")
     try:
         if not metal.is_available():
             pytest.skip("MLX metal device is unavailable")
-        metal.reset_peak_memory()
+        mx.reset_peak_memory()
         probe = mx.array([0.0], dtype=mx.float16)
         mx.eval(probe)
         if hasattr(mx, "synchronize"):
             mx.synchronize()
-        metal.get_active_memory()
-        metal.get_peak_memory()
+        mx.get_active_memory()
+        mx.get_peak_memory()
     except RuntimeError as error:
         pytest.skip(f"MLX metal memory APIs are unavailable: {error}")
 
@@ -239,7 +239,7 @@ def test_dit_memory_profiles_stay_under_90gb(profile):
     tensors = _dit_input()
     dit = LitoDiT(memory_profile=profile)
 
-    mx.metal.reset_peak_memory()
+    mx.reset_peak_memory()
     out = dit.sample(
         tensors["cond_tokens"],
         num_steps=LITO_RECOMMENDED_NUM_STEPS,
@@ -250,7 +250,7 @@ def test_dit_memory_profiles_stay_under_90gb(profile):
     mx.eval(out)
     if hasattr(mx, "synchronize"):
         mx.synchronize()
-    peak_gb = mx.metal.get_peak_memory() / (1024**3)
+    peak_gb = mx.get_peak_memory() / (1024**3)
 
     assert out.dtype == mx.float16
     assert peak_gb < SOFT_MEMORY_LIMIT_GB, f"{profile} profile peaked at {peak_gb:.1f} GB"
@@ -262,12 +262,12 @@ def test_dit_memory_safe_stays_well_under_threshold():
     tensors = _dit_input()
     dit = LitoDiT(memory_profile="safe")
 
-    mx.metal.reset_peak_memory()
+    mx.reset_peak_memory()
     out = dit.sample(tensors["cond_tokens"], initial_latent=tensors["latent"], memory_profile="safe")
     mx.eval(out)
     if hasattr(mx, "synchronize"):
         mx.synchronize()
-    peak_gb = mx.metal.get_peak_memory() / (1024**3)
+    peak_gb = mx.get_peak_memory() / (1024**3)
 
     assert peak_gb < 1.0
 

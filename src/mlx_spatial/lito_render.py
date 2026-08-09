@@ -446,21 +446,21 @@ def _mlx_runtime_available() -> bool:
 
 
 def _safe_peak_memory_gb() -> float:
-    metal = getattr(mx, "metal", None)
-    if metal is None or not hasattr(metal, "get_peak_memory"):
+    get_peak_memory = getattr(mx, "get_peak_memory", None)
+    if get_peak_memory is None:
         return 0.0
     try:
-        return float(metal.get_peak_memory()) / float(1024**3)
+        return float(get_peak_memory()) / float(1024**3)
     except Exception:
         return 0.0
 
 
 def _reset_peak_memory() -> None:
-    metal = getattr(mx, "metal", None)
-    if metal is None or not hasattr(metal, "reset_peak_memory"):
+    reset = getattr(mx, "reset_peak_memory", None)
+    if reset is None:
         return
     try:
-        metal.reset_peak_memory()
+        reset()
     except Exception:
         return
 
