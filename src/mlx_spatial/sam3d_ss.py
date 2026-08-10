@@ -9,7 +9,7 @@ import mlx.core as mx
 import numpy as np
 import yaml
 
-from .checkpoint import load_checkpoint_tensors
+from .sam3d_quantization import load_sam3d_checkpoint_tensors
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ def read_sam3d_ss_decoder_config(path: str | Path) -> Sam3dSSDecoderConfig:
 
 
 def load_sam3d_ss_decoder_tensors(path: str | Path) -> dict[str, mx.array]:
-    return load_checkpoint_tensors(path, prefixes=("input_layer.", "middle_block.", "blocks.", "out_layer."))
+    return load_sam3d_checkpoint_tensors(path, prefixes=("input_layer.", "middle_block.", "blocks.", "out_layer."))
 
 
 def run_sam3d_ss_decoder(

@@ -9,7 +9,7 @@ import mlx.core as mx
 import numpy as np
 import yaml
 
-from .checkpoint import load_checkpoint_tensors
+from .sam3d_quantization import load_sam3d_checkpoint_tensors
 from .sam3d_slat import _absolute_position_embedding
 from .sam3d_ss_flow import _gelu_tanh, _linear
 from .sam3d_transformer import sam3d_layer_norm, sam3d_scaled_dot_product_attention
@@ -83,11 +83,11 @@ def read_sam3d_mesh_decoder_config(path: str | Path) -> Sam3dMeshDecoderConfig:
 
 
 def load_sam3d_slat_decoder_tensors(path: str | Path) -> dict[str, mx.array]:
-    return load_checkpoint_tensors(path, prefixes=("input_layer.", "blocks.", "out_layer.", "offset_perturbation"))
+    return load_sam3d_checkpoint_tensors(path, prefixes=("input_layer.", "blocks.", "out_layer.", "offset_perturbation"))
 
 
 def load_sam3d_mesh_decoder_tensors(path: str | Path) -> dict[str, mx.array]:
-    return load_checkpoint_tensors(path, prefixes=("input_layer.", "blocks.", "upsample.", "out_layer."))
+    return load_sam3d_checkpoint_tensors(path, prefixes=("input_layer.", "blocks.", "upsample.", "out_layer."))
 
 
 def run_sam3d_slat_decoder_torso(

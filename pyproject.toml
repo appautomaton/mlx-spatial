@@ -58,6 +58,7 @@ environments = [
 mlx-spatial-trellis2 = "mlx_spatial.trellis2:main"
 mlx-spatial-hyworld2 = "mlx_spatial.hyworld2:main"
 mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
+mlx-spatial-sam3d-quantize = "mlx_spatial.sam3d_quantization:main"
 mlx-spatial-lito = "mlx_spatial.lito:main"
 mlx-spatial-lito-prune = "mlx_spatial.lito_quantization:prune_main"
 mlx-spatial-lito-quantize = "mlx_spatial.lito_quantization:main"

@@ -9,7 +9,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .checkpoint import CheckpointTensorInfo, inspect_checkpoint
+from .checkpoint import CheckpointTensorInfo
+from .sam3d_quantization import inspect_sam3d_checkpoint as inspect_checkpoint
 from .safetensors_io import save_safetensors
 from .torch_checkpoint import load_torch_zip_state_dict
 

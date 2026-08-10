@@ -6,6 +6,8 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from .sam3d_quantization import sam3d_linear
+
 
 def sam3d_timestep_embedding(t: mx.array | np.ndarray, dim: int, *, max_period: int = 10_000) -> mx.array:
     """Match official sinusoidal `TimestepEmbedder.timestep_embedding`."""
@@ -121,7 +123,4 @@ def sam3d_feed_forward(values: mx.array, tensors: dict[str, mx.array], *, prefix
 
 
 def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    out = values @ mx.transpose(weight.astype(values.dtype))
-    if bias is not None:
-        out = out + bias.astype(out.dtype)
-    return out
+    return sam3d_linear(values, weight, bias)

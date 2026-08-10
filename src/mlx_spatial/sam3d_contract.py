@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from .checkpoint import inspect_checkpoint
+from .sam3d_quantization import inspect_sam3d_checkpoint as inspect_checkpoint
 from .sam3d_assets import SAM3D_OBJECTS_MLX_DEFAULT_ROOT, inspect_sam3d_model_assets
 
 

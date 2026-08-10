@@ -8,8 +8,8 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from .checkpoint import load_checkpoint_tensors
 from .sam3d_flow import sam3d_classifier_free_guidance, sam3d_seeded_normal, sam3d_shortcut_schedule
+from .sam3d_quantization import load_sam3d_checkpoint_tensors, sam3d_linear
 from .sam3d_transformer import (
     run_sam3d_timestep_embedder,
     sam3d_layer_norm,
@@ -61,7 +61,7 @@ class Sam3dSSFlowOutput:
 def load_sam3d_ss_generator_tensors(path: str | Path) -> dict[str, mx.array]:
     """Load active SAM3D SS generator tensors with the checkpoint prefix removed."""
 
-    tensors = load_checkpoint_tensors(path, prefixes=(SAM3D_SS_GENERATOR_PREFIX,))
+    tensors = load_sam3d_checkpoint_tensors(path, prefixes=(SAM3D_SS_GENERATOR_PREFIX,))
     return {
         key[len(SAM3D_SS_GENERATOR_PREFIX) :]: value
         for key, value in tensors.items()
@@ -429,7 +429,4 @@ def _gelu_tanh(values: mx.array) -> mx.array:
 
 
 def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    out = values @ mx.transpose(weight.astype(values.dtype))
-    if bias is not None:
-        out = out + bias.astype(out.dtype)
-    return out
+    return sam3d_linear(values, weight, bias)

@@ -10,8 +10,8 @@ import mlx.nn as nn
 import numpy as np
 from PIL import Image
 
-from .checkpoint import inspect_checkpoint, load_checkpoint_tensors
 from .sam3d_assets import Sam3dAssetBlocker
+from .sam3d_quantization import inspect_sam3d_checkpoint, load_sam3d_checkpoint_tensors, sam3d_linear
 
 
 SAM3D_MOGE_DEFAULT_ROOT = "weights/sam-3d-objects-mlx/moge"
@@ -93,7 +93,7 @@ def inspect_sam3d_moge_assets(root: str | Path = SAM3D_MOGE_DEFAULT_ROOT) -> Sam
             ),
         )
     try:
-        infos = inspect_checkpoint(checkpoint)
+        infos = inspect_sam3d_checkpoint(checkpoint)
     except (OSError, ValueError) as error:
         return Sam3dMogeInspection(
             root=root_path,
@@ -162,7 +162,7 @@ def run_sam3d_moge_pointmap(
         return Sam3dMogeResult(inspection=inspection, blocker=blocker)
 
     try:
-        tensors = load_checkpoint_tensors(
+        tensors = load_sam3d_checkpoint_tensors(
             inspection.checkpoint_path,
             prefixes=("image_", "backbone.", "head."),
         )
@@ -800,10 +800,7 @@ def _validate_full_moge_tensors(tensors: dict[str, mx.array]) -> Sam3dAssetBlock
 
 
 def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = values @ mx.transpose(weight.astype(values.dtype))
-    if bias is not None:
-        output = output + bias.astype(output.dtype)
-    return output
+    return sam3d_linear(values, weight, bias)
 
 
 def _layer_norm(values: mx.array, weight: mx.array, bias: mx.array, *, eps: float) -> mx.array:

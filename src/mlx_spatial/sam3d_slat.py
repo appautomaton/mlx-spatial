@@ -8,8 +8,8 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from .checkpoint import load_checkpoint_tensors
 from .sam3d_flow import sam3d_classifier_free_guidance, sam3d_flow_time_sequence, sam3d_seeded_normal
+from .sam3d_quantization import load_sam3d_checkpoint_tensors
 from .sam3d_ss_flow import _gelu_tanh, _linear, _silu
 from .sam3d_transformer import (
     run_sam3d_timestep_embedder,
@@ -68,7 +68,7 @@ class Sam3dSLatFlowOutput:
 
 
 def load_sam3d_slat_generator_tensors(path: str | Path) -> dict[str, mx.array]:
-    tensors = load_checkpoint_tensors(path, prefixes=(SAM3D_SLAT_GENERATOR_PREFIX,))
+    tensors = load_sam3d_checkpoint_tensors(path, prefixes=(SAM3D_SLAT_GENERATOR_PREFIX,))
     return {
         key[len(SAM3D_SLAT_GENERATOR_PREFIX) :]: value
         for key, value in tensors.items()

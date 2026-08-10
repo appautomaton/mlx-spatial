@@ -9,7 +9,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
-from .checkpoint import load_checkpoint_tensors
+from .sam3d_quantization import load_sam3d_checkpoint_tensors, sam3d_linear
 
 
 SAM3D_CONDITION_PREFIX = "_base_models.condition_embedder."
@@ -50,7 +50,7 @@ class Sam3dConditionStackOutput:
 def load_sam3d_condition_tensors(path: str | Path) -> dict[str, mx.array]:
     """Load active SAM3D condition embedder tensors with the checkpoint prefix removed."""
 
-    tensors = load_checkpoint_tensors(path, prefixes=(SAM3D_CONDITION_PREFIX,))
+    tensors = load_sam3d_checkpoint_tensors(path, prefixes=(SAM3D_CONDITION_PREFIX,))
     return {
         key[len(SAM3D_CONDITION_PREFIX) :]: value
         for key, value in tensors.items()
@@ -536,10 +536,7 @@ def _remap_points(points: mx.array, remap_output: str) -> mx.array:
 
 
 def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = values @ mx.transpose(weight.astype(values.dtype))
-    if bias is not None:
-        output = output + bias.astype(output.dtype)
-    return output
+    return sam3d_linear(values, weight, bias)
 
 
 def _layer_norm(values: mx.array, weight: mx.array, bias: mx.array, *, eps: float) -> mx.array:
