@@ -4,6 +4,7 @@ import pytest
 from mlx_spatial.safetensors_io import (
     inspect_safetensors,
     load_numpy_safetensors,
+    read_safetensors_metadata,
     save_safetensors,
 )
 
@@ -19,6 +20,7 @@ def test_mlx_safetensors_round_trip_preserves_supported_dtypes(tmp_path):
 
     infos = inspect_safetensors(path)
     loaded = load_numpy_safetensors(path)
+    assert read_safetensors_metadata(path) == {"source": "test"}
     assert [(info.name, info.shape, info.dtype) for info in infos] == [
         ("float.bias", (1,), "F32"),
         ("half.weight", (1, 2), "F16"),

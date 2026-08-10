@@ -29,31 +29,9 @@ class SafetensorHeader:
 def inspect_safetensors(path: str | Path) -> tuple[SafetensorHeader, ...]:
     """Read safetensors names, shapes, and dtypes from the JSON header."""
 
+    header, data_size = _read_safetensors_header(path)
     checkpoint = Path(path)
-    if not checkpoint.is_file():
-        raise FileNotFoundError(f"safetensors file not found: {checkpoint}")
 
-    file_size = checkpoint.stat().st_size
-    with checkpoint.open("rb") as handle:
-        raw_length = handle.read(_HEADER_LENGTH.size)
-        if len(raw_length) != _HEADER_LENGTH.size:
-            raise ValueError(f"invalid safetensors header in {checkpoint}")
-        (header_size,) = _HEADER_LENGTH.unpack(raw_length)
-        if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
-            raise ValueError(f"invalid safetensors header size in {checkpoint}: {header_size}")
-        data_start = _HEADER_LENGTH.size + header_size
-        if data_start > file_size:
-            raise ValueError(f"truncated safetensors header in {checkpoint}")
-        raw_header = handle.read(header_size)
-
-    try:
-        header = json.loads(raw_header)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"invalid safetensors JSON header in {checkpoint}: {error}") from error
-    if not isinstance(header, dict):
-        raise ValueError(f"invalid safetensors header root in {checkpoint}")
-
-    data_size = file_size - data_start
     infos: list[SafetensorHeader] = []
     for name, value in header.items():
         if name == "__metadata__":
@@ -78,6 +56,50 @@ def inspect_safetensors(path: str | Path) -> tuple[SafetensorHeader, ...]:
             raise ValueError(f"invalid safetensors data offsets for {name!r} in {checkpoint}")
         infos.append(SafetensorHeader(name=name, shape=tuple(shape), dtype=dtype))
     return tuple(sorted(infos, key=lambda info: info.name))
+
+
+def read_safetensors_metadata(path: str | Path) -> dict[str, str]:
+    """Read string metadata from a safetensors header without loading tensors."""
+
+    header, _ = _read_safetensors_header(path)
+    checkpoint = Path(path)
+    metadata = header.get("__metadata__", {})
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in metadata.items()
+    ):
+        raise ValueError(f"invalid safetensors metadata in {checkpoint}")
+    return dict(metadata)
+
+
+def _read_safetensors_header(path: str | Path) -> tuple[dict[str, Any], int]:
+    """Return the decoded header and payload size for one safetensors file."""
+
+    checkpoint = Path(path)
+    if not checkpoint.is_file():
+        raise FileNotFoundError(f"safetensors file not found: {checkpoint}")
+
+    file_size = checkpoint.stat().st_size
+    with checkpoint.open("rb") as handle:
+        raw_length = handle.read(_HEADER_LENGTH.size)
+        if len(raw_length) != _HEADER_LENGTH.size:
+            raise ValueError(f"invalid safetensors header in {checkpoint}")
+        (header_size,) = _HEADER_LENGTH.unpack(raw_length)
+        if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
+            raise ValueError(f"invalid safetensors header size in {checkpoint}: {header_size}")
+        data_start = _HEADER_LENGTH.size + header_size
+        if data_start > file_size:
+            raise ValueError(f"truncated safetensors header in {checkpoint}")
+        raw_header = handle.read(header_size)
+
+    try:
+        header = json.loads(raw_header)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid safetensors JSON header in {checkpoint}: {error}") from error
+    if not isinstance(header, dict):
+        raise ValueError(f"invalid safetensors header root in {checkpoint}")
+    return header, file_size - data_start
 
 
 def load_mlx_safetensors(path: str | Path) -> dict[str, mx.array]:

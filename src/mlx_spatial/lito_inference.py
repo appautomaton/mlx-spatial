@@ -20,12 +20,11 @@ import mlx.core as mx
 import numpy as np
 from PIL import Image, ImageOps
 
-from .checkpoint import inspect_checkpoint
 from .lito_assets import LITO_DEFAULT_ROOT, validate as validate_lito_assets
 from .lito_condition import LitoCondition
 from .lito_dit import LITO_MEMORY_PROFILES as _DIT_MEMORY_PROFILES
 from .lito_dit import LitoDiT
-from .lito_render import LitoRenderer
+from .lito_quantization import inspect_logical_lito_safetensors
 from .lito_real_backend import (
     LITO_DEFAULT_PLY_STORAGE,
     LitoBackendUnavailable,
@@ -34,6 +33,7 @@ from .lito_real_backend import (
     normalize_lito_ply_storage,
     write_lito_gaussians_ply,
 )
+from .lito_render import LitoRenderer
 from .lito_tokenizer import LitoTokenizer
 from .safetensors_io import save_safetensors
 
@@ -460,7 +460,7 @@ def _require_checkpoint_backed_assets(root: Path) -> LitoRealAssetSummary:
     sentinel_dtypes: dict[str, str] = {}
     for relative_path, required_keys in LITO_REAL_TENSOR_SENTINELS.items():
         path = root / relative_path
-        infos = inspect_checkpoint(path)
+        infos = inspect_logical_lito_safetensors(path)
         info_by_name = {info.name: info for info in infos}
         checkpoint_key_counts[relative_path] = len(infos)
         missing = [key for key in required_keys if key not in info_by_name]

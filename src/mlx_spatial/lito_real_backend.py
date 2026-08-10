@@ -17,9 +17,12 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
-from .checkpoint import inspect_checkpoint
 from .lito_assets import LITO_TRELLIS_REQUIRED_FILES, lito_trellis_root_candidates
-from .safetensors_io import load_mlx_safetensors
+from .lito_quantization import (
+    LitoQuantizedMatrix,
+    inspect_logical_lito_safetensors,
+    load_logical_lito_safetensors,
+)
 
 
 _DIT_CHECKPOINT = Path("image_to_3d/lito_dit_rgba.safetensors")
@@ -120,7 +123,7 @@ class DirectMlxLitoBackend:
         *,
         names: Iterable[str] | None = None,
         dtype: Any = np.float32,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Load remapped real DiT arrays for local MLX model construction."""
 
         return load_lito_dit_weight_arrays(self.config.weights_root, names=names, dtype=dtype)
@@ -130,7 +133,7 @@ class DirectMlxLitoBackend:
         *,
         names: Iterable[str] | None = None,
         dtype: Any = np.float32,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Load remapped real DINO/RGBA patch encoder arrays for local MLX construction."""
 
         return load_lito_patch_encoder_weight_arrays(self.config.weights_root, names=names, dtype=dtype)
@@ -216,7 +219,7 @@ class DirectMlxLitoBackend:
         *,
         names: Iterable[str] | None = None,
         dtype: Any = np.float32,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Load remapped real Gaussian decoder arrays for local MLX model construction."""
 
         return load_lito_gaussian_decoder_weight_arrays(self.config.weights_root, names=names, dtype=dtype)
@@ -226,7 +229,7 @@ class DirectMlxLitoBackend:
         *,
         names: Iterable[str] | None = None,
         dtype: Any = np.float32,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Load remapped real LiTo voxel decoder arrays for local MLX construction."""
 
         return load_lito_voxel_decoder_weight_arrays(self.config.weights_root, names=names, dtype=dtype)
@@ -514,21 +517,21 @@ def load_lito_dit_weight_arrays(
     use_ema: bool = True,
     names: Iterable[str] | None = None,
     dtype: Any = np.float32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Load selected DiT weights from converted safetensors using local MLX names."""
 
     root = Path(weights_root)
     path = root / _DIT_CHECKPOINT
     source_prefix = _DIT_EMA_PREFIX if use_ema else _DIT_SOURCE_PREFIX
     requested = _normalize_name_filter(names)
-    arrays: dict[str, np.ndarray] = {}
-    for source_key, tensor in load_mlx_safetensors(path).items():
+    arrays: dict[str, Any] = {}
+    for source_key, tensor in load_logical_lito_safetensors(path).items():
         if not source_key.startswith(source_prefix):
             continue
         local_name = _remap_lito_dit_key(source_key[len(source_prefix) :])
         if requested is not None and local_name not in requested:
             continue
-        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
+        arrays[local_name] = _cast_loaded_lito_weight(tensor, dtype)
     _raise_missing_requested_names("DiT", requested, arrays)
     return arrays
 
@@ -538,20 +541,20 @@ def load_lito_patch_encoder_weight_arrays(
     *,
     names: Iterable[str] | None = None,
     dtype: Any = np.float32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Load selected DINO/RGBA patch encoder weights from converted safetensors."""
 
     root = Path(weights_root)
     path = root / _DIT_CHECKPOINT
     requested = _normalize_name_filter(names)
-    arrays: dict[str, np.ndarray] = {}
-    for source_key, tensor in load_mlx_safetensors(path).items():
+    arrays: dict[str, Any] = {}
+    for source_key, tensor in load_logical_lito_safetensors(path).items():
         if not source_key.startswith(_PATCH_ENCODER_PREFIX):
             continue
         local_name = source_key[len(_PATCH_ENCODER_PREFIX) :]
         if requested is not None and local_name not in requested:
             continue
-        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
+        arrays[local_name] = _cast_loaded_lito_weight(tensor, dtype)
     _raise_missing_requested_names("patch encoder", requested, arrays)
     return arrays
 
@@ -561,21 +564,21 @@ def load_lito_gaussian_decoder_weight_arrays(
     *,
     names: Iterable[str] | None = None,
     dtype: Any = np.float32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Load selected Gaussian decoder weights from tokenizer safetensors."""
 
     root = Path(weights_root)
     path = root / _TOKENIZER_CHECKPOINT
     requested = _normalize_name_filter(names)
-    arrays: dict[str, np.ndarray] = {}
-    for source_key, tensor in load_mlx_safetensors(path).items():
+    arrays: dict[str, Any] = {}
+    for source_key, tensor in load_logical_lito_safetensors(path).items():
         if not source_key.startswith(_GS_PREFIX):
             continue
         stripped = source_key[len(_GS_PREFIX) :]
-        for local_name, array in _remap_lito_gaussian_decoder_tensor(stripped, np.asarray(tensor)):
+        for local_name, array in _remap_lito_gaussian_decoder_tensor(stripped, tensor):
             if requested is not None and local_name not in requested:
                 continue
-            arrays[local_name] = array.astype(dtype, copy=False)
+            arrays[local_name] = _cast_loaded_lito_weight(array, dtype)
     _raise_missing_requested_names("Gaussian decoder", requested, arrays)
     return arrays
 
@@ -585,20 +588,20 @@ def load_lito_voxel_decoder_weight_arrays(
     *,
     names: Iterable[str] | None = None,
     dtype: Any = np.float32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Load selected LiTo voxel decoder weights from tokenizer safetensors."""
 
     root = Path(weights_root)
     path = root / _TOKENIZER_CHECKPOINT
     requested = _normalize_name_filter(names)
-    arrays: dict[str, np.ndarray] = {}
-    for source_key, tensor in load_mlx_safetensors(path).items():
+    arrays: dict[str, Any] = {}
+    for source_key, tensor in load_logical_lito_safetensors(path).items():
         if not source_key.startswith(_VOXEL_PREFIX):
             continue
         local_name = source_key[len(_VOXEL_PREFIX) :]
         if requested is not None and local_name not in requested:
             continue
-        arrays[local_name] = np.asarray(tensor).astype(dtype, copy=False)
+        arrays[local_name] = _cast_loaded_lito_weight(tensor, dtype)
     _raise_missing_requested_names("Voxel decoder", requested, arrays)
     return arrays
 
@@ -1386,7 +1389,7 @@ def write_lito_gaussians_ply(
 
 
 def _read_safetensor_headers(path: Path) -> dict[str, tuple[tuple[int, ...], str]]:
-    return {info.name: (info.shape, info.dtype) for info in inspect_checkpoint(path)}
+    return {info.name: (info.shape, info.dtype) for info in inspect_logical_lito_safetensors(path)}
 
 
 def _normalize_name_filter(names: Iterable[str] | None) -> set[str] | None:
@@ -1400,7 +1403,7 @@ def _normalize_name_filter(names: Iterable[str] | None) -> set[str] | None:
     return requested
 
 
-def _raise_missing_requested_names(kind: str, requested: set[str] | None, arrays: dict[str, np.ndarray]) -> None:
+def _raise_missing_requested_names(kind: str, requested: set[str] | None, arrays: dict[str, Any]) -> None:
     if requested is None:
         return
     missing = sorted(requested.difference(arrays))
@@ -1422,13 +1425,26 @@ def _remap_lito_dit_key(key: str) -> str:
     return key
 
 
-def _remap_lito_gaussian_decoder_tensor(key: str, tensor: np.ndarray) -> list[tuple[str, np.ndarray]]:
+def _cast_loaded_lito_weight(tensor: Any, dtype: Any) -> Any:
+    if isinstance(tensor, LitoQuantizedMatrix):
+        return tensor
+    return np.asarray(tensor).astype(dtype, copy=False)
+
+
+def _remap_lito_gaussian_decoder_tensor(key: str, tensor: Any) -> list[tuple[str, Any]]:
     if ".w12." in key:
         prefix, suffix = key.split(".w12.", 1)
         half = int(tensor.shape[0]) // 2
+        if isinstance(tensor, LitoQuantizedMatrix):
+            first = tensor.slice_rows(0, half)
+            second = tensor.slice_rows(half, tensor.shape[0])
+        else:
+            array = np.asarray(tensor)
+            first = array[:half]
+            second = array[half:]
         return [
-            (_remap_lito_gaussian_decoder_key(f"{prefix}.w1.{suffix}"), tensor[:half]),
-            (_remap_lito_gaussian_decoder_key(f"{prefix}.w2.{suffix}"), tensor[half:]),
+            (_remap_lito_gaussian_decoder_key(f"{prefix}.w1.{suffix}"), first),
+            (_remap_lito_gaussian_decoder_key(f"{prefix}.w2.{suffix}"), second),
         ]
     return [(_remap_lito_gaussian_decoder_key(key), tensor)]
 
@@ -1987,21 +2003,40 @@ def _unpad_voxel_cells(chunk: mx.array, cell_lens: np.ndarray) -> mx.array:
     return mx.concatenate([chunk[index, : int(cell_len)] for index, cell_len in enumerate(cell_lens.tolist())], axis=0)
 
 
-def _mx_weight(weights: dict[str, Any], name: str) -> mx.array:
+def _mx_weight(weights: dict[str, Any], name: str) -> mx.array | LitoQuantizedMatrix:
     try:
-        return mx.array(weights[name], dtype=mx.float32)
+        weight = weights[name]
     except KeyError as error:
         raise ValueError(f"missing LiTo checkpoint weight: {name}") from error
+    if isinstance(weight, LitoQuantizedMatrix):
+        return weight
+    return mx.array(weight, dtype=mx.float32)
 
 
-def _mx_optional_weight(weights: dict[str, Any], name: str) -> mx.array | None:
+def _mx_optional_weight(weights: dict[str, Any], name: str) -> mx.array | LitoQuantizedMatrix | None:
     if name not in weights:
         return None
-    return mx.array(weights[name], dtype=mx.float32)
+    return _mx_weight(weights, name)
 
 
-def _mx_linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = values @ mx.transpose(weight)
+def _mx_linear(
+    values: mx.array,
+    weight: mx.array | LitoQuantizedMatrix,
+    bias: mx.array | None,
+) -> mx.array:
+    if isinstance(weight, LitoQuantizedMatrix):
+        output = mx.quantized_matmul(
+            values,
+            weight.qweight,
+            scales=weight.scales,
+            biases=weight.biases,
+            transpose=True,
+            group_size=weight.group_size,
+            bits=weight.bits,
+            mode=weight.mode,
+        )
+    else:
+        output = values @ mx.transpose(weight)
     if bias is not None:
         output = output + bias
     return output

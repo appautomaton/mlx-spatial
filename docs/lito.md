@@ -50,9 +50,51 @@ Maintainers can print Apple CDN download commands and convert local `.ckpt` file
 ```bash
 uv run mlx-spatial-lito download-command
 uv run python -m mlx_spatial.lito_assets convert weights/lito-raw weights/lito-research-mlx
+uv run mlx-spatial-lito-prune \
+  weights/lito-research-mlx \
+  weights/lito-research-mlx \
+  --overwrite
 ```
 
-Converted weights are an unofficial derivative and must preserve Apple's research license boundary when published separately.
+The conversion step preserves the official research checkpoint exactly. The
+prune step then atomically turns it into the full-precision runtime bundle by
+removing modules that the main inference path never reads. Converted weights
+are an unofficial derivative and must preserve Apple's research license
+boundary when published separately.
+
+## Quantization
+
+Create a separate 8-bit affine bundle from the full-precision MLX weights:
+
+```bash
+uv run mlx-spatial-lito-quantize \
+  weights/lito-research-mlx \
+  weights/lito-research-mlx-8bit \
+  --bits 8 \
+  --group-size 64
+```
+
+The quantizer first removes checkpoint modules that the inference runtime never
+loads: the non-EMA velocity estimator, the duplicate embedded tokenizer, and
+the mesh/fpoint/LPIPS/training decoders. From the remaining runtime tensors, it
+packs only internal DiT and decoder attention/MLP matrices. It keeps the
+DINO/RGBA conditioner, convolution weights, embeddings, normalization
+parameters, timestep and condition projections, latent boundary projections,
+and final Gaussian/voxel/velocity heads at their source precision. Each
+checkpoint records the exact policy, logical tensor shapes, bit width, group
+size, and affine mode in safetensors metadata. The normal LiTo loader detects
+that metadata and executes packed matrices directly with MLX quantized matrix
+multiplication; no Torch or intermediate dequantized checkpoint is involved.
+
+Pass the new root to inference exactly as you would the full-precision root:
+
+```bash
+uv run mlx-spatial-lito generate inputs/lito/sample.png \
+  --weights-root weights/lito-research-mlx-8bit \
+  --output outputs/lito/sample-8bit.ply \
+  --format ply \
+  --print-metrics
+```
 
 ## Inputs
 
