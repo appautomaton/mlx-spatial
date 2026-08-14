@@ -29,6 +29,11 @@ from mlx_spatial.mapanything_parity import (
     load_mapanything_parity_bundle,
     mapanything_parity_report_to_dict,
 )
+from tests.mapanything_scene_fixture import (
+    tiny_encoder_config,
+    tiny_encoder_weights,
+    tiny_model_config_json,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -223,98 +228,21 @@ def test_mapanything_encoder_prefix_public_exports():
     )
 
 
-def _tiny_config() -> MapAnythingEncoderPrefixConfig:
-    return MapAnythingEncoderPrefixConfig(
-        embed_dim=8,
-        num_heads=2,
-        patch_size=2,
-        data_norm_type="dinov2",
-        encoder_size="giant",
-        keep_first_n_layers=1,
-    )
+_tiny_config = tiny_encoder_config
+_tiny_encoder_prefix_weights = tiny_encoder_weights
 
 
 def _tiny_full_config() -> MapAnythingEncoderPrefixConfig:
-    return MapAnythingEncoderPrefixConfig(
-        embed_dim=8,
-        num_heads=2,
-        patch_size=2,
-        data_norm_type="dinov2",
-        encoder_size="giant",
-        keep_first_n_layers=2,
-    )
-
-
-def _tiny_encoder_prefix_weights() -> dict[str, mx.array]:
-    config = _tiny_config()
-    hidden = config.swiglu_hidden_features
-    rng = np.random.default_rng(42)
-
-    def randn(shape: tuple[int, ...], scale: float = 0.02, offset: float = 0.0) -> mx.array:
-        return mx.array(rng.normal(loc=offset, scale=scale, size=shape).astype(np.float32))
-
-    weights = {
-        "encoder.model.cls_token": randn((1, 1, config.embed_dim), 0.03),
-        "encoder.model.pos_embed": randn((1, 5, config.embed_dim), 0.02),
-        "encoder.model.patch_embed.proj.weight": randn(
-            (config.embed_dim, 3, config.patch_size, config.patch_size),
-            0.04,
-        ),
-        "encoder.model.patch_embed.proj.bias": randn((config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.norm1.weight": randn((config.embed_dim,), 0.01, 1.0),
-        "encoder.model.blocks.0.norm1.bias": randn((config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.attn.qkv.weight": randn((3 * config.embed_dim, config.embed_dim), 0.03),
-        "encoder.model.blocks.0.attn.qkv.bias": randn((3 * config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.attn.proj.weight": randn((config.embed_dim, config.embed_dim), 0.03),
-        "encoder.model.blocks.0.attn.proj.bias": randn((config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.ls1.gamma": randn((config.embed_dim,), 0.01, 0.1),
-        "encoder.model.blocks.0.norm2.weight": randn((config.embed_dim,), 0.01, 1.0),
-        "encoder.model.blocks.0.norm2.bias": randn((config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.mlp.w12.weight": randn((2 * hidden, config.embed_dim), 0.02),
-        "encoder.model.blocks.0.mlp.w12.bias": randn((2 * hidden,), 0.01),
-        "encoder.model.blocks.0.mlp.w3.weight": randn((config.embed_dim, hidden), 0.02),
-        "encoder.model.blocks.0.mlp.w3.bias": randn((config.embed_dim,), 0.01),
-        "encoder.model.blocks.0.ls2.gamma": randn((config.embed_dim,), 0.01, 0.1),
-    }
-    return weights
+    return tiny_encoder_config(layers=2)
 
 
 def _tiny_full_encoder_weights() -> dict[str, mx.array]:
-    prefix = _tiny_encoder_prefix_weights()
-    full = dict(prefix)
-    for key, value in prefix.items():
-        block1_key = key.replace("encoder.model.blocks.0.", "encoder.model.blocks.1.")
-        if block1_key != key:
-            full[block1_key] = value
-    return full
+    return tiny_encoder_weights(_tiny_full_config())
 
 
 def _tiny_config_json() -> str:
-    return """{
-  "encoder_config": {
-    "data_norm_type": "dinov2",
-    "name": "tiny-test",
-    "size": "giant",
-    "keep_first_n_layers": 1,
-    "uses_torch_hub": false
-  },
-  "info_sharing_config": {
-    "model_type": "alternating_attention",
-    "model_return_type": "intermediate_features",
-    "module_args": {
-      "depth": 1,
-      "dim": 8,
-      "num_heads": 2,
-      "indices": [0]
-    }
-  },
-  "pred_head_config": {
-    "type": "dpt+pose",
-    "adaptor_type": "raydirs+depth+pose+confidence+mask",
-    "feature_head": {"patch_size": 2},
-    "adaptor_config": {
-      "dense_pred_init_dict": {"name": "raydirs+depth+pose+confidence+mask+scale"}
-    }
-  },
-  "use_register_tokens_from_encoder": false
-}"""
+    return tiny_model_config_json(
+        info_depth=1,
+        info_indices=(0,),
+        use_register_tokens=False,
+    )

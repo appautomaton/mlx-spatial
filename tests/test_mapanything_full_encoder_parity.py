@@ -21,10 +21,13 @@ from mlx_spatial.mapanything_preprocess import preprocess_mapanything_images
 
 
 ROOT = Path(__file__).resolve().parents[1]
-pytestmark = pytest.mark.skipif(
-    os.environ.get(MAPANYTHING_TORCH_PARITY_ENV) != "1",
-    reason="opt-in MapAnything Torch reference parity",
-)
+pytestmark = [
+    pytest.mark.torch_parity,
+    pytest.mark.skipif(
+        os.environ.get(MAPANYTHING_TORCH_PARITY_ENV) != "1",
+        reason="opt-in MapAnything Torch reference parity",
+    ),
+]
 
 
 def test_mapanything_full_encoder_matches_desk_scene_reference():

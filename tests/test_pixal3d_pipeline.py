@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
+import pytest
 from PIL import Image
 
 import mlx_spatial.pixal3d_inference as pixal3d_inference
@@ -829,6 +830,7 @@ def test_pixal3d_pipeline_writes_texture_decoder_pbr_artifact_with_fake_decode_a
     assert result.trace.blocker.metadata["texture_decoder_attributes_shape"] == (4096, 6)
 
 
+@pytest.mark.integration
 def test_pixal3d_pipeline_writes_textured_glb_with_fake_export_route(tmp_path, monkeypatch):
     root = write_fake_pixal3d_decode_root(tmp_path / "weights", proj_in_channels=3, sparse_steps=1, shape_steps=1, texture_steps=1)
     image = tmp_path / "image.png"

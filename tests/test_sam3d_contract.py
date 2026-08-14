@@ -120,6 +120,7 @@ def _write_checkpoint(path: Path, prefixes: tuple[str, ...], *, omit_prefix: str
 
 
 @pytest.mark.heavy
+@pytest.mark.real_assets
 @pytest.mark.skipif(not SAM3D_MLX_PIPELINE.is_file(), reason="SAM3D MLX weights absent")
 def test_real_sam3d_mlx_contract_maps_source_targets_and_weight_prefixes():
     audit = audit_sam3d_source_weight_contract(SAM3D_MLX_ROOT)

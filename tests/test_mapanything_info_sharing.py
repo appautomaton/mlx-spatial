@@ -18,6 +18,12 @@ from mlx_spatial.mapanything_model import (
     run_mapanything_info_sharing,
     validate_mapanything_info_sharing_weights,
 )
+from tests.mapanything_scene_fixture import (
+    tiny_features_and_registers as _tiny_features_and_registers,
+    tiny_info_config as _tiny_info_config,
+    tiny_info_weights as _tiny_info_weights,
+    tiny_model_config_json,
+)
 
 
 def test_mapanything_info_sharing_required_keys_cover_configured_layers():
@@ -136,66 +142,6 @@ def test_mapanything_info_sharing_public_exports():
     )
 
 
-def _tiny_info_config(depth: int = 2, indices: tuple[int, ...] = (0, 1)) -> MapAnythingInfoSharingConfig:
-    return MapAnythingInfoSharingConfig(
-        input_embed_dim=8,
-        dim=8,
-        depth=depth,
-        num_heads=2,
-        indices=indices,
-        norm_intermediate=True,
-    )
-
-
-def _tiny_info_weights(
-    config: MapAnythingInfoSharingConfig,
-    *,
-    identity_odd_attention: bool = False,
-) -> dict[str, mx.array]:
-    hidden = config.swiglu_hidden_features
-    weights: dict[str, mx.array] = {
-        "scale_token": mx.array(np.linspace(-0.5, 0.6, config.dim, dtype=np.float32)),
-        "info_sharing.norm.weight": mx.ones((config.dim,), dtype=mx.float32),
-        "info_sharing.norm.bias": mx.zeros((config.dim,), dtype=mx.float32),
-        "info_sharing.view_pos_table": mx.zeros((1, config.dim), dtype=mx.float32),
-    }
-    for block_index in range(config.depth):
-        prefix = f"info_sharing.self_attention_blocks.{block_index}"
-        weights[f"{prefix}.norm1.weight"] = mx.ones((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.norm1.bias"] = mx.zeros((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.attn.qkv.weight"] = mx.zeros((3 * config.dim, config.dim), dtype=mx.float32)
-        weights[f"{prefix}.attn.qkv.bias"] = mx.zeros((3 * config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.attn.proj.weight"] = mx.zeros((config.dim, config.dim), dtype=mx.float32)
-        weights[f"{prefix}.attn.proj.bias"] = mx.zeros((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.ls1.gamma"] = mx.ones((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.norm2.weight"] = mx.ones((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.norm2.bias"] = mx.zeros((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.mlp.w12.weight"] = mx.zeros((2 * hidden, config.dim), dtype=mx.float32)
-        weights[f"{prefix}.mlp.w12.bias"] = mx.zeros((2 * hidden,), dtype=mx.float32)
-        weights[f"{prefix}.mlp.w3.weight"] = mx.zeros((config.dim, hidden), dtype=mx.float32)
-        weights[f"{prefix}.mlp.w3.bias"] = mx.zeros((config.dim,), dtype=mx.float32)
-        weights[f"{prefix}.ls2.gamma"] = mx.ones((config.dim,), dtype=mx.float32)
-
-    if identity_odd_attention and config.depth > 1:
-        prefix = "info_sharing.self_attention_blocks.1"
-        identity = np.eye(config.dim, dtype=np.float32)
-        weights[f"{prefix}.attn.qkv.weight"] = mx.array(np.concatenate((identity, identity, identity), axis=0))
-        weights[f"{prefix}.attn.proj.weight"] = mx.array(identity)
-    return weights
-
-
-def _tiny_features_and_registers(
-    config: MapAnythingInfoSharingConfig,
-) -> tuple[tuple[mx.array, mx.array], tuple[mx.array, mx.array]]:
-    values = mx.arange(2 * config.dim * 2 * 2, dtype=mx.float32).reshape((2, config.dim, 2, 2)) / 100
-    features = (values[0:1], values[1:2])
-    registers = (
-        mx.ones((1, config.dim, 1), dtype=mx.float32) * 0.1,
-        mx.ones((1, config.dim, 1), dtype=mx.float32) * -0.1,
-    )
-    return features, registers
-
-
 def _numpy_channel_layer_norm(values: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     transposed = np.transpose(values, (0, 2, 1))
     mean = transposed.mean(axis=-1, keepdims=True)
@@ -205,31 +151,4 @@ def _numpy_channel_layer_norm(values: np.ndarray, eps: float = 1e-6) -> np.ndarr
 
 
 def _tiny_config_json() -> str:
-    return """{
-  "encoder_config": {
-    "data_norm_type": "dinov2",
-    "name": "tiny-test",
-    "size": "giant",
-    "keep_first_n_layers": 1,
-    "uses_torch_hub": false
-  },
-  "info_sharing_config": {
-    "model_type": "alternating_attention",
-    "model_return_type": "intermediate_features",
-    "module_args": {
-      "depth": 2,
-      "dim": 8,
-      "num_heads": 2,
-      "indices": [0, 1]
-    }
-  },
-  "pred_head_config": {
-    "type": "dpt+pose",
-    "adaptor_type": "raydirs+depth+pose+confidence+mask",
-    "feature_head": {"patch_size": 2},
-    "adaptor_config": {
-      "dense_pred_init_dict": {"name": "raydirs+depth+pose+confidence+mask+scale"}
-    }
-  },
-  "use_register_tokens_from_encoder": true
-}"""
+    return tiny_model_config_json()

@@ -20,6 +20,7 @@ FIXTURE_ROOT = Path(__file__).parent / "data/pixal3d_derived_golden"
 MANIFEST_PATH = FIXTURE_ROOT / "golden.json"
 
 
+@pytest.mark.integration
 def test_pixal3d_derived_golden_manifest_matches_committed_decoder_patch():
     manifest = _manifest()
 
@@ -54,7 +55,8 @@ def test_pixal3d_derived_golden_manifest_matches_committed_decoder_patch():
     )
 
 
-@pytest.mark.heavy
+@pytest.mark.integration
+@pytest.mark.metal
 def test_pixal3d_derived_golden_replays_native_textured_export(tmp_path):
     expected = _manifest()["expected_export"]
     result = export_decoded_ovoxel_glb(

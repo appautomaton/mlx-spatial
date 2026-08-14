@@ -4,11 +4,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-import mlx.core as mx
 import numpy as np
 import pytest
 from PIL import Image
-from tests.safetensors_test_utils import save_file
 
 import mlx_spatial
 from mlx_spatial.mapanything_inference import (
@@ -21,6 +19,9 @@ from mlx_spatial.mapanything_scene import (
     MapAnythingScenePipeline,
     MapAnythingScenePredictions,
     write_mapanything_scene_npz,
+)
+from tests.mapanything_scene_fixture import (
+    write_tiny_mapanything_prefix_fixture as _write_tiny_model_root,
 )
 
 
@@ -135,6 +136,7 @@ def test_mapanything_scene_prediction_bundle_schema(tmp_path):
         assert "case" in str(data["__metadata_json__"])
 
 
+@pytest.mark.real_assets
 def test_mapanything_prefix_pipeline_runs_local_desk_when_assets_present():
     model_root = ROOT / "weights/map-anything"
     image_root = ROOT / "inputs/map-anything/desk"
@@ -241,75 +243,3 @@ def test_mapanything_prefix_pipeline_public_exports():
     assert mlx_spatial.MAPANYTHING_PREFIX_PARITY_ATOL == MAPANYTHING_PREFIX_PARITY_ATOL
     assert mlx_spatial.MapAnythingScenePipeline is MapAnythingScenePipeline
     assert mlx_spatial.MAPANYTHING_SCENE_OUTPUT_KEYS == MAPANYTHING_SCENE_OUTPUT_KEYS
-
-
-def _write_tiny_model_root(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "config.json").write_text(_tiny_config_json(), encoding="utf-8")
-    save_file(_tiny_encoder_prefix_weights(), root / "model.safetensors")
-
-
-def _tiny_encoder_prefix_weights() -> dict[str, mx.array]:
-    embed_dim = 8
-    patch_size = 2
-    hidden = 24
-    zeros = lambda shape: mx.zeros(shape, dtype=mx.float32)
-    ones = lambda shape: mx.ones(shape, dtype=mx.float32)
-    return {
-        "encoder.model.cls_token": zeros((1, 1, embed_dim)),
-        "encoder.model.pos_embed": zeros((1, 5, embed_dim)),
-        "encoder.model.patch_embed.proj.weight": zeros((embed_dim, 3, patch_size, patch_size)),
-        "encoder.model.patch_embed.proj.bias": zeros((embed_dim,)),
-        "encoder.model.blocks.0.norm1.weight": ones((embed_dim,)),
-        "encoder.model.blocks.0.norm1.bias": zeros((embed_dim,)),
-        "encoder.model.blocks.0.attn.qkv.weight": zeros((3 * embed_dim, embed_dim)),
-        "encoder.model.blocks.0.attn.qkv.bias": zeros((3 * embed_dim,)),
-        "encoder.model.blocks.0.attn.proj.weight": zeros((embed_dim, embed_dim)),
-        "encoder.model.blocks.0.attn.proj.bias": zeros((embed_dim,)),
-        "encoder.model.blocks.0.ls1.gamma": ones((embed_dim,)),
-        "encoder.model.blocks.0.norm2.weight": ones((embed_dim,)),
-        "encoder.model.blocks.0.norm2.bias": zeros((embed_dim,)),
-        "encoder.model.blocks.0.mlp.w12.weight": zeros((2 * hidden, embed_dim)),
-        "encoder.model.blocks.0.mlp.w12.bias": zeros((2 * hidden,)),
-        "encoder.model.blocks.0.mlp.w3.weight": zeros((embed_dim, hidden)),
-        "encoder.model.blocks.0.mlp.w3.bias": zeros((embed_dim,)),
-        "encoder.model.blocks.0.ls2.gamma": ones((embed_dim,)),
-        "info_sharing.dummy": zeros((1,)),
-        "dense_head.dummy": zeros((1,)),
-        "pose_head.dummy": zeros((1,)),
-        "scale_head.dummy": zeros((1,)),
-        "fusion_norm_layer.weight": ones((embed_dim,)),
-        "scale_token": zeros((embed_dim,)),
-    }
-
-
-def _tiny_config_json() -> str:
-    return """{
-  "encoder_config": {
-    "data_norm_type": "dinov2",
-    "name": "tiny-test",
-    "size": "giant",
-    "keep_first_n_layers": 1,
-    "uses_torch_hub": false,
-    "with_registers": false
-  },
-  "info_sharing_config": {
-    "model_type": "alternating_attention",
-    "model_return_type": "intermediate_features",
-    "module_args": {
-      "depth": 1,
-      "dim": 8,
-      "num_heads": 2,
-      "indices": [0]
-    }
-  },
-  "pred_head_config": {
-    "type": "dpt+pose",
-    "adaptor_type": "raydirs+depth+pose+confidence+mask",
-    "feature_head": {"patch_size": 2},
-    "adaptor_config": {
-      "dense_pred_init_dict": {"name": "raydirs+depth+pose+confidence+mask+scale"}
-    }
-  },
-  "use_register_tokens_from_encoder": true
-}"""

@@ -23,7 +23,8 @@ from tests.trellis2_golden_fixture import (
 GOLDEN_MANIFEST = Path(__file__).parent / "data/trellis2_miniature_golden.json"
 
 
-@pytest.mark.heavy
+@pytest.mark.integration
+@pytest.mark.metal
 def test_miniature_int8_pipeline_emits_golden_trace_and_glb(tmp_path, monkeypatch):
     fixture = build_trellis2_miniature_golden_fixture(tmp_path)
     exporter = Trellis2MiniatureSpatialKitExporter()

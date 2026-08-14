@@ -1,8 +1,8 @@
 import json
-import shutil
 from pathlib import Path
 
 import mlx.core as mx
+import pytest
 from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.hyworld2 import main
@@ -72,9 +72,7 @@ def _write_fixture_images(path):
 
 
 def _output_dir(name):
-    path = Path("outputs") / "hyworld2" / name
-    shutil.rmtree(path, ignore_errors=True)
-    return path
+    return Path("outputs") / "hyworld2" / name
 
 
 def _assert_local_mlx_timing(metadata, completed_stages, *, blocker_stage, successful):
@@ -304,7 +302,9 @@ def test_hyworld2_reconstruct_cli_rejects_output_outside_outputs(tmp_path, capsy
     assert "must stay under outputs" in output
 
 
-def test_fixture_reconstruct_writes_staged_outputs_under_outputs(tmp_path):
+@pytest.mark.integration
+def test_fixture_reconstruct_writes_staged_outputs_under_outputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)
@@ -347,14 +347,13 @@ def test_fixture_reconstruct_writes_staged_outputs_under_outputs(tmp_path):
     )
 
 
-def test_fixture_reconstruct_writes_optional_mlx_parity_bundle(tmp_path):
+def test_fixture_reconstruct_writes_optional_mlx_parity_bundle(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)
     out = _output_dir("fixture-parity-bundle")
     parity_output = Path("outputs") / "hyworld2" / "fixture-parity-bundle.npz"
-    parity_output.unlink(missing_ok=True)
-
     result = HyWorld2InferencePipeline(tmp_path).reconstruct(
         image_dir,
         output_path=out,
@@ -372,7 +371,8 @@ def test_fixture_reconstruct_writes_optional_mlx_parity_bundle(tmp_path):
     assert "parity-mlx-bundle" in [output.name for output in result.trace.outputs]
 
 
-def test_fixture_reconstruct_heads_depth_exports_only_depth(tmp_path):
+def test_fixture_reconstruct_heads_depth_exports_only_depth(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)
@@ -399,7 +399,8 @@ def test_fixture_reconstruct_heads_depth_exports_only_depth(tmp_path):
     assert heads["camera"] == {"requested": False, "enabled": False, "export": False, "reason": "not requested"}
 
 
-def test_fixture_reconstruct_cleans_stale_artifacts_when_heads_change(tmp_path):
+def test_fixture_reconstruct_cleans_stale_artifacts_when_heads_change(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)
@@ -446,7 +447,8 @@ def test_fixture_reconstruct_cleans_stale_artifacts_when_heads_change(tmp_path):
     assert trace["metadata"]["heads"]["points"]["reason"] == "not requested"
 
 
-def test_fixture_reconstruct_requested_gs_exports_gaussians_ply(tmp_path):
+def test_fixture_reconstruct_requested_gs_exports_gaussians_ply(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)
@@ -491,7 +493,8 @@ def test_fixture_reconstruct_requested_gs_exports_gaussians_ply(tmp_path):
     assert (out / "trace.json").is_file()
 
 
-def test_hyworld2_reconstruct_cli_fixture_tensors_depth_only(tmp_path, capsys):
+def test_hyworld2_reconstruct_cli_fixture_tensors_depth_only(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     _write_tiny_fixture_root(tmp_path)
     image_dir = tmp_path / "images"
     _write_fixture_images(image_dir)

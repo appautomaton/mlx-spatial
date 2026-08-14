@@ -184,6 +184,7 @@ def test_inspect_mapanything_model_assets_returns_blocker_for_corrupt_safetensor
     assert inspection.blocker.metadata["checkpoint"] == str(tmp_path / "model.safetensors")
 
 
+@pytest.mark.real_assets
 def test_local_mapanything_checkpoint_layout_is_recognized_when_present():
     root = Path(MAPANYTHING_DEFAULT_ROOT)
     if not root.is_dir():

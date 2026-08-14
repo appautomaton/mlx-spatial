@@ -1,0 +1,199 @@
+{
+  "artifact": {
+    "format": "npz",
+    "keys": [
+      "__metadata_json__",
+      "camera_poses",
+      "confidence",
+      "depth",
+      "extrinsics",
+      "images",
+      "intrinsics",
+      "masks",
+      "world_points"
+    ]
+  },
+  "fixture": {
+    "covered": [
+      "asset inspection",
+      "safetensors loading",
+      "image preprocessing",
+      "full encoder",
+      "fusion norm",
+      "multi-view info sharing",
+      "dense pose and scale heads",
+      "scene geometry postprocess",
+      "NPZ artifact writing"
+    ],
+    "encoder_layers": 2,
+    "image_size": [
+      4,
+      4
+    ],
+    "info_sharing_layers": 2,
+    "kind": "generated-miniature-checkpoint",
+    "not_covered": [
+      "numeric parity with official MapAnything weights",
+      "production image resolution",
+      "performance or memory benchmarking"
+    ],
+    "patch_size": 2,
+    "quantization": "none",
+    "random_seeds": {
+      "encoder": 42,
+      "heads": 123
+    },
+    "source": "deterministic synthetic tensors",
+    "views": 2
+  },
+  "predictions": {
+    "camera_poses": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4
+      ],
+      "statistics": {
+        "l2": 2.828591814609413,
+        "max": 1.0,
+        "mean": 0.00992451986735432,
+        "min": -0.8856602907180786,
+        "std": 0.4999306132682394
+      }
+    },
+    "confidence": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4
+      ],
+      "statistics": {
+        "l2": 11.313672927044621,
+        "max": 1.9999938011169434,
+        "mean": 1.9999937117099762,
+        "min": 1.9999936819076538,
+        "std": 5.1619136559035694e-08
+      }
+    },
+    "depth": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4
+      ],
+      "statistics": {
+        "l2": 5.630415995036871,
+        "max": 0.9953265190124512,
+        "mean": 0.9953263327479362,
+        "min": 0.9953261017799377,
+        "std": 1.199057470219663e-07
+      }
+    },
+    "extrinsics": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4
+      ],
+      "statistics": {
+        "l2": 2.8285918068254254,
+        "max": 1.0,
+        "mean": 0.012379770862025907,
+        "min": -0.8856602907180786,
+        "std": 0.4998758386586127
+      }
+    },
+    "images": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4,
+        3
+      ],
+      "statistics": {
+        "l2": 6.344414571302413,
+        "max": 1.0,
+        "mean": 0.5000000035700699,
+        "min": 0.0,
+        "std": 0.4114455703905904
+      }
+    },
+    "intrinsics": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        3,
+        3
+      ],
+      "statistics": {
+        "l2": 673.7775845395489,
+        "max": 663.1362915039062,
+        "mean": 47.553094228108726,
+        "min": 0.0,
+        "std": 151.52427226830983
+      }
+    },
+    "masks": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4
+      ],
+      "statistics": {
+        "l2": 5.656854249492381,
+        "max": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "std": 0.0
+      }
+    },
+    "world_points": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4,
+        4,
+        3
+      ],
+      "statistics": {
+        "l2": 5.766115778983965,
+        "max": 0.10799834877252579,
+        "mean": -0.48137459841867286,
+        "min": -0.9538143277168274,
+        "std": 0.3385450916603922
+      }
+    }
+  },
+  "schema_version": 1,
+  "trace": {
+    "completed_stages": [
+      "asset-config-validation",
+      "image-preprocessing",
+      "model-config",
+      "checkpoint-loading:encoder",
+      "full-encoder",
+      "checkpoint-loading:heads",
+      "fusion-norm",
+      "checkpoint-loading:info-sharing",
+      "info-sharing",
+      "prediction-heads",
+      "scene-postprocess"
+    ],
+    "frame_count": 2,
+    "implemented_boundary": "scene-generation",
+    "patch_grid": [
+      2,
+      2
+    ],
+    "target_size": [
+      4,
+      4
+    ]
+  }
+}

@@ -202,14 +202,6 @@ class Trellis2TexturingPipeline:
                 ),
             )
 
-        preprocessed = preprocess_trellis2_image(image, rmbg_root=self.rmbg_root)
-        if not preprocessed.ready or preprocessed.image is None:
-            return Trellis2TexturingResult(
-                image_path=image,
-                mesh_path=mesh_file,
-                blocker=_preprocess_texturing_blocker(preprocessed.blocker),
-            )
-
         try:
             mesh_vertices, mesh_faces = _load_obj_mesh(mesh_file)
         except (OSError, ValueError) as error:
@@ -224,30 +216,6 @@ class Trellis2TexturingPipeline:
                     next_slice="provide a valid OBJ triangle mesh",
                 ),
             )
-
-        fdg_coords, fdg_dual, fdg_intersected = mesh_to_flexible_dual_grid(
-            mesh_vertices, mesh_faces, grid_size=grid_size
-        )
-
-        if fdg_coords.shape[0] == 0:
-            return Trellis2TexturingResult(
-                image_path=image,
-                mesh_path=mesh_file,
-                blocker=Trellis2TexturingBlocker(
-                    stage="mesh-preprocess",
-                    operation="FlexiDualGrid voxelization",
-                    reference=str(mesh_path),
-                    reason="mesh_to_flexible_dual_grid produced no occupied voxels",
-                    next_slice="increase grid_size or provide a mesh within the AABB",
-                ),
-            )
-
-        encoder_coords = np.column_stack(
-            [np.zeros(fdg_coords.shape[0], dtype=np.int32), fdg_coords]
-        )
-        encoder_coords_mx = mx.array(encoder_coords, dtype=mx.int32)
-        dual_mx = mx.array(fdg_dual, dtype=mx.float32)
-        intersected_mx = mx.array(fdg_intersected.astype(np.float32), dtype=mx.float32)
 
         discovery = discover_trellis2_conditioning_config(self.root)
         if not discovery.ready or discovery.config is None:
@@ -301,6 +269,38 @@ class Trellis2TexturingPipeline:
                 config,
                 texture_slat_sampler=replace(config.texture_slat_sampler, steps=slat_steps),
             )
+
+        preprocessed = preprocess_trellis2_image(image, rmbg_root=self.rmbg_root)
+        if not preprocessed.ready or preprocessed.image is None:
+            return Trellis2TexturingResult(
+                image_path=image,
+                mesh_path=mesh_file,
+                blocker=_preprocess_texturing_blocker(preprocessed.blocker),
+            )
+
+        fdg_coords, fdg_dual, fdg_intersected = mesh_to_flexible_dual_grid(
+            mesh_vertices, mesh_faces, grid_size=grid_size
+        )
+
+        if fdg_coords.shape[0] == 0:
+            return Trellis2TexturingResult(
+                image_path=image,
+                mesh_path=mesh_file,
+                blocker=Trellis2TexturingBlocker(
+                    stage="mesh-preprocess",
+                    operation="FlexiDualGrid voxelization",
+                    reference=str(mesh_path),
+                    reason="mesh_to_flexible_dual_grid produced no occupied voxels",
+                    next_slice="increase grid_size or provide a mesh within the AABB",
+                ),
+            )
+
+        encoder_coords = np.column_stack(
+            [np.zeros(fdg_coords.shape[0], dtype=np.int32), fdg_coords]
+        )
+        encoder_coords_mx = mx.array(encoder_coords, dtype=mx.int32)
+        dual_mx = mx.array(fdg_dual, dtype=mx.float32)
+        intersected_mx = mx.array(fdg_intersected.astype(np.float32), dtype=mx.float32)
 
         resolved_encoder_config_path = self.encoder_config_path or _SHAPE_ENCODER_CONFIG_CONVENTION
         try:

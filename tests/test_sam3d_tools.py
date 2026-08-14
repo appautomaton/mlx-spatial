@@ -437,6 +437,7 @@ def test_sam3d_external_pointmap_cli_reports_validation_blocker(tmp_path, capsys
     assert not (tmp_path / output).exists()
 
 
+@pytest.mark.integration
 def test_sam3d_cli_reconstruct_writes_gaussian_ply_and_textured_glb_with_fixture_pipeline(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     weights = tmp_path / "weights"
