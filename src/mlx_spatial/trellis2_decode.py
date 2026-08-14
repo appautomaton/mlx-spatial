@@ -12,6 +12,7 @@ import numpy as np
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
 from .sparse_conv import sparse_conv_map_vectorized, weighted_sparse_conv_chunked
 from .trellis2_sparse_structure import _layer_norm, _linear, _silu
+from .trellis2_quantization import Trellis2Weight
 
 
 STRUCTURED_LATENT_DECODER_BASE_TENSOR_NAMES = (
@@ -1239,13 +1240,13 @@ def _sparse_convnext_block_forward(
     )
     hidden = _linear_chunked(
         normalized,
-        tensors[f"{prefix}.mlp.0.weight"].astype(mx.float32),
+        tensors[f"{prefix}.mlp.0.weight"],
         tensors[f"{prefix}.mlp.0.bias"].astype(mx.float32),
     )
     hidden = _silu(hidden)
     hidden = _linear_chunked(
         hidden,
-        tensors[f"{prefix}.mlp.2.weight"].astype(mx.float32),
+        tensors[f"{prefix}.mlp.2.weight"],
         tensors[f"{prefix}.mlp.2.bias"].astype(mx.float32),
     )
     return hidden + features.astype(mx.float32)
@@ -1364,7 +1365,13 @@ def _layer_norm_no_affine(features: mx.array, *, eps: float) -> mx.array:
     return (features - mean) / mx.sqrt(variance + eps)
 
 
-def _linear_chunked(features: mx.array, weight: mx.array, bias: mx.array, *, token_chunk_size: int = 16384) -> mx.array:
+def _linear_chunked(
+    features: mx.array,
+    weight: Trellis2Weight,
+    bias: mx.array,
+    *,
+    token_chunk_size: int = 16384,
+) -> mx.array:
     token_count = int(features.shape[0])
     chunk_size = int(token_chunk_size)
     if chunk_size <= 0:

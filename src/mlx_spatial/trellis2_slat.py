@@ -630,7 +630,7 @@ def _slat_self_attention(
     prefix = f"blocks.{block_index}.self_attn"
     qkv = _linear(
         hidden_states,
-        tensors[f"{prefix}.to_qkv.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_qkv.weight"],
         tensors[f"{prefix}.to_qkv.bias"].astype(mx.float32),
     )
     qkv = mx.reshape(qkv, (1, token_count, 3, config.num_heads, head_dim))
@@ -649,7 +649,7 @@ def _slat_self_attention(
     attended = mx.reshape(attended, (token_count, config.model_channels))
     return _linear(
         attended,
-        tensors[f"{prefix}.to_out.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_out.weight"],
         tensors[f"{prefix}.to_out.bias"].astype(mx.float32),
     )
 
@@ -726,12 +726,12 @@ def _slat_cross_attention_with_prefix(
     token_count = int(hidden_states.shape[0])
     query = _linear(
         hidden_states,
-        tensors[f"{prefix}.to_q.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_q.weight"],
         tensors[f"{prefix}.to_q.bias"].astype(mx.float32),
     )
     key_value = _linear(
         conditioning,
-        tensors[f"{prefix}.to_kv.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_kv.weight"],
         tensors[f"{prefix}.to_kv.bias"].astype(mx.float32),
     )
     query = mx.reshape(query, (1, token_count, config.num_heads, head_dim))
@@ -746,7 +746,7 @@ def _slat_cross_attention_with_prefix(
     attended = mx.reshape(attended, (token_count, config.model_channels))
     return _linear(
         attended,
-        tensors[f"{prefix}.to_out.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_out.weight"],
         tensors[f"{prefix}.to_out.bias"].astype(mx.float32),
     )
 
@@ -871,13 +871,13 @@ def _slat_mlp(hidden_states: mx.array, tensors: dict[str, mx.array], *, block_in
     prefix = f"blocks.{block_index}.mlp.mlp"
     hidden = _linear(
         hidden_states,
-        tensors[f"{prefix}.0.weight"].astype(mx.float32),
+        tensors[f"{prefix}.0.weight"],
         tensors[f"{prefix}.0.bias"].astype(mx.float32),
     )
     hidden = _gelu_tanh(hidden)
     return _linear(
         hidden,
-        tensors[f"{prefix}.2.weight"].astype(mx.float32),
+        tensors[f"{prefix}.2.weight"],
         tensors[f"{prefix}.2.bias"].astype(mx.float32),
     )
 

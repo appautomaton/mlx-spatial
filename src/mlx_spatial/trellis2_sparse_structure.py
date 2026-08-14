@@ -10,6 +10,7 @@ import mlx.core as mx
 import numpy as np
 
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
+from .trellis2_quantization import Trellis2Weight, trellis2_linear
 
 
 SPARSE_STRUCTURE_INPUT_TENSOR_NAMES = (
@@ -731,7 +732,7 @@ def _sparse_structure_self_attention(
     prefix = f"blocks.{block_index}.self_attn"
     qkv = _linear(
         hidden_states,
-        tensors[f"{prefix}.to_qkv.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_qkv.weight"],
         tensors[f"{prefix}.to_qkv.bias"].astype(mx.float32),
     )
     qkv = mx.reshape(qkv, (batch, token_count, 3, config.num_heads, head_dim))
@@ -750,7 +751,7 @@ def _sparse_structure_self_attention(
     attended = mx.reshape(attended, (batch, token_count, config.model_channels))
     return _linear(
         attended,
-        tensors[f"{prefix}.to_out.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_out.weight"],
         tensors[f"{prefix}.to_out.bias"].astype(mx.float32),
     )
 
@@ -826,12 +827,12 @@ def _sparse_structure_cross_attention_with_prefix(
     batch, token_count, _ = tuple(int(dim) for dim in hidden_states.shape)
     query = _linear(
         hidden_states,
-        tensors[f"{prefix}.to_q.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_q.weight"],
         tensors[f"{prefix}.to_q.bias"].astype(mx.float32),
     )
     key_value = _linear(
         conditioning,
-        tensors[f"{prefix}.to_kv.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_kv.weight"],
         tensors[f"{prefix}.to_kv.bias"].astype(mx.float32),
     )
     query = mx.reshape(query, (batch, token_count, config.num_heads, head_dim))
@@ -846,7 +847,7 @@ def _sparse_structure_cross_attention_with_prefix(
     attended = mx.reshape(attended, (batch, token_count, config.model_channels))
     return _linear(
         attended,
-        tensors[f"{prefix}.to_out.weight"].astype(mx.float32),
+        tensors[f"{prefix}.to_out.weight"],
         tensors[f"{prefix}.to_out.bias"].astype(mx.float32),
     )
 
@@ -855,13 +856,13 @@ def _sparse_structure_mlp(hidden_states: mx.array, tensors: dict[str, mx.array],
     prefix = f"blocks.{block_index}.mlp.mlp"
     hidden = _linear(
         hidden_states,
-        tensors[f"{prefix}.0.weight"].astype(mx.float32),
+        tensors[f"{prefix}.0.weight"],
         tensors[f"{prefix}.0.bias"].astype(mx.float32),
     )
     hidden = _gelu_tanh(hidden)
     return _linear(
         hidden,
-        tensors[f"{prefix}.2.weight"].astype(mx.float32),
+        tensors[f"{prefix}.2.weight"],
         tensors[f"{prefix}.2.bias"].astype(mx.float32),
     )
 
@@ -937,11 +938,8 @@ def _layer_norm(values: mx.array, weight: mx.array, bias: mx.array, *, eps: floa
     return _layer_norm_no_affine(values, eps=eps) * weight + bias
 
 
-def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = values @ mx.transpose(weight)
-    if bias is not None:
-        output = output + bias
-    return output
+def _linear(values: mx.array, weight: Trellis2Weight, bias: mx.array | None) -> mx.array:
+    return trellis2_linear(values, weight, bias)
 
 
 def _silu(values: mx.array) -> mx.array:

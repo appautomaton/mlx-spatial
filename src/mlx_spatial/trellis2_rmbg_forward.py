@@ -13,6 +13,7 @@ from PIL import Image
 
 from .checkpoint import load_checkpoint_tensors
 from .model_assets import RMBG2_ASSETS
+from .trellis2_quantization import Trellis2Weight, trellis2_linear
 from .trellis2_rmbg import _checkpoint_path
 
 
@@ -544,11 +545,8 @@ def _layer_norm(x: mx.array, weight: mx.array, bias: mx.array, eps: float = 1e-5
     return mx.fast.layer_norm(x.astype(mx.float32), weight.astype(mx.float32), bias.astype(mx.float32), eps).astype(x.dtype)
 
 
-def _linear(x: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = x @ mx.transpose(weight.astype(x.dtype))
-    if bias is not None:
-        output = output + bias.astype(output.dtype)
-    return output
+def _linear(x: mx.array, weight: Trellis2Weight, bias: mx.array | None) -> mx.array:
+    return trellis2_linear(x, weight, bias)
 
 
 def _resize_nchw(x: mx.array, size: tuple[int, int]) -> mx.array:

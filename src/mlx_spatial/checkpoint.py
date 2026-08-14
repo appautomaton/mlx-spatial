@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import mlx.core as mx
-
-from .safetensors_io import inspect_safetensors, load_mlx_safetensors
 
 
 @dataclass(frozen=True)
@@ -39,7 +37,7 @@ def inspect_checkpoint(
             dtype=info.dtype,
             source=str(checkpoint_path),
         )
-        for info in inspect_safetensors(checkpoint_path)
+        for info in _inspect_logical_safetensors(checkpoint_path)
         if not has_filter or _matches_filter(info.name, exact_names, name_prefixes)
     ]
 
@@ -53,15 +51,15 @@ def load_checkpoint_tensors(
     *,
     names: Iterable[str] | None = None,
     prefixes: Iterable[str] | None = None,
-) -> dict[str, mx.array]:
-    """Load selected tensors from a local safetensors checkpoint as MLX arrays."""
+) -> dict[str, Any]:
+    """Load selected tensors from a local checkpoint as logical runtime weights."""
 
     checkpoint_path = _validate_checkpoint_path(path)
     exact_names, name_prefixes, has_filter = _normalize_filters(names, prefixes)
     if not has_filter:
         raise ValueError("loading checkpoint tensors requires names or prefixes")
 
-    tensors = load_mlx_safetensors(checkpoint_path)
+    tensors = _load_logical_safetensors(checkpoint_path)
     loaded = {
         name: tensors[name]
         for name in sorted(tensors)
@@ -75,6 +73,22 @@ def load_checkpoint_tensors(
         if missing:
             raise ValueError(f"checkpoint is missing requested tensors: {missing}")
     return loaded
+
+
+def _inspect_logical_safetensors(path: Path):
+    """Use format-aware logical names when a supported packed checkpoint is present."""
+
+    from .trellis2_quantization import inspect_logical_trellis2_safetensors
+
+    return inspect_logical_trellis2_safetensors(path)
+
+
+def _load_logical_safetensors(path: Path) -> dict[str, Any]:
+    """Load full-precision or supported packed tensors under their logical names."""
+
+    from .trellis2_quantization import load_logical_trellis2_safetensors
+
+    return load_logical_trellis2_safetensors(path)
 
 
 def _validate_checkpoint_path(path: str | Path) -> Path:

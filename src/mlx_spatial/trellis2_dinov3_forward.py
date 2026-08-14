@@ -8,6 +8,7 @@ from pathlib import Path
 import mlx.core as mx
 
 from .checkpoint import CheckpointTensorInfo, inspect_checkpoint, load_checkpoint_tensors
+from .trellis2_quantization import Trellis2Weight, trellis2_linear
 from .trellis2_dinov3 import (
     DinoV3CheckpointInventory,
     DinoV3ConditioningResult,
@@ -711,11 +712,8 @@ def _layer_norm_no_affine(values: mx.array, *, eps: float) -> mx.array:
     return (values - mean) * mx.rsqrt(variance + eps)
 
 
-def _linear(values: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
-    output = values @ mx.transpose(weight)
-    if bias is not None:
-        output = output + bias
-    return output
+def _linear(values: mx.array, weight: Trellis2Weight, bias: mx.array | None) -> mx.array:
+    return trellis2_linear(values, weight, bias)
 
 
 def _gelu(values: mx.array) -> mx.array:

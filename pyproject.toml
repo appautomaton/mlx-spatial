@@ -56,6 +56,7 @@ environments = [
 
 [project.scripts]
 mlx-spatial-trellis2 = "mlx_spatial.trellis2:main"
+mlx-spatial-trellis2-quantize = "mlx_spatial.trellis2_quantization:main"
 mlx-spatial-hyworld2 = "mlx_spatial.hyworld2:main"
 mlx-spatial-sam3d = "mlx_spatial.sam3d:main"
 mlx-spatial-sam3d-quantize = "mlx_spatial.sam3d_quantization:main"
