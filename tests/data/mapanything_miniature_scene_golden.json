@@ -46,6 +46,31 @@
     "source": "deterministic synthetic tensors",
     "views": 2
   },
+  "geometry_invariants": {
+    "intrinsics": {
+      "dtype": "float32",
+      "finite": true,
+      "homogeneous_bottom_row": true,
+      "positive_focal_lengths": true,
+      "shape": [
+        2,
+        3,
+        3
+      ]
+    },
+    "world_points": {
+      "bounded": true,
+      "dtype": "float32",
+      "finite": true,
+      "nonzero": true,
+      "shape": [
+        2,
+        4,
+        4,
+        3
+      ]
+    }
+  },
   "predictions": {
     "camera_poses": {
       "dtype": "float32",
@@ -123,21 +148,6 @@
         "std": 0.4114455703905904
       }
     },
-    "intrinsics": {
-      "dtype": "float32",
-      "shape": [
-        2,
-        3,
-        3
-      ],
-      "statistics": {
-        "l2": 673.7775845395489,
-        "max": 663.1362915039062,
-        "mean": 47.553094228108726,
-        "min": 0.0,
-        "std": 151.52427226830983
-      }
-    },
     "masks": {
       "dtype": "float32",
       "shape": [
@@ -152,25 +162,9 @@
         "min": 1.0,
         "std": 0.0
       }
-    },
-    "world_points": {
-      "dtype": "float32",
-      "shape": [
-        2,
-        4,
-        4,
-        3
-      ],
-      "statistics": {
-        "l2": 5.766115778983965,
-        "max": 0.10799834877252579,
-        "mean": -0.48137459841867286,
-        "min": -0.9538143277168274,
-        "std": 0.3385450916603922
-      }
     }
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "trace": {
     "completed_stages": [
       "asset-config-validation",

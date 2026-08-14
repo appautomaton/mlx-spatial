@@ -130,7 +130,10 @@ uv run pytest tests/test_pixal3d_derived_golden.py -q
 The default test verifies provenance, checksums, and decoded contracts. The
 bounded Metal-backed replay normally completes in under one second. It does not
 replace the synthetic full-pipeline Pixal3D test: the derived fixture begins at
-the decoder-output boundary.
+the decoder-output boundary. Face counts and artifact structure remain exact;
+the manifest permits a small explicit GLB vertex-count tolerance because native
+UV seam splitting can duplicate a few vertices differently across macOS
+hardware and driver versions.
 
 Rebaseline only from a reviewed real inference result:
 
@@ -147,7 +150,10 @@ uv run python scripts/pixal3d/write_derived_golden_fixture.py \
 The MapAnything fixture generates its checkpoint at runtime from deterministic
 tiny tensors. The committed manifest records fixture provenance, covered and
 excluded scope, stage order, output schemas, and tolerant numerical summaries.
-It is a pipeline regression fixture, not official-weight parity.
+It is a pipeline regression fixture, not official-weight parity. Stable outputs
+retain numerical summaries; recovered intrinsics and world points use strict
+shape, finite-value, homogeneous-matrix, sign, and boundedness invariants to
+avoid amplifying cross-hardware noise from the deliberately tiny ray field.
 
 ```bash
 uv run pytest tests/test_mapanything_scene_pipeline.py \

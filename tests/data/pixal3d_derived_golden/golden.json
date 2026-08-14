@@ -39,6 +39,7 @@
   },
   "expected_export": {
     "final_faces": 512,
+    "glb_vertex_tolerance": 8,
     "glb": {
       "faces": 512,
       "images": 2,
@@ -73,7 +74,7 @@
     }
   },
   "fixture_kind": "real-weight-derived-decoder-patch",
-  "schema_version": 1,
+  "schema_version": 2,
   "scope": {
     "covered": "decoded O-Voxel contract through native textured GLB export",
     "not_covered": "Pixal3D checkpoint loading, conditioning, flow sampling, and decoder execution"

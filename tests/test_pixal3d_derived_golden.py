@@ -24,6 +24,7 @@ MANIFEST_PATH = FIXTURE_ROOT / "golden.json"
 def test_pixal3d_derived_golden_manifest_matches_committed_decoder_patch():
     manifest = _manifest()
 
+    assert manifest["schema_version"] == 2
     assert manifest["fixture_kind"] == "real-weight-derived-decoder-patch"
     assert manifest["source"]["repository"] == "TencentARC/Pixal3D"
     assert manifest["source"]["quantization"] == "none"
@@ -59,6 +60,8 @@ def test_pixal3d_derived_golden_manifest_matches_committed_decoder_patch():
 @pytest.mark.metal
 def test_pixal3d_derived_golden_replays_native_textured_export(tmp_path):
     expected = _manifest()["expected_export"]
+    vertex_tolerance = int(expected.pop("glb_vertex_tolerance"))
+    expected_vertices = int(expected["glb"].pop("vertices"))
     result = export_decoded_ovoxel_glb(
         FIXTURE_ROOT,
         tmp_path / "model.glb",
@@ -87,7 +90,9 @@ def test_pixal3d_derived_golden_replays_native_textured_export(tmp_path):
             "faces": int(glb["total_faces"]),
         },
     }
+    actual_vertices = int(actual["glb"].pop("vertices"))
     assert actual == expected
+    assert abs(actual_vertices - expected_vertices) <= vertex_tolerance
 
 
 def _manifest() -> dict:

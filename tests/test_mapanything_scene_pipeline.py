@@ -58,8 +58,13 @@ def _summarize_miniature_scene(
     result: MapAnythingSceneResult,
 ) -> dict[str, object]:
     assert result.predictions is not None
+    stable_prediction_keys = tuple(
+        key
+        for key in MAPANYTHING_SCENE_OUTPUT_KEYS
+        if key not in {"intrinsics", "world_points"}
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "fixture": {
             "kind": "generated-miniature-checkpoint",
             "source": "deterministic synthetic tensors",
@@ -96,13 +101,46 @@ def _summarize_miniature_scene(
         },
         "predictions": {
             key: summarize_array(getattr(result.predictions, key))
-            for key in MAPANYTHING_SCENE_OUTPUT_KEYS
+            for key in stable_prediction_keys
         },
+        "geometry_invariants": _summarize_geometry_invariants(result),
         "artifact": {
             "keys": sorted(
                 (*MAPANYTHING_SCENE_OUTPUT_KEYS, "__metadata_json__")
             ),
             "format": "npz",
+        },
+    }
+
+
+def _summarize_geometry_invariants(
+    result: MapAnythingSceneResult,
+) -> dict[str, object]:
+    assert result.predictions is not None
+    intrinsics = np.asarray(result.predictions.intrinsics)
+    world_points = np.asarray(result.predictions.world_points)
+    focal_lengths = np.stack((intrinsics[:, 0, 0], intrinsics[:, 1, 1]), axis=1)
+    return {
+        "intrinsics": {
+            "shape": list(intrinsics.shape),
+            "dtype": str(intrinsics.dtype),
+            "finite": bool(np.isfinite(intrinsics).all()),
+            "positive_focal_lengths": bool((focal_lengths > 0.0).all()),
+            "homogeneous_bottom_row": bool(
+                np.allclose(
+                    intrinsics[:, 2, :],
+                    np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                    atol=1e-6,
+                    rtol=0.0,
+                )
+            ),
+        },
+        "world_points": {
+            "shape": list(world_points.shape),
+            "dtype": str(world_points.dtype),
+            "finite": bool(np.isfinite(world_points).all()),
+            "nonzero": bool(np.linalg.norm(world_points) > 1e-3),
+            "bounded": bool(np.max(np.abs(world_points)) < 10.0),
         },
     }
 
