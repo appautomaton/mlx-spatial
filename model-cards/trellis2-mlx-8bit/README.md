@@ -111,9 +111,12 @@ mlx-spatial-trellis2 generate-textured \
   --dino-root weights/trellis2-mlx-8bit/dinov3 \
   --rmbg-root weights/trellis2-mlx-8bit/rmbg \
   --output outputs/trellis2/object-8bit/model.glb \
-  --pipeline-type 512 \
+  --pipeline-type 1024_cascade \
   --seed 42
 ```
+
+`1024_cascade` is the recommended quality tier; use `512` when lower memory
+use or faster iteration matters more.
 
 Do not pass `--slat-steps` for a quality run; the model configuration uses 12
 steps. `--slat-steps 1` is intended only for a quick runtime smoke test.
@@ -205,19 +208,22 @@ of the quantized checkpoints to the 8-bit repository.
   recognizable appearance.
 - The same run completed in 152.23 seconds, observed 3.516 GB peak MLX
   allocator use, and recorded zero swap growth.
+- A separate `1024_cascade`, 12-step run completed the same end-to-end path
+  and produced a Blender-readable 12,670,448-byte GLB with 199,884 faces and
+  embedded 1024 x 1024 PBR textures.
 
-The runtime and memory figures are one local Apple Silicon observation, not a
-general benchmark. The run establishes executable compatibility and artifact
-health; it is not a formal claim of visual equivalence to the source weights.
+The 512 runtime and memory figures are one local Apple Silicon observation,
+not a general benchmark. The `1024_cascade` run overlapped another MLX workload,
+so it establishes compatibility and artifact health rather than performance.
+Neither run is a formal claim of visual equivalence to the source weights.
 
 ## Limitations
 
 - Quantization changes the sampling trajectory. Geometry, pose, topology,
   texture placement, material values, and unseen surfaces can differ from the
   source-precision model even with the same seed.
-- The verified end-to-end run used the 512 pipeline. The 1024 and cascade
-  checkpoints passed inventory and runtime tests but have not received an
-  equivalent end-to-end quality evaluation here.
+- End-to-end validation covers `512` and `1024_cascade`. The standalone `1024`
+  and `1536_cascade` routes have not received an equivalent quality evaluation.
 - Single-view reconstruction cannot determine unseen geometry with certainty.
 - Fine detail depends on foreground extraction, cropping, occlusion,
   reflections, transparency, and thin structures.
