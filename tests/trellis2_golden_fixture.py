@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -15,12 +13,19 @@ import numpy as np
 from PIL import Image
 
 from mlx_spatial.safetensors_io import save_safetensors
+from mlx_spatial.spatialkit import export_decoded_ovoxel_glb
 from mlx_spatial.trellis2_decode import StructuredLatentDecoderConfig
 from mlx_spatial.trellis2_dinov3 import DinoV3ModelConfig
 from mlx_spatial.trellis2_forward import Trellis2ForwardTraceResult
 from mlx_spatial.trellis2_quantization import quantize_trellis2_weights
 from mlx_spatial.trellis2_slat import SLatFlowConfig
 from mlx_spatial.trellis2_sparse_structure import SparseStructureDecoderConfig, SparseStructureFlowConfig
+from tests.golden_assertions import summarize_array
+
+
+TRELLIS2_MINIATURE_EXPORT_GRID_SIZE = 32
+TRELLIS2_MINIATURE_EXPORT_TARGET_FACES = 64
+TRELLIS2_MINIATURE_EXPORT_TEXTURE_SIZE = 16
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,30 @@ class Trellis2MiniatureGoldenFixture:
     dino_root: Path
     image_path: Path
     output_path: Path
+
+
+@dataclass
+class Trellis2MiniatureSpatialKitExporter:
+    """Run the real SpatialKit exporter with a miniature remesh policy."""
+
+    requested_options: dict[str, Any] | None = None
+
+    def __call__(self, decoded_dir: str | Path, output_path: str | Path, **options: Any):
+        self.requested_options = dict(options)
+        return export_decoded_ovoxel_glb(
+            decoded_dir,
+            output_path,
+            texture_size=TRELLIS2_MINIATURE_EXPORT_TEXTURE_SIZE,
+            target_faces=TRELLIS2_MINIATURE_EXPORT_TARGET_FACES,
+            quality_preset="reference-target",
+            grid_size=TRELLIS2_MINIATURE_EXPORT_GRID_SIZE,
+            uv_backend="xatlas-equivalent-native",
+            remesh=True,
+            remesh_resolution=TRELLIS2_MINIATURE_EXPORT_GRID_SIZE,
+            simplify_backend="mlx-qem",
+            texture_postprocess="telea",
+            diagnostics_path=options.get("diagnostics_path"),
+        )
 
 
 def build_trellis2_miniature_golden_fixture(root: Path) -> Trellis2MiniatureGoldenFixture:
@@ -173,52 +202,17 @@ def summarize_trellis2_golden_trace(trace: Trellis2ForwardTraceResult) -> dict[s
     for output in trace.outputs:
         if output.payload is None:
             continue
-        tensor_outputs[output.name] = {
-            "shape": list(output.shape),
-            "dtype": output.dtype,
-            "sha256": _tensor_digest(output.payload),
-        }
+        summary = summarize_array(output.payload)
+        if summary["shape"] != list(output.shape) or summary["dtype"] != output.dtype:
+            raise AssertionError(
+                f"trace metadata disagrees with payload for {output.name}: "
+                f"declared shape={output.shape} dtype={output.dtype}; "
+                f"actual shape={summary['shape']} dtype={summary['dtype']}"
+            )
+        tensor_outputs[output.name] = summary
     return {
         "completed_stages": list(trace.completed_stages),
         "tensor_outputs": tensor_outputs,
-    }
-
-
-def summarize_glb(path: Path) -> dict[str, Any]:
-    """Read a GLB without third-party parsers and summarize stable structural fields."""
-
-    payload = path.read_bytes()
-    if len(payload) < 20:
-        raise ValueError("GLB payload is too short")
-    magic, version, declared_length = struct.unpack_from("<4sII", payload, 0)
-    if magic != b"glTF" or version != 2 or declared_length != len(payload):
-        raise ValueError("invalid GLB header")
-    json_length, json_type = struct.unpack_from("<I4s", payload, 12)
-    if json_type != b"JSON":
-        raise ValueError("GLB first chunk is not JSON")
-    document = json.loads(payload[20 : 20 + json_length].decode("utf-8").rstrip(" \x00"))
-    accessors = document.get("accessors", [])
-    primitive_summaries = []
-    for mesh in document.get("meshes", []):
-        for primitive in mesh.get("primitives", []):
-            position_accessor = primitive.get("attributes", {}).get("POSITION")
-            index_accessor = primitive.get("indices")
-            primitive_summaries.append(
-                {
-                    "positions": accessors[position_accessor]["count"] if position_accessor is not None else 0,
-                    "triangles": accessors[index_accessor]["count"] // 3 if index_accessor is not None else 0,
-                    "has_normal": "NORMAL" in primitive.get("attributes", {}),
-                    "has_texcoord_0": "TEXCOORD_0" in primitive.get("attributes", {}),
-                    "material": primitive.get("material"),
-                }
-            )
-    return {
-        "meshes": len(document.get("meshes", [])),
-        "primitives": primitive_summaries,
-        "materials": len(document.get("materials", [])),
-        "textures": len(document.get("textures", [])),
-        "images": len(document.get("images", [])),
-        "sha256": hashlib.sha256(payload).hexdigest(),
     }
 
 
@@ -539,29 +533,12 @@ def _center_identity_conv(channels: int) -> mx.array:
     return mx.array(values)
 
 
-def _tensor_digest(value: mx.array) -> str:
-    mx.eval(value)
-    dtype = str(value.dtype).removeprefix("mlx.core.")
-    if dtype.startswith("float") or dtype == "bfloat16":
-        array = np.asarray(value.astype(mx.float32), dtype="<f4")
-    elif dtype.startswith("int"):
-        array = np.asarray(value.astype(mx.int32), dtype="<i4")
-    elif dtype.startswith("uint"):
-        array = np.asarray(value.astype(mx.uint32), dtype="<u4")
-    elif dtype == "bool":
-        array = np.asarray(value, dtype=np.uint8)
-    else:
-        raise TypeError(f"unsupported golden tensor dtype: {dtype}")
-    digest = hashlib.sha256()
-    digest.update(dtype.encode("utf-8"))
-    digest.update(json.dumps(list(value.shape)).encode("utf-8"))
-    digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
-
-
 __all__ = [
+    "TRELLIS2_MINIATURE_EXPORT_GRID_SIZE",
+    "TRELLIS2_MINIATURE_EXPORT_TARGET_FACES",
+    "TRELLIS2_MINIATURE_EXPORT_TEXTURE_SIZE",
     "Trellis2MiniatureGoldenFixture",
+    "Trellis2MiniatureSpatialKitExporter",
     "build_trellis2_miniature_golden_fixture",
-    "summarize_glb",
     "summarize_trellis2_golden_trace",
 ]

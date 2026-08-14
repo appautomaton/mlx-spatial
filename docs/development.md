@@ -77,13 +77,20 @@ user-requested inference results, not test or audit scratch data. Preserve the
 temporary root only when its artifacts are needed for diagnosis; otherwise
 remove it after recording the relevant result.
 
-## TRELLIS.2 Miniature Golden Fixture
+## Model-Independent Golden Fixtures
+
+Golden coverage uses two complementary fixture types. Synthetic miniature
+checkpoints exercise complete inference orchestration. Real-weight-derived
+decoder patches preserve a reviewed real-model boundary without committing or
+loading the source checkpoints.
+
+### TRELLIS.2 Synthetic Miniature
 
 The TRELLIS.2 golden test does not read `weights/` or download model assets. It
 generates a miniature source checkpoint, applies the production selective INT8
 quantizer, and runs image conditioning, sparse sampling, shape and texture SLat
-sampling, both decoders, artifact serialization, and GLB export without stage
-mocking.
+sampling, both decoders, artifact serialization, and the real SpatialKit export
+path with miniature export settings.
 
 ```bash
 uv run pytest -m heavy tests/test_trellis2_golden_fixture.py -q
@@ -93,6 +100,35 @@ Reviewed tensor and GLB expectations live in
 `tests/data/trellis2_miniature_golden.json`. Do not regenerate that manifest
 automatically during tests. Rebaseline it only after reviewing an intentional
 inference-contract change.
+
+### Pixal3D Real-Weight-Derived Decoder Patch
+
+`tests/data/pixal3d_derived_golden/` contains a 16-cubed spatial patch captured
+from an official-sample run of `TencentARC/Pixal3D` revision
+`0b31f9160aa400719af409098bff7936a932f726`. The source used unquantized BF16
+flow and FP16 decoder checkpoints. The committed patch is under 64 KiB and
+replays decoded O-Voxel validation, mesh extraction, remeshing, MLX QEM, UV,
+texture baking, and GLB writing without the 22 GB source bundle.
+
+```bash
+uv run pytest tests/test_pixal3d_derived_golden.py -q
+uv run pytest -m heavy tests/test_pixal3d_derived_golden.py -q
+```
+
+The default test verifies provenance, checksums, and decoded contracts. The
+Metal-backed replay is marked `heavy` and normally completes in under one
+second. It does not replace the synthetic full-pipeline Pixal3D tests: the
+derived fixture begins at the decoder-output boundary.
+
+Rebaseline only from a reviewed real inference result:
+
+```bash
+uv run python scripts/pixal3d/write_derived_golden_fixture.py \
+  outputs/pixal3d/real-smoke-moge-balanced-decoders1100k \
+  outputs/pixal3d/real-smoke-moge-balanced-decoders1100k/trace.json \
+  tests/data/pixal3d_derived_golden \
+  --source-revision 0b31f9160aa400719af409098bff7936a932f726
+```
 
 ## Editing Constraints
 
