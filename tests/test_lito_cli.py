@@ -11,7 +11,7 @@ from plyfile import PlyData
 from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.lito import main as lito_main
-from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
+from mlx_spatial.lito_assets import LITO_TRELLIS_BUNDLE_PATH, LITO_TRELLIS_REQUIRED_FILES
 from mlx_spatial.lito_inference import LitoGenerationResult
 
 
@@ -26,7 +26,7 @@ def test_pyproject_exposes_lito_script_entry():
 
 def test_cli_validate_returns_zero_on_valid_weights(tmp_path, capsys):
     root = _write_valid_weights(tmp_path / "weights")
-    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
+    _write_trellis_runtime_assets(root / LITO_TRELLIS_BUNDLE_PATH)
 
     assert lito_main(["validate", str(root)]) == 0
     output = capsys.readouterr().out
@@ -266,7 +266,7 @@ def test_cli_generate_fails_closed_without_smoke_flag(tmp_path, capsys):
 
 def test_cli_generate_rejects_placeholder_weights_without_smoke_flag(tmp_path, capsys):
     root = _write_valid_weights(tmp_path / "weights")
-    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
+    _write_trellis_runtime_assets(root / LITO_TRELLIS_BUNDLE_PATH)
     image = _write_synthetic_image(tmp_path / "input.png")
     output = tmp_path / "test.ply"
 

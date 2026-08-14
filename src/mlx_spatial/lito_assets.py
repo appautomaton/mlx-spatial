@@ -19,7 +19,7 @@ LITO_CDN_BASE_URL = "https://ml-site.cdn-apple.com/models/lito"
 LITO_RAW_DEFAULT_ROOT = "weights/lito-raw"
 LITO_DEFAULT_ROOT = "weights/lito-research-mlx"
 LITO_TRELLIS_REPO_ID = "microsoft/TRELLIS-image-large"
-LITO_TRELLIS_DEFAULT_ROOT = "weights/trellis2/microsoft/TRELLIS-image-large"
+LITO_TRELLIS_BUNDLE_PATH = Path("dependencies/trellis")
 LITO_COMPONENT_GROUPS = (
     "tokenizer",
     "image_conditioner",
@@ -33,6 +33,10 @@ LITO_DEFAULT_CHECKPOINTS = (
 LITO_TRELLIS_REQUIRED_FILES = (
     "ckpts/ss_dec_conv3d_16l8_fp16.json",
     "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+)
+LITO_TRELLIS_METADATA_FILES = (
+    "LICENSE",
+    "SOURCE.json",
 )
 LITO_MODEL_LICENSE = "Apple Machine Learning Research Model License Agreement"
 LITO_SAMPLE_LICENSE = "CC BY-NC-ND 4.0"
@@ -64,12 +68,12 @@ def validate(
     checkpoint_paths = tuple(root_path / relative_path for _, _, relative_path in LITO_DEFAULT_CHECKPOINTS)
     runtime_dependency_paths: tuple[Path, ...] = ()
     if include_runtime_dependencies:
-        trellis_root = _resolve_validation_trellis_root(root_path)
+        trellis_root = lito_trellis_root(root_path)
         runtime_dependency_paths = tuple(trellis_root / relative_path for relative_path in LITO_TRELLIS_REQUIRED_FILES)
     present: list[str] = []
     missing: list[str] = []
     for path in (*checkpoint_paths, *runtime_dependency_paths):
-        relative = _runtime_report_path(root_path, path)
+        relative = _relative_report_path(root_path, path)
         if path.is_file():
             present.append(relative)
         else:
@@ -210,36 +214,10 @@ def _relative_report_path(root: Path, path: Path) -> str:
         return path.as_posix()
 
 
-def lito_trellis_root_candidates(root: str | Path = LITO_DEFAULT_ROOT) -> tuple[Path, ...]:
-    """Return the supported TRELLIS decoder roots for a LiTo weights root."""
+def lito_trellis_root(root: str | Path = LITO_DEFAULT_ROOT) -> Path:
+    """Return the bundle-local TRELLIS decoder root for LiTo inference."""
 
-    root_path = Path(root)
-    candidates = (
-        root_path.parent / "trellis2" / "microsoft" / "TRELLIS-image-large",
-        Path(LITO_TRELLIS_DEFAULT_ROOT),
-    )
-    unique: list[Path] = []
-    for candidate in candidates:
-        if candidate not in unique:
-            unique.append(candidate)
-    return tuple(unique)
-
-
-def _resolve_validation_trellis_root(root: Path) -> Path:
-    candidates = lito_trellis_root_candidates(root)
-    for candidate in candidates:
-        if all((candidate / relative_path).is_file() for relative_path in LITO_TRELLIS_REQUIRED_FILES):
-            return candidate
-    return candidates[0]
-
-
-def _runtime_report_path(root: Path, path: Path) -> str:
-    if path in tuple(root / relative_path for _, _, relative_path in LITO_DEFAULT_CHECKPOINTS):
-        return _relative_report_path(root, path)
-    try:
-        return path.relative_to(root.parent).as_posix()
-    except ValueError:
-        return path.as_posix()
+    return Path(root) / LITO_TRELLIS_BUNDLE_PATH
 
 
 def _normalize_prefixes(prefixes: Iterable[str] | None) -> tuple[str, ...] | None:

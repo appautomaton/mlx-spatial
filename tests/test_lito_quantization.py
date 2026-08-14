@@ -15,8 +15,14 @@ from mlx_spatial.lito_quantization import (
     load_logical_lito_safetensors,
     prune_lito_checkpoint,
     quantize_lito_checkpoint,
+    quantize_lito_weights,
     read_lito_quantization_spec,
     should_quantize_lito_tensor,
+)
+from mlx_spatial.lito_assets import (
+    LITO_TRELLIS_BUNDLE_PATH,
+    LITO_TRELLIS_METADATA_FILES,
+    LITO_TRELLIS_REQUIRED_FILES,
 )
 from mlx_spatial.safetensors_io import inspect_safetensors, read_safetensors_metadata, save_safetensors
 
@@ -159,6 +165,40 @@ def test_quantized_checkpoint_round_trip_executes_packed_affine_matmul(tmp_path)
     expected = inputs @ mx.transpose(mx.array(values))
     mx.eval(actual, expected)
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=2e-2, atol=2e-2)
+
+
+def test_quantize_lito_weights_copies_embedded_trellis_dependency(tmp_path):
+    source = tmp_path / "full"
+    output = tmp_path / "int8"
+    tensors_by_path = {
+        "image_to_3d/lito_dit_rgba.safetensors": {
+            "velocity_estimator_ema.module.blocks.0.attn.linear_qkv.weight": np.ones(
+                (64, 64), dtype=np.float32
+            )
+        },
+        "tokenizer/lito_new.safetensors": {
+            "gs_decoder.perceiver.blocks.0.ca_layer.linear_q.weight": np.ones(
+                (64, 64), dtype=np.float32
+            )
+        },
+    }
+    for relative_path, tensors in tensors_by_path.items():
+        checkpoint = source / relative_path
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        save_safetensors(checkpoint, tensors)
+
+    dependency_files = (*LITO_TRELLIS_REQUIRED_FILES, *LITO_TRELLIS_METADATA_FILES)
+    for index, relative_path in enumerate(dependency_files):
+        path = source / LITO_TRELLIS_BUNDLE_PATH / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"dependency-{index}".encode("utf-8"))
+
+    quantize_lito_weights(source, output)
+
+    for relative_path in dependency_files:
+        source_path = source / LITO_TRELLIS_BUNDLE_PATH / relative_path
+        output_path = output / LITO_TRELLIS_BUNDLE_PATH / relative_path
+        assert output_path.read_bytes() == source_path.read_bytes()
 
 
 def test_gaussian_loader_splits_packed_fused_swiglu_rows(tmp_path):

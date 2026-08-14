@@ -12,7 +12,7 @@ from PIL import Image
 from tests.safetensors_test_utils import save_file
 
 from mlx_spatial.lito import LitoInferencePipeline
-from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
+from mlx_spatial.lito_assets import LITO_TRELLIS_BUNDLE_PATH, LITO_TRELLIS_REQUIRED_FILES
 from mlx_spatial.lito_inference import LITO_REAL_TENSOR_SENTINELS
 
 
@@ -766,13 +766,19 @@ def test_real_voxel_decoder_lowres_latent_runs_from_loaded_checkpoint_weights():
 @pytest.mark.skipif(
     not (
         Path(__file__).resolve().parents[1]
-        / "weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors"
+        / "weights/lito-research-mlx"
+        / LITO_TRELLIS_BUNDLE_PATH
+        / "ckpts/ss_dec_conv3d_16l8_fp16.safetensors"
     ).is_file(),
     reason="TRELLIS sparse-structure decoder weights absent",
 )
 def test_real_trellis_sparse_structure_decoder_logits_run_from_local_mlx_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
-    root = Path(__file__).resolve().parents[1] / "weights/trellis2/microsoft/TRELLIS-image-large"
+    root = (
+        Path(__file__).resolve().parents[1]
+        / "weights/lito-research-mlx"
+        / LITO_TRELLIS_BUNDLE_PATH
+    )
     ss_latent = np.zeros((1, 8, 16, 16, 16), dtype=np.float32)
 
     logits = backend.decode_lito_trellis_sparse_structure_logits(ss_latent, trellis_root=root)
@@ -792,7 +798,9 @@ def test_real_trellis_sparse_structure_decoder_logits_run_from_local_mlx_weights
     ).is_file()
     or not (
         Path(__file__).resolve().parents[1]
-        / "weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors"
+        / "weights/lito-research-mlx"
+        / LITO_TRELLIS_BUNDLE_PATH
+        / "ckpts/ss_dec_conv3d_16l8_fp16.safetensors"
     ).is_file(),
     reason="LiTo or TRELLIS sparse-structure decoder weights absent",
 )
@@ -800,7 +808,7 @@ def test_real_init_coord_generation_from_latents_runs_with_local_mlx_weights():
     backend = importlib.import_module("mlx_spatial.lito_real_backend")
     repo = Path(__file__).resolve().parents[1]
     lito_root = repo / "weights/lito-research-mlx"
-    trellis_root = repo / "weights/trellis2/microsoft/TRELLIS-image-large"
+    trellis_root = lito_root / LITO_TRELLIS_BUNDLE_PATH
     voxel_weights = backend.load_lito_voxel_decoder_weight_arrays(lito_root)
     latent_tokens = np.zeros((1, 2, 32), dtype=np.float32)
 
@@ -1185,7 +1193,7 @@ def _write_fake_lito_weights(root: Path) -> Path:
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         save_file(tensors, path)
-    trellis_root = root.parent / "trellis2" / "microsoft" / "TRELLIS-image-large"
+    trellis_root = root / LITO_TRELLIS_BUNDLE_PATH
     for relative_path in LITO_TRELLIS_REQUIRED_FILES:
         path = trellis_root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)

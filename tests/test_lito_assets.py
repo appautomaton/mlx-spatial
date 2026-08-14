@@ -6,6 +6,7 @@ from mlx_spatial.checkpoint import inspect_checkpoint
 from mlx_spatial.lito_assets import (
     LITO_DEFAULT_CHECKPOINTS,
     LITO_REPO_ID,
+    LITO_TRELLIS_BUNDLE_PATH,
     LITO_TRELLIS_REQUIRED_FILES,
     convert,
     download_command,
@@ -34,7 +35,7 @@ def _write_lito_fixture(root):
 def test_validate_layout_passes_on_downloaded_weights(tmp_path):
     root = tmp_path / "lito-research-mlx"
     _write_lito_fixture(root)
-    _write_trellis_fixture(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
+    _write_trellis_fixture(root / LITO_TRELLIS_BUNDLE_PATH)
 
     validation = validate(root)
 
@@ -43,22 +44,22 @@ def test_validate_layout_passes_on_downloaded_weights(tmp_path):
     assert validation.present == (
         "tokenizer/lito_new.safetensors",
         "image_to_3d/lito_dit_rgba.safetensors",
-        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json",
-        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+        "dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.json",
+        "dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
     )
 
 
-def test_validate_reports_missing_trellis_runtime_dependency(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_validate_reports_missing_bundle_local_trellis_runtime_dependency(tmp_path):
     root = tmp_path / "lito-research-mlx"
     _write_lito_fixture(root)
+    _write_trellis_fixture(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
 
     validation = validate(root)
 
     assert not validation.ready
     assert validation.missing == (
-        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json",
-        "trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+        "dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.json",
+        "dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
     )
 
 
