@@ -77,6 +77,23 @@ user-requested inference results, not test or audit scratch data. Preserve the
 temporary root only when its artifacts are needed for diagnosis; otherwise
 remove it after recording the relevant result.
 
+## TRELLIS.2 Miniature Golden Fixture
+
+The TRELLIS.2 golden test does not read `weights/` or download model assets. It
+generates a miniature source checkpoint, applies the production selective INT8
+quantizer, and runs image conditioning, sparse sampling, shape and texture SLat
+sampling, both decoders, artifact serialization, and GLB export without stage
+mocking.
+
+```bash
+uv run pytest -m heavy tests/test_trellis2_golden_fixture.py -q
+```
+
+Reviewed tensor and GLB expectations live in
+`tests/data/trellis2_miniature_golden.json`. Do not regenerate that manifest
+automatically during tests. Rebaseline it only after reviewing an intentional
+inference-contract change.
+
 ## Editing Constraints
 
 - Prefer existing module boundaries over new abstractions.
