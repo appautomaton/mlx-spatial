@@ -17,7 +17,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
-from .lito_assets import LITO_TRELLIS_REQUIRED_FILES, lito_trellis_root_candidates
+from .lito_assets import LITO_TRELLIS_REQUIRED_FILES, lito_trellis_root
 from .lito_quantization import (
     LitoQuantizedMatrix,
     inspect_logical_lito_safetensors,
@@ -2622,12 +2622,18 @@ def _validate_request(request: LitoRealGenerateRequest) -> None:
 
 
 def _resolve_lito_trellis_root(config: LitoRealBackendConfig) -> Path:
-    candidates = lito_trellis_root_candidates(config.weights_root)
-    for candidate in candidates:
-        if (candidate / _TRELLIS_SS_DECODER_CHECKPOINT).is_file() and (candidate / _TRELLIS_SS_DECODER_CONFIG).is_file():
-            return candidate
-    searched = ", ".join(str(path) for path in candidates)
-    raise LitoBackendUnavailable(f"TRELLIS sparse-structure decoder weights are required for LiTo init coords; searched {searched}")
+    root = lito_trellis_root(config.weights_root)
+    missing = [
+        path
+        for path in (_TRELLIS_SS_DECODER_CONFIG, _TRELLIS_SS_DECODER_CHECKPOINT)
+        if not (root / path).is_file()
+    ]
+    if missing:
+        relative = ", ".join(str(path) for path in missing)
+        raise LitoBackendUnavailable(
+            f"LiTo bundle is missing embedded TRELLIS sparse-structure decoder files under {root}: {relative}"
+        )
+    return root
 
 
 def _as_numpy(value: Any, name: str) -> np.ndarray:

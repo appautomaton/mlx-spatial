@@ -10,7 +10,7 @@ from tests.safetensors_test_utils import save_file
 from tests.safetensors_test_utils import load_file
 
 from mlx_spatial.lito import LitoInferencePipeline
-from mlx_spatial.lito_assets import LITO_TRELLIS_REQUIRED_FILES
+from mlx_spatial.lito_assets import LITO_TRELLIS_BUNDLE_PATH, LITO_TRELLIS_REQUIRED_FILES
 from mlx_spatial.lito_inference import (
     LITO_RECOMMENDED_CFG_SCALE,
     LITO_RECOMMENDED_NUM_STEPS,
@@ -199,7 +199,7 @@ def test_generate_rejects_placeholder_weight_files_by_default(tmp_path):
     root = tmp_path / "weights"
     (root / "tokenizer").mkdir(parents=True)
     (root / "image_to_3d").mkdir(parents=True)
-    _write_trellis_runtime_assets(tmp_path / "trellis2/microsoft/TRELLIS-image-large")
+    _write_trellis_runtime_assets(root / LITO_TRELLIS_BUNDLE_PATH)
     save_file({"tokenizer.weight": np.ones((1,), dtype=np.float32)}, root / "tokenizer" / "lito_new.safetensors")
     save_file(
         {"dit.weight": np.ones((1,), dtype=np.float32)},

@@ -6,12 +6,18 @@ import argparse
 import json
 import math
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import mlx.core as mx
 
+from .lito_assets import (
+    LITO_TRELLIS_BUNDLE_PATH,
+    LITO_TRELLIS_METADATA_FILES,
+    LITO_TRELLIS_REQUIRED_FILES,
+)
 from .safetensors_io import (
     SafetensorHeader,
     inspect_safetensors,
@@ -386,6 +392,7 @@ def quantize_lito_weights(
     _validate_quantization_options(bits, group_size)
     if source.resolve() == output.resolve():
         raise ValueError("LiTo quantization output root must differ from the full-precision source root")
+    dependency_pairs = _lito_bundle_dependency_pairs(source, output, overwrite=overwrite)
     for relative_path in LITO_QUANTIZED_CHECKPOINTS:
         source_path = source / relative_path
         output_path = output / relative_path
@@ -393,7 +400,7 @@ def quantize_lito_weights(
             raise FileNotFoundError(f"LiTo source checkpoint not found: {source_path}")
         if output_path.exists() and not overwrite:
             raise FileExistsError(f"LiTo quantization output already exists: {output_path}")
-    return tuple(
+    results = tuple(
         quantize_lito_checkpoint(
             source / relative_path,
             output / relative_path,
@@ -403,6 +410,8 @@ def quantize_lito_weights(
         )
         for relative_path in LITO_QUANTIZED_CHECKPOINTS
     )
+    _copy_lito_bundle_dependencies(dependency_pairs)
+    return results
 
 
 def prune_lito_checkpoint(
@@ -472,6 +481,7 @@ def prune_lito_weights(
 
     source = Path(source_root)
     output = Path(output_root)
+    dependency_pairs = _lito_bundle_dependency_pairs(source, output, overwrite=overwrite)
     for relative_path in LITO_QUANTIZED_CHECKPOINTS:
         source_path = source / relative_path
         output_path = output / relative_path
@@ -481,7 +491,7 @@ def prune_lito_weights(
             raise ValueError(f"full-precision LiTo pruning does not accept a quantized source: {source_path}")
         if output_path.exists() and not overwrite:
             raise FileExistsError(f"LiTo runtime checkpoint output already exists: {output_path}")
-    return tuple(
+    results = tuple(
         prune_lito_checkpoint(
             source / relative_path,
             output / relative_path,
@@ -489,6 +499,38 @@ def prune_lito_weights(
         )
         for relative_path in LITO_QUANTIZED_CHECKPOINTS
     )
+    _copy_lito_bundle_dependencies(dependency_pairs)
+    return results
+
+
+def _lito_bundle_dependency_pairs(
+    source: Path,
+    output: Path,
+    *,
+    overwrite: bool,
+) -> tuple[tuple[Path, Path], ...]:
+    relative_paths = tuple(
+        LITO_TRELLIS_BUNDLE_PATH / relative_path
+        for relative_path in (*LITO_TRELLIS_REQUIRED_FILES, *LITO_TRELLIS_METADATA_FILES)
+    )
+    missing = [source / relative_path for relative_path in relative_paths if not (source / relative_path).is_file()]
+    if missing:
+        raise FileNotFoundError(f"LiTo source bundle is missing embedded dependency: {missing[0]}")
+    if source.resolve() == output.resolve():
+        return ()
+
+    pairs = tuple((source / relative_path, output / relative_path) for relative_path in relative_paths)
+    if not overwrite:
+        existing = [destination for _, destination in pairs if destination.exists()]
+        if existing:
+            raise FileExistsError(f"LiTo bundle dependency output already exists: {existing[0]}")
+    return pairs
+
+
+def _copy_lito_bundle_dependencies(pairs: tuple[tuple[Path, Path], ...]) -> None:
+    for source, destination in pairs:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 
 def _validate_quantization_options(bits: int, group_size: int) -> None:

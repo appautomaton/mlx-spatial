@@ -42,9 +42,14 @@ The tracked model-card source lives under:
 
 ```text
 model-cards/lito-research-mlx/
+model-cards/lito-research-mlx-8bit/
 ```
 
 LiTo is research-only and non-commercial under Apple's model license. The model repository must include `LICENSE_MODEL`, identify the safetensors files as an unofficial converted derivative, and avoid language that implies Apple endorsement.
+Both LiTo variants must embed the required Microsoft TRELLIS sparse-structure
+decoder under `dependencies/trellis/`, together with its MIT license and an
+immutable source manifest. Published LiTo bundles must not depend on a sibling
+TRELLIS checkout.
 
 ## What The Model Card Should Contain
 
