@@ -103,10 +103,6 @@ uv run hf download appautomaton/sam-3d-objects-mlx --local-dir weights/sam-3d-ob
 uv run mlx-spatial-sam3d validate weights/sam-3d-objects-mlx
 
 uv run hf download appautomaton/lito-research-mlx --local-dir weights/lito-research-mlx
-uv run hf download microsoft/TRELLIS-image-large \
-  ckpts/ss_dec_conv3d_16l8_fp16.json \
-  ckpts/ss_dec_conv3d_16l8_fp16.safetensors \
-  --local-dir weights/trellis2/microsoft/TRELLIS-image-large
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 ```
 

@@ -151,16 +151,12 @@ do not infer reference equivalence from the existence of a GLB. See
 
 ### LiTo
 
-LiTo needs both the converted LiTo bundle and the TRELLIS sparse-structure
-decoder used for initialization coordinates:
+The LiTo bundle includes the TRELLIS sparse-structure decoder used for
+initialization coordinates:
 
 ```bash
 uv run hf download appautomaton/lito-research-mlx \
   --local-dir weights/lito-research-mlx
-uv run hf download microsoft/TRELLIS-image-large \
-  ckpts/ss_dec_conv3d_16l8_fp16.json \
-  ckpts/ss_dec_conv3d_16l8_fp16.safetensors \
-  --local-dir weights/trellis2/microsoft/TRELLIS-image-large
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 uv run python scripts/lito/generate.py inputs/lito/sample.png \
   --weights-root weights/lito-research-mlx \

@@ -21,10 +21,6 @@ Recommended runtime bundle:
 ```bash
 uv run hf download appautomaton/lito-research-mlx \
   --local-dir weights/lito-research-mlx
-uv run hf download microsoft/TRELLIS-image-large \
-  ckpts/ss_dec_conv3d_16l8_fp16.json \
-  ckpts/ss_dec_conv3d_16l8_fp16.safetensors \
-  --local-dir weights/trellis2/microsoft/TRELLIS-image-large
 uv run mlx-spatial-lito validate weights/lito-research-mlx
 uv run mlx-spatial-lito inspect weights/lito-research-mlx --limit 10
 ```
@@ -34,16 +30,19 @@ Expected converted layout:
 ```text
 weights/lito-research-mlx/tokenizer/lito_new.safetensors
 weights/lito-research-mlx/image_to_3d/lito_dit_rgba.safetensors
-weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.json
-weights/trellis2/microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16.safetensors
+weights/lito-research-mlx/dependencies/trellis/LICENSE
+weights/lito-research-mlx/dependencies/trellis/SOURCE.json
+weights/lito-research-mlx/dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.json
+weights/lito-research-mlx/dependencies/trellis/ckpts/ss_dec_conv3d_16l8_fp16.safetensors
 ```
 
-The first two files are the LiTo bundle. The final two are the sparse-structure
-decoder used to convert LiTo voxel latents into Gaussian initialization
-coordinates. They come from `microsoft/TRELLIS-image-large`, not from the
-`microsoft/TRELLIS.2-4B` bundle used by the separate TRELLIS.2 pipeline.
-`mlx-spatial-lito validate` checks all four runtime files; `inspect` reads only
-the two LiTo safetensors.
+The embedded sparse-structure decoder converts LiTo voxel latents into Gaussian
+initialization coordinates. It is the exact checkpoint from
+`microsoft/TRELLIS-image-large` revision
+`25e0d31ffbebe4b5a97464dd851910efc3002d96`, not a dependency on the separate
+TRELLIS.2 pipeline. `mlx-spatial-lito validate` requires the bundle-local
+decoder and never searches an external TRELLIS root. `inspect` reads only the
+two LiTo safetensors.
 
 Maintainers can print Apple CDN download commands and convert local `.ckpt` files:
 
@@ -85,6 +84,8 @@ checkpoint records the exact policy, logical tensor shapes, bit width, group
 size, and affine mode in safetensors metadata. The normal LiTo loader detects
 that metadata and executes packed matrices directly with MLX quantized matrix
 multiplication; no Torch or intermediate dequantized checkpoint is involved.
+The root-level quantizer copies the embedded TRELLIS decoder and its provenance
+files into the output bundle unchanged.
 
 Pass the new root to inference exactly as you would the full-precision root:
 

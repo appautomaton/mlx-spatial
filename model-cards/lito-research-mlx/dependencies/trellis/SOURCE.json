@@ -1,0 +1,15 @@
+{
+  "files": {
+    "ckpts/ss_dec_conv3d_16l8_fp16.json": {
+      "bytes": 245,
+      "sha256": "646781293f1cda74720de85d1cef50a957fb4aebd9a4bd014e454e32f2330ac5"
+    },
+    "ckpts/ss_dec_conv3d_16l8_fp16.safetensors": {
+      "bytes": 147591972,
+      "sha256": "1c76d4a40519aa2d711cc263a8404105231ac26db31d946bed48b84fee79009a"
+    }
+  },
+  "license": "MIT",
+  "repo_id": "microsoft/TRELLIS-image-large",
+  "revision": "25e0d31ffbebe4b5a97464dd851910efc3002d96"
+}
