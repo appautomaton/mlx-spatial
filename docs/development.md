@@ -77,12 +77,25 @@ user-requested inference results, not test or audit scratch data. Preserve the
 temporary root only when its artifacts are needed for diagnosis; otherwise
 remove it after recording the relevant result.
 
-## Model-Independent Golden Fixtures
+## Representative Pipeline Fixtures
 
-Golden coverage uses two complementary fixture types. Synthetic miniature
-checkpoints exercise complete inference orchestration. Real-weight-derived
-decoder patches preserve a reviewed real-model boundary without committing or
-loading the source checkpoints.
+Routine integration coverage uses generated miniature checkpoints, composed
+pipeline fixtures, and reviewed real-weight-derived boundary patches. Every
+fixture states its provenance and limits. None requires the local production
+weight bundles.
+
+- TRELLIS.2 generates and quantizes a miniature selective INT8 bundle, then
+  runs through the real SpatialKit GLB path.
+- Pixal3D combines a synthetic full-orchestration fixture with a compact
+  real-weight-derived decoder patch.
+- LiTo runs its complete source-contract generation path.
+- SAM3D preserves CLI reconstruction, mesh extraction, and GLB writing around
+  deterministic conditioning and flow boundaries.
+- HY-World 2 runs fixture reconstruction and writes its staged artifacts below
+  pytest temporary storage.
+- MapAnything generates a miniature checkpoint and runs asset inspection,
+  safetensors loading, encoder, multi-view information sharing, prediction
+  heads, geometry postprocess, and NPZ writing.
 
 ### TRELLIS.2 Synthetic Miniature
 
@@ -93,7 +106,7 @@ sampling, both decoders, artifact serialization, and the real SpatialKit export
 path with miniature export settings.
 
 ```bash
-uv run pytest -m heavy tests/test_trellis2_golden_fixture.py -q
+uv run pytest tests/test_trellis2_golden_fixture.py -q
 ```
 
 Reviewed tensor and GLB expectations live in
@@ -112,13 +125,15 @@ texture baking, and GLB writing without the 22 GB source bundle.
 
 ```bash
 uv run pytest tests/test_pixal3d_derived_golden.py -q
-uv run pytest -m heavy tests/test_pixal3d_derived_golden.py -q
 ```
 
 The default test verifies provenance, checksums, and decoded contracts. The
-Metal-backed replay is marked `heavy` and normally completes in under one
-second. It does not replace the synthetic full-pipeline Pixal3D tests: the
-derived fixture begins at the decoder-output boundary.
+bounded Metal-backed replay normally completes in under one second. It does not
+replace the synthetic full-pipeline Pixal3D test: the derived fixture begins at
+the decoder-output boundary. Face counts and artifact structure remain exact;
+the manifest permits a small explicit GLB vertex-count tolerance because native
+UV seam splitting can duplicate a few vertices differently across macOS
+hardware and driver versions.
 
 Rebaseline only from a reviewed real inference result:
 
@@ -129,6 +144,25 @@ uv run python scripts/pixal3d/write_derived_golden_fixture.py \
   tests/data/pixal3d_derived_golden \
   --source-revision 0b31f9160aa400719af409098bff7936a932f726
 ```
+
+### MapAnything Generated Miniature Scene
+
+The MapAnything fixture generates its checkpoint at runtime from deterministic
+tiny tensors. The committed manifest records fixture provenance, covered and
+excluded scope, stage order, output schemas, and tolerant numerical summaries.
+It is a pipeline regression fixture, not official-weight parity. Stable outputs
+retain numerical summaries; recovered intrinsics and world points use strict
+shape, finite-value, homogeneous-matrix, sign, and boundedness invariants to
+avoid amplifying cross-hardware noise from the deliberately tiny ray field.
+
+```bash
+uv run pytest tests/test_mapanything_scene_pipeline.py \
+  -m 'integration and not real_assets' -q
+```
+
+Reviewed expectations live in
+`tests/data/mapanything_miniature_scene_golden.json`. Rebaseline them only after
+reviewing an intentional production pipeline change.
 
 ## Editing Constraints
 

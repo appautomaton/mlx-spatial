@@ -115,8 +115,12 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not heavy' -p no:cacheprovider"
+addopts = "-m 'not (heavy or real_assets or torch_parity)' -p no:cacheprovider"
 markers = [
-    "heavy: opt-in tests that load real weights, require Metal, or use large tensors",
+    "integration: representative tests that cross multiple production component boundaries",
+    "real_assets: tests that require local weights, inputs, or other uncommitted fixtures",
+    "metal: tests that require an Apple Metal device",
+    "heavy: opt-in tests with substantial runtime or memory cost",
+    "benchmark: resource and performance checks; always paired with heavy",
     "torch_parity: optional parity checks against the local PyTorch checkout",
 ]

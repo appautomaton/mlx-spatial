@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "**"
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    name: Fast pytest
+    name: Routine pytest
     runs-on: macos-15
     steps:
       - name: Check out repository
@@ -37,6 +38,6 @@ jobs:
           echo "PYTHONPYCACHEPREFIX=$scratch_root/cache/pycache" >> "$GITHUB_ENV"
           echo "UV_CACHE_DIR=$scratch_root/cache/uv" >> "$GITHUB_ENV"
 
-      - name: Run fast tests
+      - name: Run routine tests
         timeout-minutes: 10
         run: uv run pytest --basetemp "$MLX_SPATIAL_TEST_SCRATCH/artifacts/pytest"

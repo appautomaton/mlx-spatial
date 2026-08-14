@@ -275,6 +275,8 @@ def test_pixal3d_run_manifest_supports_unmanifested_cached_output(tmp_path: Path
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -367,6 +369,8 @@ def test_export_pixal3d_glb_real_decoded_fixture_writes_glb_and_diagnostics(tmp_
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_udf_remesh_closes_topology_and_matches_reference_mechanism(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -416,6 +420,8 @@ def test_export_pixal3d_glb_udf_remesh_closes_topology_and_matches_reference_mec
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -533,6 +539,8 @@ def test_export_pixal3d_glb_native_chart_backend_writes_real_fixture(tmp_path: P
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_native_chart_violin_preprocessed_black_fixture(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -631,6 +639,8 @@ def test_export_pixal3d_glb_native_chart_violin_preprocessed_black_fixture(tmp_p
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_reference_target_preset_reports_thresholds(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -754,6 +764,8 @@ def test_export_pixal3d_glb_reference_target_preset_reports_thresholds(tmp_path:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readiness(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -964,6 +976,8 @@ def test_export_pixal3d_glb_reference_target_native_chart_backend_reports_readin
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_reference_target_4096_texture_reports_texture_resolution_gate(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -1013,6 +1027,8 @@ def test_export_pixal3d_glb_reference_target_4096_texture_reports_texture_resolu
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -1084,6 +1100,8 @@ def test_export_pixal3d_glb_upstream_settings_passes_readiness_gate(tmp_path: Pa
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_native_chart_upstream_settings_passes_readiness_gate(tmp_path: Path) -> None:
     if not metal_device_available():
         pytest.skip("Metal device unavailable for mlx-spatialkit real Pixal3D export")
@@ -2144,6 +2162,8 @@ def test_glb_viewer_compatibility_summary_checks_normals_and_uint16_chunks() -> 
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_qem_input_prep_real_fixture_manifold_and_bounded(tmp_path: Path) -> None:
     """S4 heavy: real fixture export with simplify_backend="qem" produces a fully manifold mesh.
 
@@ -2508,6 +2528,8 @@ def _assert_qem_two_fixture_proof(
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_qem_two_fixture_main_manifold_and_beats_clustering(tmp_path: Path) -> None:
     """Slice-5 QEM proof: main fixture (pixal3d-1024-cascade-decoded-pbr) at res=256.
 
@@ -2567,6 +2589,8 @@ def test_export_pixal3d_glb_qem_two_fixture_main_manifold_and_beats_clustering(t
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_pixal3d_glb_qem_two_fixture_violin_manifold_and_beats_clustering(tmp_path: Path) -> None:
     """Slice-5 QEM proof: violin-bow fixture at res=256.
 
@@ -2709,6 +2733,8 @@ def _assert_chart_growth_parity_against_oracle(fixture: Path, anchor_name: str) 
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_chart_growth_parity_main_fixture() -> None:
     """Slice-4 heavy: stage-B chart-count parity vs pip-xatlas oracle (main)."""
     if not metal_device_available():
@@ -2721,6 +2747,8 @@ def test_reference_uv_chart_growth_parity_main_fixture() -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_chart_growth_parity_violin_fixture() -> None:
     """Slice-4 heavy: stage-B chart-count parity vs pip-xatlas oracle (violin-bow)."""
     if not metal_device_available():
@@ -2857,6 +2885,8 @@ def _assert_parameterization_invariants_and_stretch_parity(
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_param_overlap_and_stretch_parity_main_fixture() -> None:
     """Slice-5 heavy: zero-overlap invariant + stretch parity (main)."""
     if not metal_device_available():
@@ -2869,6 +2899,8 @@ def test_reference_uv_param_overlap_and_stretch_parity_main_fixture() -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_param_overlap_and_stretch_parity_violin_fixture() -> None:
     """Slice-5 heavy: zero-overlap invariant + stretch parity (violin-bow)."""
     if not metal_device_available():
@@ -2907,6 +2939,8 @@ def test_uv_backend_validator_accepts_reference_backend() -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_packing_utilization_parity_violin_fixture() -> None:
     """Slice-6 heavy: full reference-backend atlas on the violin fixture.
 
@@ -3159,6 +3193,8 @@ def _assert_reference_uv_e2e_proof(
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_e2e_proof_main_fixture(tmp_path: Path) -> None:
     """Slice-8 heavy: full reference-unwrap e2e proof (main fixture).
 
@@ -3182,6 +3218,8 @@ def test_reference_uv_e2e_proof_main_fixture(tmp_path: Path) -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_reference_uv_e2e_proof_violin_fixture(tmp_path: Path) -> None:
     """Slice-8 heavy: full reference-unwrap e2e proof (violin-bow fixture).
 
@@ -3208,6 +3246,8 @@ def test_reference_uv_e2e_proof_violin_fixture(tmp_path: Path) -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_inpaint_oracle_parity_against_cv2_telea() -> None:
     # TPP-02: our native Telea matches the cv2 INPAINT_TELEA oracle on the real
     # fixture inverse-coverage masks, within pinned tolerances (tight near the
@@ -3275,6 +3315,8 @@ def test_inpaint_oracle_parity_against_cv2_telea() -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
+@pytest.mark.real_assets
 def test_export_telea_postprocess_real_fixture_paints_gutter_without_black_seam(tmp_path: Path) -> None:
     # TPP-03: the reference Telea postprocess runs end-to-end on a real fixture,
     # painting the inverse-coverage gutter with no black-seam texels adjacent to
@@ -3407,6 +3449,9 @@ def test_texture_postprocess_gate_passes_then_anti_gaming_flips_back() -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.benchmark
+@pytest.mark.metal
+@pytest.mark.real_assets
 @pytest.mark.parametrize(
     "fixture_key,fixture_subpath",
     [

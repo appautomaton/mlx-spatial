@@ -233,6 +233,8 @@ def test_dit_full_trajectory_matches_source_contract(caplog):
 
 
 @pytest.mark.heavy
+@pytest.mark.benchmark
+@pytest.mark.metal
 @pytest.mark.parametrize("profile", LITO_MEMORY_PROFILES)
 def test_dit_memory_profiles_stay_under_90gb(profile):
     _require_metal_memory_api()
@@ -257,6 +259,8 @@ def test_dit_memory_profiles_stay_under_90gb(profile):
 
 
 @pytest.mark.heavy
+@pytest.mark.benchmark
+@pytest.mark.metal
 def test_dit_memory_safe_stays_well_under_threshold():
     _require_metal_memory_api()
     tensors = _dit_input()

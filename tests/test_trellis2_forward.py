@@ -747,6 +747,7 @@ def test_assess_dinov3_conditioning_reports_present_asset_config_blocker(tmp_pat
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
 def test_assess_dinov3_conditioning_reports_precise_transformer_blocker(tmp_path):
     _write_trellis2_root(tmp_path / "trellis")
     config = discover_trellis2_conditioning_config(tmp_path / "trellis").config
@@ -1045,6 +1046,7 @@ def test_attempt_forward_trace_with_fake_dinov3_assets_reaches_sparse_boundary(t
 
 
 @pytest.mark.heavy
+@pytest.mark.metal
 def test_attempt_forward_trace_with_executable_dinov3_assets_reaches_sparse_boundary(tmp_path):
     _write_trellis2_root(tmp_path / "trellis", conditioning_resolution=2)
     dino_root = tmp_path / "dinov3"

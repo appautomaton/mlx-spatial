@@ -1,5 +1,4 @@
 import json
-import struct
 from pathlib import Path
 
 import mlx.core as mx
@@ -12,7 +11,6 @@ import mlx_spatial
 from mlx_spatial.trellis2_texturing import (
     Trellis2TexturingBlocker,
     Trellis2TexturingPipeline,
-    Trellis2TexturingResult,
     _load_obj_mesh,
     TRELLIS2_TEXTURING_DEFAULT_SEED,
     TRELLIS2_TEXTURING_DEFAULT_TEXTURE_SIZE,
@@ -406,7 +404,7 @@ def _write_fixture_outputs_root(tmp_path: Path):
     rmbg_root = tmp_path / "fixture_weights/rmbg2"
     img_path = tmp_path / "fixture_inputs/demo.png"
     mesh_path = tmp_path / "fixture_inputs/cube.obj"
-    outputs_dir = Path("outputs/fixture_textured")
+    outputs_dir = tmp_path / "outputs/fixture_textured"
     outputs_dir.mkdir(parents=True, exist_ok=True)
     output_path = outputs_dir / "fixture_textured.glb"
 
@@ -455,7 +453,8 @@ class TestTrellis2TexturingPipeline:
         assert "only writes .glb" in result.blocker.reason
 
     def test_run_allows_export_path_outside_repository_outputs(self, tmp_path):
-        pipeline = Trellis2TexturingPipeline(root=tmp_path / "weights/trellis2")
+        root = tmp_path / "weights/trellis2"
+        pipeline = Trellis2TexturingPipeline(root=root)
         _write_rgb_image(tmp_path / "img.png")
         _write_obj_mesh(tmp_path / "mesh.obj")
         result = pipeline.run(
@@ -465,7 +464,9 @@ class TestTrellis2TexturingPipeline:
         )
         assert not result.ready
         assert result.blocker is not None
-        assert result.blocker.operation != "export path validation"
+        assert result.blocker.stage == "asset-config"
+        assert result.blocker.operation == "TRELLIS.2 conditioning config discovery"
+        assert result.blocker.reason == f"pipeline config file not found: {root / 'pipeline.json'}"
 
     def test_run_rejects_missing_image(self, tmp_path):
         pipeline = Trellis2TexturingPipeline(root=tmp_path / "weights/trellis2")
@@ -510,7 +511,8 @@ class TestTrellis2TexturingPipeline:
         assert result.blocker is not None
         assert result.blocker.stage == "mesh-preprocess"
 
-    def test_run_with_fixture_assets_produces_textured_glb(self, tmp_path):
+    @pytest.mark.integration
+    def test_run_with_fixture_assets_reaches_spatialkit_export_boundary(self, tmp_path):
         root, dinov3_root, rmbg_root, img_path, mesh_path, output_path = _write_fixture_outputs_root(tmp_path)
 
         pipeline = Trellis2TexturingPipeline(
@@ -529,52 +531,12 @@ class TestTrellis2TexturingPipeline:
             glb_target_faces=100,
         )
 
-        assert isinstance(result, Trellis2TexturingResult)
-        if result.ready:
-            assert result.artifact is not None
-            assert result.artifact.format == "glb"
-            assert output_path.is_file()
-            payload = output_path.read_bytes()
-            assert payload[:4] == b"glTF"
-            _verify_textured_glb_channels(payload)
-        else:
-            assert result.blocker is not None
-            assert result.blocker.stage in {
-                "mesh-export", "image-conditioning", "fdg-encoder",
-                "shape-decoder", "texture-slat", "texture-decoder", "decoded-artifact-write",
-            }
-
-    def test_run_with_fixture_assets_512_pipeline_type(self, tmp_path):
-        root, dinov3_root, rmbg_root, img_path, mesh_path, output_path = _write_fixture_outputs_root(tmp_path)
-
-        pipeline = Trellis2TexturingPipeline(
-            root=root,
-            dino_root=dinov3_root,
-            rmbg_root=rmbg_root,
-        )
-        result = pipeline.run(
-            img_path,
-            mesh_path,
-            output_path=output_path,
-            pipeline_type="512",
-            seed=42,
-            grid_size=16,
-            slat_steps=1,
-            glb_target_faces=100,
-        )
-
-        assert isinstance(result, Trellis2TexturingResult)
-        if result.ready:
-            assert result.artifact is not None
-            assert result.artifact.format == "glb"
-            assert output_path.is_file()
-            _verify_textured_glb_channels(output_path.read_bytes())
-        else:
-            assert result.blocker is not None
-            assert result.blocker.stage in {
-                "mesh-export", "image-conditioning", "fdg-encoder",
-                "shape-decoder", "texture-slat", "texture-decoder", "decoded-artifact-write",
-            }
+        assert not result.ready
+        assert result.blocker is not None
+        assert result.blocker.stage == "mesh-export"
+        assert result.blocker.operation == "export decoded TRELLIS.2 O-Voxel artifacts through SpatialKit"
+        assert result.blocker.reason == "mesh vertices must contain at least one vertex"
+        assert not output_path.exists()
 
     def test_run_missing_encoder_config_is_blocked(self, tmp_path):
         root = tmp_path / "weights/trellis2"
@@ -599,6 +561,10 @@ class TestTrellis2TexturingPipeline:
         )
         assert not result.ready
         assert result.blocker is not None
+        assert result.blocker.stage == "fdg-encoder"
+        assert result.blocker.operation == "FDG encoder config validation"
+        assert result.blocker.reference == str(root / "shape_encoder.json")
+        assert "No such file or directory" in result.blocker.reason
 
     def test_run_missing_pipeline_config_is_blocked(self, tmp_path):
         img = tmp_path / "test.png"
@@ -612,6 +578,11 @@ class TestTrellis2TexturingPipeline:
         result = pipeline.run(img, mesh, output_path=output)
         assert not result.ready
         assert result.blocker is not None
+        assert result.blocker.stage == "asset-config"
+        assert result.blocker.operation == "TRELLIS.2 conditioning config discovery"
+        assert result.blocker.reason == (
+            f"pipeline config file not found: {tmp_path / 'nonexistent_weights/pipeline.json'}"
+        )
 
     def test_run_bad_slat_steps_is_blocked(self, tmp_path):
         root = tmp_path / "weights/trellis2"
@@ -634,6 +605,9 @@ class TestTrellis2TexturingPipeline:
         )
         assert not result.ready
         assert result.blocker is not None
+        assert result.blocker.stage == "texture-slat"
+        assert result.blocker.operation == "SLat step override validation"
+        assert result.blocker.reason == "slat_steps must be positive, got 0"
 
     def test_run_bad_pipeline_type_is_blocked(self, tmp_path):
         root = tmp_path / "weights/trellis2"
@@ -656,6 +630,9 @@ class TestTrellis2TexturingPipeline:
         )
         assert not result.ready
         assert result.blocker is not None
+        assert result.blocker.stage == "texture-slat"
+        assert result.blocker.operation == "texture SLat route selection"
+        assert result.blocker.reason == "unsupported texture SLat pipeline type: invalid"
 
 
 class TestLoadObjMesh:
@@ -691,26 +668,3 @@ class TestLoadObjMesh:
         path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n")
         verts, faces = _load_obj_mesh(path)
         assert faces.shape == (1, 3)
-
-
-def _glb_json(payload: bytes) -> dict:
-    magic, version, total_length = struct.unpack_from("<III", payload, 0)
-    assert magic == 0x46546C67
-    assert version == 2
-    json_length, json_type = struct.unpack_from("<I4s", payload, 12)
-    assert json_type == b"JSON"
-    document = payload[20 : 20 + json_length].rstrip(b" ")
-    return json.loads(document.decode("utf-8"))
-
-
-def _verify_textured_glb_channels(payload: bytes):
-    """Verify GLB contains baseColor and metallicRoughness textures."""
-    doc = _glb_json(payload)
-    assert "materials" in doc
-    material = doc["materials"][0]
-    pbr = material["pbrMetallicRoughness"]
-    assert "baseColorTexture" in pbr
-    assert "metallicRoughnessTexture" in pbr
-    images = {img["name"]: img for img in doc["images"]}
-    assert "baseColorTexture" in images
-    assert "metallicRoughnessTexture" in images

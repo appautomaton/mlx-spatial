@@ -25,6 +25,7 @@ from mlx_spatial.lito_inference import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.integration
 def test_full_pipeline_runs_on_sample_input(tmp_path):
     image = _write_synthetic_image(tmp_path / "input.png")
     output = tmp_path / "result.ply"
@@ -218,6 +219,7 @@ def _write_trellis_runtime_assets(root: Path) -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.real_assets
 @pytest.mark.skipif(not (ROOT / "weights/lito-research-mlx/tokenizer/lito_new.safetensors").is_file(), reason="LiTo weights absent")
 def test_generate_with_real_weight_headers_does_not_fall_back_to_smoke_on_backend_failure(tmp_path):
     image = _write_synthetic_image(tmp_path / "input.png")
