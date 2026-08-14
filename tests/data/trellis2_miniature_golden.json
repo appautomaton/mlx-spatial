@@ -1,4 +1,23 @@
 {
+  "export": {
+    "effective": {
+      "grid_size": 32,
+      "target_faces": 64,
+      "texture_size": 16
+    },
+    "requested": {
+      "diagnostics_path": null,
+      "grid_size": 512,
+      "quality_preset": "reference-target",
+      "remesh": true,
+      "remesh_resolution": 512,
+      "simplify_backend": "mlx-qem",
+      "target_faces": 256,
+      "texture_postprocess": "telea",
+      "texture_size": 32,
+      "uv_backend": "xatlas-equivalent-native"
+    }
+  },
   "fixture": {
     "checkpoint_source": "generated synthetic tensors",
     "glb_target_faces": 256,
@@ -18,14 +37,13 @@
         "has_normal": true,
         "has_texcoord_0": true,
         "material": 0,
-        "positions": 4565,
-        "triangles": 3912
+        "positions": 12,
+        "triangles": 4
       }
     ],
-    "sha256": "44b55e7184c56449d87a9bed214a7ab24460f9ad3bd159e92867cec67efa9470",
     "textures": 2
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "trace": {
     "completed_stages": [
       "asset-config-validation",
@@ -44,59 +62,95 @@
     "tensor_outputs": {
       "cond_512": {
         "dtype": "float32",
-        "sha256": "aad5ce8209c55c84c2e64b92b8162e7e49ba89af0f19270a3762df796b90a5e5",
         "shape": [
           1,
           65,
           64
-        ]
+        ],
+        "statistics": {
+          "l2": 46.05630751333882,
+          "max": 1.3148114681243896,
+          "mean": -1.0446456144563853e-09,
+          "min": -1.7143969535827637,
+          "std": 0.7140727348219936
+        }
       },
       "shape_flexidualgrid_fields": {
         "dtype": "float32",
-        "sha256": "d13460feb6ebeeb09b7fb153ee3c5c607bf1ec2205471396b5a8c5908e5f1f62",
         "shape": [
           512,
           7
-        ]
+        ],
+        "statistics": {
+          "l2": 156.75664142258063,
+          "max": 4.1127119064331055,
+          "mean": 1.7140144131821475,
+          "min": -0.14383302628993988,
+          "std": 1.9794850947718232
+        }
       },
       "shape_slat": {
         "dtype": "float32",
-        "sha256": "69670f899f1c5f681fb9b3fd71a229e3f4e22271ed6ee470f36af14f32cc31bd",
         "shape": [
           64,
           32
-        ]
+        ],
+        "statistics": {
+          "l2": 45.74745586307211,
+          "max": 3.7916488647460938,
+          "mean": -0.01963400755175826,
+          "min": -3.6229214668273926,
+          "std": 1.010694818658021
+        }
       },
       "sparse_latent": {
         "dtype": "float32",
-        "sha256": "2fa4d566772d77461fd6630c042e69b0002adf31ee4b724b6557c8a45666ef51",
         "shape": [
           1,
           2,
           2,
           2,
           2
-        ]
+        ],
+        "statistics": {
+          "l2": 4.890631746635004,
+          "max": 2.205594778060913,
+          "mean": -0.06916660442948341,
+          "min": -2.760120153427124,
+          "std": 1.2206999676031494
+        }
       },
       "texture_slat": {
         "dtype": "float32",
-        "sha256": "99d23e5097506efb79c83865dc63c505ad4fad0db6c8d468d22845baa66b2141",
         "shape": [
           64,
           32
-        ]
+        ],
+        "statistics": {
+          "l2": 47.3129009807639,
+          "max": 3.7781307697296143,
+          "mean": 0.016508268732650322,
+          "min": -3.8875527381896973,
+          "std": 1.0453469426877748
+        }
       },
       "texture_voxel_attrs": {
         "dtype": "float32",
-        "sha256": "49b45f028a546f707bcdf37677c63eb279187de4561bbe06f1a91720320396b4",
         "shape": [
           512,
           6
-        ]
+        ],
+        "statistics": {
+          "l2": 27.73014181281817,
+          "max": 0.5602271556854248,
+          "mean": 0.4999949636403471,
+          "min": 0.43711984157562256,
+          "std": 0.01782653483942547
+        }
       },
       "texture_voxel_coordinates": {
         "dtype": "int32",
-        "sha256": "d572dc92213b089492d529519ba3356793c57f19955851405b63c16bc944b436",
+        "sha256": "893113016750894983cc6e51682d666b9697e3c1834c864977738ff8369a1586",
         "shape": [
           512,
           4

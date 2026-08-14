@@ -1,0 +1,131 @@
+{
+  "arrays": {
+    "attributes": {
+      "dtype": "float32",
+      "shape": [
+        1166,
+        6
+      ],
+      "statistics": {
+        "l2": 54.5424308341348,
+        "max": 1.0007288455963135,
+        "mean": 0.5237411886598465,
+        "min": 0.012211322784423828,
+        "std": 0.3884849388377122
+      }
+    },
+    "coordinates": {
+      "dtype": "int32",
+      "sha256": "1e352c7b7638293edf65e86c4afec0dac2078a0137d5249bdbf8accd37e4750e",
+      "shape": [
+        1166,
+        4
+      ]
+    },
+    "fields": {
+      "dtype": "float32",
+      "shape": [
+        1166,
+        7
+      ],
+      "statistics": {
+        "l2": 882.6670673262066,
+        "max": 19.59222412109375,
+        "mean": -3.7514042070301383,
+        "min": -61.986366271972656,
+        "std": 9.021178029521382
+      }
+    }
+  },
+  "expected_export": {
+    "final_faces": 512,
+    "glb": {
+      "faces": 512,
+      "images": 2,
+      "materials": 1,
+      "meshes": 1,
+      "primitives": 1,
+      "textures": 2,
+      "vertices": 442
+    },
+    "settings": {
+      "grid_size": 16,
+      "quality_preset": "reference-target",
+      "remesh": true,
+      "remesh_resolution": 16,
+      "simplify_backend": "mlx-qem",
+      "target_faces": 512,
+      "texture_postprocess": "telea",
+      "texture_size": 16,
+      "uv_backend": "xatlas-equivalent-native"
+    },
+    "source_faces": 2130,
+    "source_vertices": 1166
+  },
+  "files": {
+    "shape_decoder_fields.npz": {
+      "bytes": 34107,
+      "sha256": "d9e2f2aa86cbee5efe844d3bf303c6bb2424c06be3b929f8bc66664e9e2c8e99"
+    },
+    "texture_decoder_pbr.npz": {
+      "bytes": 28004,
+      "sha256": "81fd1ce2b17d63c79fc318b098fdf44698cbee20bc1d9e63daeb9a3c935e3ee2"
+    }
+  },
+  "fixture_kind": "real-weight-derived-decoder-patch",
+  "schema_version": 1,
+  "scope": {
+    "covered": "decoded O-Voxel contract through native textured GLB export",
+    "not_covered": "Pixal3D checkpoint loading, conditioning, flow sampling, and decoder execution"
+  },
+  "selection": {
+    "grid_size": 16,
+    "origin": [
+      224,
+      496,
+      688
+    ],
+    "selected_token_count": 1166,
+    "source_token_count": 4150336
+  },
+  "source": {
+    "completed_stages": [
+      "input-image",
+      "asset-validation",
+      "pipeline-config",
+      "camera-setup",
+      "image-conditioning",
+      "projection-conditioning:ss",
+      "artifact:sparse_projection",
+      "sparse-structure-flow",
+      "sparse-structure-decoding",
+      "artifact:sparse_structure",
+      "projection-conditioning:shape_512",
+      "shape-slat-sampling:512",
+      "artifact:shape_slat_lr",
+      "shape-slat-cascade:upsample",
+      "artifact:shape_slat_hr_coordinates",
+      "projection-conditioning:shape_1024",
+      "shape-slat-sampling:1024",
+      "artifact:shape_slat_hr",
+      "projection-conditioning:tex_1024",
+      "texture-slat-sampling:1024",
+      "artifact:texture_slat",
+      "shape-decoder",
+      "artifact:shape_decoder_fields",
+      "texture-decoder",
+      "artifact:texture_decoder_pbr",
+      "mesh-export",
+      "artifact:textured_glb"
+    ],
+    "grid_size": 1024,
+    "input_sha256": "6959e517ee4bc6852791f69bd6ece696a435abcda8321727c07db8daf7f457cf",
+    "pipeline_type": "1024_cascade",
+    "precision": "unquantized mixed BF16 flow and FP16 decoder checkpoints",
+    "quantization": "none",
+    "repository": "TencentARC/Pixal3D",
+    "revision": "0b31f9160aa400719af409098bff7936a932f726",
+    "seed": 42,
+    "trace_sha256": "b37e1dd38acbdf7190010e4d0d1147ac5c2191c8df6233e7f3132c699282a533"
+  }
+}
