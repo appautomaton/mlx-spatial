@@ -30,7 +30,7 @@ tags:
 # TRELLIS.2 MLX 8-bit Affine for `mlx-spatial`
 
 <p align="center">
-  <a href="https://appautomaton.github.io"><img alt="App Automaton project" src="https://img.shields.io/badge/App_Automaton-Project-5B5BD6?style=for-the-badge"></a>
+  <a href="https://appautomaton.renocrypt.com"><img alt="App Automaton project" src="https://img.shields.io/badge/App_Automaton-Project-5B5BD6?style=for-the-badge"></a>
   <a href="https://github.com/appautomaton/mlx-spatial"><img alt="GitHub — appautomaton/mlx-spatial" src="https://img.shields.io/badge/GitHub-mlx--spatial-181717?style=for-the-badge&amp;logo=github&amp;logoColor=white"></a>
   <a href="https://appautomaton.renocrypt.com/mlx-spatial/"><img alt="mlx-spatial documentation" src="https://img.shields.io/badge/Documentation-mlx--spatial-0A7BBB?style=for-the-badge&amp;logo=readthedocs&amp;logoColor=white"></a>
   <a href="https://pypi.org/project/mlx-spatial/"><img alt="mlx-spatial on PyPI" src="https://img.shields.io/pypi/v/mlx-spatial?style=for-the-badge&amp;logo=pypi&amp;logoColor=white&amp;label=PyPI"></a>
@@ -258,7 +258,7 @@ original authors.
 
 ## Links
 
-- [App Automaton](https://appautomaton.github.io)
+- [App Automaton](https://appautomaton.renocrypt.com)
 - [AppAutomaton models on Hugging Face](https://huggingface.co/appautomaton)
 - [`appautomaton/mlx-spatial`](https://github.com/appautomaton/mlx-spatial) — MLX-native 3D and spatial inference for Apple Silicon.
 - [`mlx-spatial` documentation](https://appautomaton.renocrypt.com/mlx-spatial/)

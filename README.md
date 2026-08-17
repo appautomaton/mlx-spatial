@@ -16,7 +16,7 @@
 
 > Not a training framework. Does not bundle model weights.
 
-mlx-spatial is an [App Automaton](https://appautomaton.github.io) project. The `appautomaton` org hosts the [code on GitHub](https://github.com/appautomaton/mlx-spatial) and the converted [weights on Hugging Face](https://huggingface.co/appautomaton).
+mlx-spatial is an [App Automaton](https://appautomaton.renocrypt.com) project. The `appautomaton` org hosts the [code on GitHub](https://github.com/appautomaton/mlx-spatial) and the converted [weights on Hugging Face](https://huggingface.co/appautomaton).
 
 ## Capabilities
 
@@ -271,4 +271,4 @@ The build must exclude local weights, generated outputs, inputs, vendor checkout
 
 MIT — see [LICENSE](LICENSE).
 
-Built and maintained by [App Automaton](https://appautomaton.github.io). Explore more MLX-native tooling for Apple Silicon — including [mlx-speech](https://github.com/appautomaton/mlx-speech) — on [GitHub](https://github.com/appautomaton) and [Hugging Face](https://huggingface.co/appautomaton).
+Built and maintained by [App Automaton](https://appautomaton.renocrypt.com). Explore more MLX-native tooling for Apple Silicon — including [mlx-speech](https://github.com/appautomaton/mlx-speech) — on [GitHub](https://github.com/appautomaton) and [Hugging Face](https://huggingface.co/appautomaton).
