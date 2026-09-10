@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://appautomaton.renocrypt.com/mlx-spatial/sitemap.xml
+Sitemap: https://appautomaton.com/mlx-spatial/sitemap.xml

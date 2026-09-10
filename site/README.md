@@ -1,7 +1,7 @@
 # mlx-spatial landing page
 
 Static GitHub Pages site for [mlx-spatial](https://github.com/appautomaton/mlx-spatial),
-published at <https://appautomaton.renocrypt.com/mlx-spatial/>.
+published at <https://appautomaton.com/mlx-spatial/>.
 
 ## Editing rule
 
