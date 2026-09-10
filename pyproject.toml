@@ -24,7 +24,7 @@ keywords = [
     "glb",
     "on-device-ai",
 ]
-urls = { Homepage = "https://appautomaton.renocrypt.com/mlx-spatial/", Repository = "https://github.com/appautomaton/mlx-spatial", Documentation = "https://github.com/appautomaton/mlx-spatial/blob/main/docs/architecture.md", Issues = "https://github.com/appautomaton/mlx-spatial/issues" }
+urls = { Homepage = "https://appautomaton.com/mlx-spatial/", Repository = "https://github.com/appautomaton/mlx-spatial", Documentation = "https://github.com/appautomaton/mlx-spatial/blob/main/docs/architecture.md", Issues = "https://github.com/appautomaton/mlx-spatial/issues" }
 requires-python = ">=3.13,<3.14"
 classifiers = [
     "License :: OSI Approved :: MIT License",
